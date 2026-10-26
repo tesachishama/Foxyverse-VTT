@@ -1,0 +1,13 @@
+{
+  "name": "foxyverse-vtt",
+  "version": "0.1.0",
+  "description": "Self-hosted virtual tabletop with an editable, formula-driven rule system (Foxyverse by default)",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test test/*.test.js"
+  }
+}

@@ -1,0 +1,19 @@
+# Run the prebuilt image published by the GitHub Actions workflow (no build on your machine):
+#   1. replace OWNER/REPO below with your GitHub repository (lowercase)
+#   2. docker compose -f docker-compose.ghcr.yml up -d
+# If the package is private, log in first:  echo $GITHUB_PAT | docker login ghcr.io -u YOUR_USER --password-stdin
+services:
+  foxyverse-vtt:
+    image: ghcr.io/OWNER/REPO:latest
+    container_name: foxyverse-vtt
+    init: true
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - foxyverse-data:/data
+    environment:
+      TZ: Europe/Zurich
+
+volumes:
+  foxyverse-data:

@@ -1,0 +1,74 @@
+{
+  "id": "foxyverse",
+  "name": "Foxyverse",
+  "version": 1,
+
+  "stats": [
+    { "id": "constitution", "label": "Constitution", "aliases": ["con"] },
+    { "id": "strength", "label": "Force", "aliases": ["str", "force", "for"] },
+    { "id": "intelligence", "label": "Intelligence", "aliases": ["int"] },
+    { "id": "perception", "label": "Perception", "aliases": ["per"] },
+    { "id": "social", "label": "Social", "aliases": ["soc"] },
+    { "id": "agility", "label": "Agilité", "aliases": ["agi", "agilite"] },
+    { "id": "focus", "label": "Focus", "aliases": ["foc"] }
+  ],
+
+  "character": {
+    "baseStat": 5,
+    "startPoints": 30,
+    "startMaxStat": 15,
+    "note": "Points to spend at level L = startPoints + sum(1..L-1). A step above 20 costs 2 points, above 30 costs 3, and so on."
+  },
+
+  "spells": { "armedStat": "foc", "unarmedStat": "int" },
+
+  "derived": [
+    { "id": "maxhp", "label": "PV max", "aliases": ["hpmax", "pvmax", "maxpv"], "formula": "con*(lvl+1)*(1-elemental) + elemental" },
+    { "id": "maxmp", "label": "Mana max", "aliases": ["mpmax", "pmmax", "maxpm"], "formula": "((int+foc)*3+lvl^2)/4 + elemental*(con*(lvl+1)-1)*3/4" },
+    { "id": "maxfav", "label": "Faveurs max", "aliases": ["favmax"], "formula": "(lvl+1)%3" },
+    { "id": "act", "label": "Actions / tour", "aliases": ["actions"], "formula": "max(1, lvl\\5 + agi\\10) + bonact" }
+  ],
+
+  "quickRolls": [
+    { "id": "speed", "label": "Déplacement", "formula": "1d6 + agi%5 + bonspe" }
+  ],
+
+  "rollTypes": [
+    { "id": "pdmg", "kind": "damage", "dtype": "physical", "label": "Dégâts physiques", "aliases": ["dgtp"] },
+    { "id": "mdmg", "kind": "damage", "dtype": "magical", "label": "Dégâts magiques", "aliases": ["dgtm"] },
+    { "id": "tdmg", "kind": "damage", "dtype": "true", "label": "Dégâts bruts", "aliases": ["dgtb"] },
+    { "id": "heal", "kind": "heal", "label": "Soin", "aliases": ["soin"] },
+    { "id": "theal", "kind": "theal", "label": "PV temporaires", "aliases": ["soint"] },
+    { "id": "mana", "kind": "mana", "label": "Mana", "aliases": [] },
+    { "id": "roll", "kind": "generic", "label": "Jet libre", "aliases": ["r"] }
+  ],
+
+  "knowledgeTiers": { "1": -1, "2": -3, "3": -5, "4": -10 },
+
+  "rules": [
+    {
+      "title": "Comment roll-t-on ?",
+      "body": "Un d20 est lancé : le résultat doit être **inférieur ou égal** à la statistique.\n\n- **Nat 1** : toujours au moins une réussite. Si le jet est aussi réussi, c'est une **réussite critique**.\n- **Nat 20** : toujours au moins un échec. Si le jet est aussi raté, c'est un **échec critique**.\n- On ne peut jamais dépasser 95 % de chances de réussite.\n\nExemple : [int +0|sort de mage à 18 d'intelligence] (90 %)."
+    },
+    {
+      "title": "Combat : initiative et tours",
+      "body": "# Combat rangé\nLe premier tour revient **toujours** à la personne avec le plus d'agilité du groupe attaquant. Sa cible réagit ensuite (2e position), puis le 2e plus agile du groupe attaquant, etc. L'ordre établi est conservé tout le combat.\n\n# Attaque surprise\nSurprenant et surpris sont en haut de la pile, quelle que soit leur agilité.\n\n# Report de tour\nOn peut attendre une action adverse ou alliée pour agir en réaction (combo, etc.).\n\n# Actions\nActions = niveau/5 + agilité/10 (arrondis à l'inférieur, minimum 1). Déplacement : [speed|1d6 + agilité/5 arrondi au supérieur]. Une case = 1 m."
+    },
+    {
+      "title": "Se protéger",
+      "body": "Une seule défense par tour.\n\n- **Esquive** : jet d'agilité, il faut ne pas être occupé à attaquer ou lancer un sort.\n- **Parade** : jet de force, avec une arme/armure adaptée (physique ou magique selon l'équipement).\n- **Encaissement** : jet de constitution (statuts physiques) ou de focus (statuts élémentaires).\n\nDP réduit les dégâts physiques, DM les dégâts magiques."
+    },
+    {
+      "title": "Faim et crasse",
+      "body": "3 repas par jour.\n\n- **Malnutrition simple** (2 repas sautés) : +1 à tous les jets.\n- **Malnutrition sévère** (3 repas sautés / 24 h) : +3 à tous les jets.\n- **Affamé** (4 repas sautés) : dégâts subis doublés, +5 à tous les jets.\n\nChaque repas réduit le malus d'un stade. « Rassasié » compte comme 2 repas."
+    },
+    {
+      "title": "Vie, mana, faveurs",
+      "body": "- **PV max** = constitution × (niveau + 1).\n- **Mana max** = (intelligence + focus) × 0,75 + niveau² / 4 (arrondi).\n- **Faveurs** : relances de dé. Maximum = (niveau + 1)/3 arrondi au supérieur.\n- À 0 mana, les sorts coûtent des PV.\n- À 0 PV : inconscient, retour à 1 PV après le combat.\n- Les PV temporaires sont toujours touchés en premier."
+    },
+    {
+      "title": "Maîtrise et talents",
+      "body": "Un talent apporte un bonus aux jets liés (−1 au départ, jusqu'à −10). Maximum 4 talents.\n\nPalier 1 : −1 · Palier 2 : −3 · Palier 3 : −5 · Palier 4 : −10.\n\nLes difficultés de connaissance utilisent les mêmes valeurs en malus (+1, +3, +5, +10)."
+    }
+  ]
+}

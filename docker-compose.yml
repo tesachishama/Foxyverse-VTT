@@ -1,0 +1,21 @@
+# Build from source and run:   docker compose up -d --build
+services:
+  foxyverse-vtt:
+    build: .
+    image: foxyverse-vtt:local
+    container_name: foxyverse-vtt
+    init: true
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - foxyverse-data:/data      # named volume: no permission problems. See README for backups and bind mounts.
+    environment:
+      TZ: Europe/Zurich
+      # INVITE_CODE: "choose-a-code"   # optional; otherwise one is generated (GM sees it in the Table tab)
+      # TRUST_PROXY: "1"               # set when behind a reverse proxy (HTTPS, correct client IPs for login throttling)
+      # UPLOAD_MAX_MB: "25"            # map / image upload limit for the GM
+      # AUDIO_MAX_MB: "60"             # audio upload limit
+
+volumes:
+  foxyverse-data:
