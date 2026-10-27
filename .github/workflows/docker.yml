@@ -32,7 +32,7 @@ jobs:
 
       # Build the image and prove the *container* works before anything is published.
       - name: Build and smoke-test the container
-        run: ./scripts/docker-smoke.sh
+        run: bash scripts/docker-smoke.sh
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
