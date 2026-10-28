@@ -21,6 +21,7 @@ const FUNCS = {
 function lex(src) {
   const s = norm(src), out = [];
   let i = 0;
+  const prevIsValue = () => { const p = out[out.length - 1]; return !!p && (p.t === 'num' || p.t === 'id' || p.t === ')'); };
   while (i < s.length) {
     const c = s[i];
     if (/\s/.test(c)) { i++; continue; }
@@ -30,10 +31,12 @@ function lex(src) {
       if (Number.isNaN(v)) throw new FormulaError(`Bad number "${s.slice(i, j)}"`);
       out.push({ t: 'num', v }); i = j; continue;
     }
+    // "d" is the dice operator after a value (2dcon, lvld6, (1d4)d4) or before a digit/paren (d6, d(1d4)); otherwise it starts a name (defp)
+    if (c === 'd' && (prevIsValue() || /[\d(]/.test(s[i + 1] || ''))) { out.push({ t: 'd' }); i++; continue; }
     if (/[a-z_]/.test(c)) {
-      let j = i; while (j < s.length && /[a-z_]/.test(s[j])) j++;
-      const w = s.slice(i, j);
-      out.push(w === 'd' ? { t: 'd' } : { t: 'id', v: w }); i = j; continue;
+      let j = i;
+      while (j < s.length && /[a-z_]/.test(s[j])) { if (s[j] === 'd' && j > i && /[\d(]/.test(s[j + 1] || '')) break; j++; } // "lvld6" -> lvl d 6
+      out.push({ t: 'id', v: s.slice(i, j) }); i = j; continue;
     }
     if (c === '!' && (s[i + 1] === '<' || s[i + 1] === '>')) { out.push({ t: s[i + 1] === '<' ? '!<' : '!>' }); i += 2; continue; }
     if ('+-*/\\%^(),<>'.includes(c)) { out.push({ t: c }); i++; continue; }
@@ -123,9 +126,9 @@ function evalNode(n, ctx, rng, log) {
     case 'fn': return safe(FUNCS[n.name](n.args.map((a) => evalNode(a, ctx, rng, log))));
     case 'dice': {
       const count = Math.min(MAX_DICE, Math.max(0, Math.trunc(evalNode(n.n, ctx, rng, log))));
-      const faces = Math.trunc(evalNode(n.f, ctx, rng, log));
+      const faces = Math.max(1, Math.trunc(evalNode(n.f, ctx, rng, log)));
       const results = [];
-      if (faces >= 1) for (let i = 0; i < count; i++) results.push(rng(faces));
+      for (let i = 0; i < count; i++) results.push(rng(faces));
       log.push({ count, faces, results });
       return results.reduce((a, b) => a + b, 0);
     }
@@ -138,7 +141,7 @@ function evalNode(n, ctx, rng, log) {
         case '/': return b === 0 ? 0 : Math.round(a / b);
         case '\\': return b === 0 ? 0 : Math.floor(a / b);
         case '%': return b === 0 ? 0 : Math.ceil(a / b);
-        case '^': return safe(Math.pow(a, Math.max(-32, Math.min(32, Math.trunc(b)))));
+        case '^': return safe(Math.pow(a, Math.max(-12, Math.min(12, Math.trunc(b)))));
       }
     }
   }
@@ -160,6 +163,7 @@ export function evaluate(formula, ctx = {}, rng = defaultRng) {
     const target = Math.trunc(evalNode(parsed.cmp.rhs, ctx, rng, dice));
     out.target = target;
     out.success = parsed.cmp.op === '<' ? total <= target : total >= target;
+    out.cmpOp = parsed.cmp.op;
   }
   return out;
 }
@@ -183,4 +187,28 @@ export function parseCommand(line) {
   const c = /^(\d+)\s+(\S[\s\S]*)$/.exec(rest);
   if (c) { count = Math.min(100, Math.max(1, parseInt(c[1], 10))); rest = c[2].trim(); }
   return { type: norm(m[1]), formula: rest, count, label };
+}
+
+const PREC = { '+': 1, '-': 1, '*': 2, '/': 2, '\\': 2, '%': 2, '^': 3 };
+/** The formula with variable names replaced by their values, e.g. "1d20+con" -> "1d20+12". */
+export function translate(formula, ctx = {}) {
+  const parsed = typeof formula === 'string' ? parseFormula(formula) : formula;
+  const show = (n, parentPrec = 0, right = false) => {
+    switch (n.k) {
+      case 'num': return String(n.v);
+      case 'var': return String(Number(ctx[n.name]) || 0);
+      case 'neg': return '-' + show(n.e, 9);
+      case 'fn': return `${n.name}(${n.args.map((a) => show(a)).join(', ')})`;
+      case 'dice': { const f = (x) => (x.k === 'num' || x.k === 'var' ? show(x) : `(${show(x)})`); return `${f(n.n)}d${f(n.f)}`; }
+      case 'bin': {
+        const pr = PREC[n.op], txt = `${show(n.l, pr)}${n.op}${show(n.r, pr, true)}`;
+        return pr < parentPrec || (pr === parentPrec && right && n.op !== '+' && n.op !== '*') ? `(${txt})` : txt;
+      }
+    }
+    return '';
+  };
+  let out = show(parsed.main);
+  if (parsed.cmp) out += ` ${parsed.cmp.op} ${show(parsed.cmp.rhs)}`;
+  for (const c of parsed.clamps) out += ` ${c.op}${show(c.e)}`;
+  return out;
 }

@@ -131,3 +131,35 @@ test('compendium: players see items/spells/talents but not NPC templates; templa
   assert.equal(made.body.name, 'Gob 1'); assert.equal(made.body.computed.derived.maxhp, 24); // con 8 * (lvl 2 + 1)
   assert.ok((await call('GET', '/api/state', null, gm.cookie)).body.tokens.some((t) => t.actorId === made.body.id));
 });
+
+test('invite code: GM can set a custom one, players need it, bad codes are refused', async () => {
+  const gm = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
+  const pl = await call('POST', '/api/login', { name: 'Pip', password: 'longpassword' });
+  assert.equal((await call('POST', '/api/invite', { code: 'abcd' }, pl.cookie)).status, 403);
+  assert.equal((await call('POST', '/api/invite', { code: 'no spaces!' }, gm.cookie)).status, 400);
+  assert.equal((await call('POST', '/api/invite', { code: 'ab' }, gm.cookie)).status, 400);
+  assert.equal((await call('POST', '/api/invite', { code: 'Foxy-Table_2026' }, gm.cookie)).body.code, 'Foxy-Table_2026');
+  assert.equal((await call('POST', '/api/register', { name: 'Late', password: 'longpassword', invite: 'wrong' })).status, 403);
+  assert.equal((await call('POST', '/api/register', { name: 'Late', password: 'longpassword', invite: 'Foxy-Table_2026' })).status, 200);
+  assert.equal((await call('GET', '/api/state', null, gm.cookie)).body.invite.code, 'Foxy-Table_2026');
+});
+
+test('equipment slots through the API: slots are validated, deduplicated and drive stats', async () => {
+  const gm = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
+  const hero = await call('POST', '/api/actors', { name: 'Knight' }, gm.cookie);
+  const d = hero.body.data;
+  d.items = [
+    { name: 'Sword', type: 'weapon', usedSlots: ['weapon1'], bonuses: { strength: 2 } },
+    { name: 'Second sword', type: 'weapon', usedSlots: ['Arme 1', 'weapon2'] },       // weapon1 already taken, weapon2 free
+    { name: 'Helm', type: 'armor', equipExpr: '[head]', usedSlots: ['hat'], pdef: 3 },
+    { name: 'Junk', type: 'other', usedSlots: ['not-a-slot'] },
+  ];
+  const r = await call('PATCH', `/api/actors/${hero.body.id}`, { data: d }, gm.cookie);
+  assert.deepEqual(r.body.data.items.map((i) => i.usedSlots), [['weapon1'], ['weapon2'], ['hat'], []]);
+  assert.equal(r.body.data.items[0].equipExpr, '[weapons]');
+  assert.equal(r.body.computed.stats.strength.item, 2); assert.equal(r.body.computed.pdef, 3);
+  const scene = (await call('GET', '/api/state', null, gm.cookie)).body.scenes.find((s) => s.active);
+  const tok = await call('POST', '/api/tokens', { sceneId: scene.id, actorId: hero.body.id, sight: true }, gm.cookie);
+  assert.equal(tok.body.sight, true);
+  assert.equal((await call('PATCH', `/api/tokens/${tok.body.id}`, { sight: false }, gm.cookie)).body.sight, false);
+});

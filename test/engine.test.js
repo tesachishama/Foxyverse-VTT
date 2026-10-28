@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, evaluateStatic, parseCommand, FormulaError } from '../server/engine.js';
+import { evaluate, evaluateStatic, parseCommand, translate, FormulaError } from '../server/engine.js';
 
 const fixed = (v) => () => v;
 const seq = (...vals) => { let i = 0; return () => vals[i++ % vals.length]; };
@@ -58,4 +58,18 @@ test('command parsing: type, count, formula, label', () => {
   assert.deepEqual(parseCommand('/pdmg 10 2d4|full burst'), { type: 'pdmg', formula: '2d4', count: 10, label: 'full burst' });
   assert.equal(parseCommand('/roll 5').count, 1); // lone number is a formula, not a count
   assert.equal(parseCommand('hello'), null);
+});
+
+test('plugin lexing rules: d after a value is the dice operator, names may start with d', () => {
+  assert.equal(evaluate('2dcon', { con: 3 }, fixed(2)).total, 4);          // 2d3
+  assert.equal(evaluate('lvld6', { lvl: 3 }, fixed(5)).total, 15);          // 3d6
+  assert.equal(evaluate('1+defp', { defp: 4 }).total, 5);                   // "defp" is a variable, not d + efp
+  assert.equal(evaluate('1d0', {}, fixed(1)).total, 1);                     // faces below 1 become 1
+  assert.equal(evaluate('2^20').total, 4096);                               // exponent capped at 12
+});
+
+test('translated formula shows variables as numbers', () => {
+  assert.equal(translate('1d20+con*2', { con: 12 }), '1d20+12*2');
+  assert.equal(translate('(1+2)*3'), '(1+2)*3');
+  assert.equal(translate('1d(lvl+1) < agi', { lvl: 2, agi: 9 }), '1d(2+1) < 9');
 });

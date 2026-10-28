@@ -51,7 +51,7 @@ test('stat check needs a character; multi-roll; damage sums', () => {
 });
 
 test('physical damage uses pdef per roll, magical uses mdef, true ignores both', () => {
-  const a = make({ stats: { constitution: 15 }, items: [{ id: 'x', name: 'Plate', equipped: true, pdef: 6, mdef: 2 }] });
+  const a = make({ stats: { constitution: 15 }, items: [{ id: 'x', name: 'Plate', usedSlots: ['torso'], pdef: 6, mdef: 2 }] });
   assert.equal(actorContext(sys, a).pdef, 6);
   const phys = roll('/pdmg 10', a, fixed(1)); phys.results[0].total = 10; phys.sum = 10; phys.dtype = 'physical';
   assert.equal(applyRoll(sys, a, phys).report.dealt, 4);
@@ -107,4 +107,31 @@ test('validation rejects bad systems', () => {
   assert.throws(bad((s) => { s.derived[0].formula = 'con*'; }), /maxhp/);
   assert.throws(bad((s) => { s.stats[1].aliases.push('con'); }), /both/);
   assert.throws(bad((s) => { s.derived = s.derived.filter((d) => d.id !== 'act'); }), /"act" is required/);
+});
+
+test('equipment: only items in a slot count; "other" counts too; one item per slot', () => {
+  const a = make({ items: [
+    { id: 'a', name: 'Helm', usedSlots: ['hat'], pdef: 2, bonuses: { strength: 1 } },
+    { id: 'b', name: 'Another helm', usedSlots: ['hat'], pdef: 5 },            // same slot: loses it
+    { id: 'c', name: 'Tattoo', usedSlots: ['other'], mdef: 3, bonuses: { strength: 2 } },
+    { id: 'd', name: 'Backpack stuff', pdef: 9 },                              // carried, not equipped
+    { id: 'e', name: 'Old save', equipped: true, pdef: 1 },                    // pre-slot sheet: becomes "other"
+  ] });
+  assert.deepEqual(a.items.map((i) => i.usedSlots), [['hat'], [], ['other'], [], ['other']]);
+  const c = actorContext(sys, a);
+  assert.equal(c.pdef, 2 + 1); assert.equal(c.mdef, 3); assert.equal(c.stats.strength.item, 3);
+  assert.equal(sanitizeActorData({ items: [{ name: 'W', type: 'weapon' }] }, sys).items[0].equipExpr, '[weapons]');
+  assert.deepEqual(sanitizeActorData({ items: [{ name: 'X', usedSlots: ['Chapeau', 'épauleD', 'nonsense'] }] }, sys).items[0].usedSlots, ['hat', 'rshoulder']);
+});
+
+test('nat grading follows the plugin: first die min/max shifts the grade, any die size, comparators', () => {
+  const a = make({ stats: { strength: 10 } });
+  assert.equal(roll('/str', a, fixed(1)).results[0].outcome, 'critSuccess');
+  assert.equal(roll('/roll 1d20 < 10', null, fixed(1)).results[0].outcome, 'critSuccess');   // min on "<" raises
+  assert.equal(roll('/roll 1d20 < 10', null, fixed(20)).results[0].outcome, 'critFailure');  // max on "<" lowers
+  assert.equal(roll('/roll 1d20 > 15', null, fixed(1)).results[0].outcome, 'critFailure');   // reversed for ">"
+  assert.equal(roll('/roll 1d20 > 15', null, fixed(20)).results[0].outcome, 'critSuccess');
+  assert.equal(roll('/roll 1d6 < 3', null, fixed(6)).results[0].outcome, 'critFailure');      // any die size, not only d20
+  assert.equal(roll('/str +2', a, fixed(5)).translated, '1d20+2');
+  assert.equal(roll('/pdmg 1d6+str', a, fixed(3)).translated, '1d6+10');
 });

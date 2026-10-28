@@ -2,49 +2,180 @@
   "id": "foxyverse",
   "name": "Foxyverse",
   "version": 1,
-
   "stats": [
-    { "id": "constitution", "label": "Constitution", "aliases": ["con"] },
-    { "id": "strength", "label": "Force", "aliases": ["str", "force", "for"] },
-    { "id": "intelligence", "label": "Intelligence", "aliases": ["int"] },
-    { "id": "perception", "label": "Perception", "aliases": ["per"] },
-    { "id": "social", "label": "Social", "aliases": ["soc"] },
-    { "id": "agility", "label": "Agilité", "aliases": ["agi", "agilite"] },
-    { "id": "focus", "label": "Focus", "aliases": ["foc"] }
+    {
+      "id": "constitution",
+      "label": "Constitution",
+      "aliases": [
+        "con"
+      ]
+    },
+    {
+      "id": "strength",
+      "label": "Force",
+      "aliases": [
+        "str",
+        "force",
+        "for"
+      ]
+    },
+    {
+      "id": "intelligence",
+      "label": "Intelligence",
+      "aliases": [
+        "int"
+      ]
+    },
+    {
+      "id": "perception",
+      "label": "Perception",
+      "aliases": [
+        "per"
+      ]
+    },
+    {
+      "id": "social",
+      "label": "Social",
+      "aliases": [
+        "soc"
+      ]
+    },
+    {
+      "id": "agility",
+      "label": "Agilité",
+      "aliases": [
+        "agi",
+        "agilite"
+      ]
+    },
+    {
+      "id": "focus",
+      "label": "Focus",
+      "aliases": [
+        "foc"
+      ]
+    }
   ],
-
   "character": {
     "baseStat": 5,
     "startPoints": 30,
     "startMaxStat": 15,
     "note": "Points to spend at level L = startPoints + sum(1..L-1). A step above 20 costs 2 points, above 30 costs 3, and so on."
   },
-
-  "spells": { "armedStat": "foc", "unarmedStat": "int" },
-
+  "spells": {
+    "armedStat": "foc",
+    "unarmedStat": "int"
+  },
   "derived": [
-    { "id": "maxhp", "label": "PV max", "aliases": ["hpmax", "pvmax", "maxpv"], "formula": "con*(lvl+1)*(1-elemental) + elemental" },
-    { "id": "maxmp", "label": "Mana max", "aliases": ["mpmax", "pmmax", "maxpm"], "formula": "((int+foc)*3+lvl^2)/4 + elemental*(con*(lvl+1)-1)*3/4" },
-    { "id": "maxfav", "label": "Faveurs max", "aliases": ["favmax"], "formula": "(lvl+1)%3" },
-    { "id": "act", "label": "Actions / tour", "aliases": ["actions"], "formula": "max(1, lvl\\5 + agi\\10) + bonact" }
+    {
+      "id": "maxhp",
+      "label": "PV max",
+      "aliases": [
+        "hpmax",
+        "pvmax",
+        "maxpv"
+      ],
+      "formula": "con*(lvl+1)*(1-elemental) + elemental"
+    },
+    {
+      "id": "maxmp",
+      "label": "Mana max",
+      "aliases": [
+        "mpmax",
+        "pmmax",
+        "maxpm"
+      ],
+      "formula": "((int+foc)*3+lvl^2)/4 + elemental*(con*(lvl+1)-1)*3/4"
+    },
+    {
+      "id": "maxfav",
+      "label": "Faveurs max",
+      "aliases": [
+        "favmax"
+      ],
+      "formula": "(lvl+1)%3"
+    },
+    {
+      "id": "act",
+      "label": "Actions / tour",
+      "aliases": [
+        "actions"
+      ],
+      "formula": "max(1, lvl\\5 + agi\\10) + bonact"
+    }
   ],
-
   "quickRolls": [
-    { "id": "speed", "label": "Déplacement", "formula": "1d6 + agi%5 + bonspe" }
+    {
+      "id": "speed",
+      "label": "Déplacement",
+      "formula": "1d6 + agi%5 + bonspe"
+    }
   ],
-
   "rollTypes": [
-    { "id": "pdmg", "kind": "damage", "dtype": "physical", "label": "Dégâts physiques", "aliases": ["dgtp"] },
-    { "id": "mdmg", "kind": "damage", "dtype": "magical", "label": "Dégâts magiques", "aliases": ["dgtm"] },
-    { "id": "tdmg", "kind": "damage", "dtype": "true", "label": "Dégâts bruts", "aliases": ["dgtb"] },
-    { "id": "heal", "kind": "heal", "label": "Soin", "aliases": ["soin"] },
-    { "id": "theal", "kind": "theal", "label": "PV temporaires", "aliases": ["soint"] },
-    { "id": "mana", "kind": "mana", "label": "Mana", "aliases": [] },
-    { "id": "roll", "kind": "generic", "label": "Jet libre", "aliases": ["r"] }
+    {
+      "id": "pdmg",
+      "kind": "damage",
+      "dtype": "physical",
+      "label": "Dégâts physiques",
+      "aliases": [
+        "dgtp"
+      ]
+    },
+    {
+      "id": "mdmg",
+      "kind": "damage",
+      "dtype": "magical",
+      "label": "Dégâts magiques",
+      "aliases": [
+        "dgtm"
+      ]
+    },
+    {
+      "id": "tdmg",
+      "kind": "damage",
+      "dtype": "true",
+      "label": "Dégâts bruts",
+      "aliases": [
+        "dgtb"
+      ]
+    },
+    {
+      "id": "heal",
+      "kind": "heal",
+      "label": "Soin",
+      "aliases": [
+        "soin"
+      ]
+    },
+    {
+      "id": "theal",
+      "kind": "theal",
+      "label": "PV temporaires",
+      "aliases": [
+        "soint"
+      ]
+    },
+    {
+      "id": "mana",
+      "kind": "mana",
+      "label": "Mana",
+      "aliases": []
+    },
+    {
+      "id": "roll",
+      "kind": "generic",
+      "label": "Jet libre",
+      "aliases": [
+        "r"
+      ]
+    }
   ],
-
-  "knowledgeTiers": { "1": -1, "2": -3, "3": -5, "4": -10 },
-
+  "knowledgeTiers": {
+    "1": -1,
+    "2": -3,
+    "3": -5,
+    "4": -10
+  },
   "rules": [
     {
       "title": "Comment roll-t-on ?",
@@ -69,6 +200,10 @@
     {
       "title": "Maîtrise et talents",
       "body": "Un talent apporte un bonus aux jets liés (−1 au départ, jusqu'à −10). Maximum 4 talents.\n\nPalier 1 : −1 · Palier 2 : −3 · Palier 3 : −5 · Palier 4 : −10.\n\nLes difficultés de connaissance utilisent les mêmes valeurs en malus (+1, +3, +5, +10)."
+    },
+    {
+      "title": "Équipement : emplacements",
+      "body": "Chaque objet indique où il peut se porter avec une **expression d'emplacements**, par exemple `[weapons]` (une des 3 armes), `[head]` (chapeau ou visage), `torso + belt` (les deux à la fois), `[fingers]*2` (deux doigts), `[upper] - (rwrist | lwrist)`.\n\n- `|` ou `or` : au choix · `+`, `&` ou `and` : tous ensemble · `[groupe]*N` : N emplacements du groupe, `[groupe]*all` : tous · `[groupe] - (a | b)` : le groupe sans ces emplacements.\n- Groupes : `weapons head necklace upper shoulders arms wrists fingers rfingers lfingers lower legs ankles feet fullrarm fulllarm fullrleg fulllleg` (alias français : `armes tete collier haut epaules bras poignets doigts doigtsd doigtsg bas jambes chevilles pieds`).\n- Emplacements : `weapon1-3 hat face pendant1-3 torso rshoulder lshoulder rarm larm rwrist lwrist rthumb rindex rmiddle rring rpinky lthumb lindex lmiddle lring lpinky belt rleg lleg rankle lankle rfoot lfoot` (alias français : `arme1 chapeau visage pendentif1 torse epauled epauleg brasd brasg poignetd poignetg pouced indexd majeurd annulaired auriculaired ceinture jambed jambeg chevilled chevilleg piedd piedg`).\n- **Autre** : l'objet est porté sans occuper de slot (tatouage magique, etc.) et compte quand même pour ses bonus.\n\nSeuls les objets équipés donnent leurs bonus de stats et leurs DP/DM. Un emplacement ne peut contenir qu'un objet."
     }
   ]
 }

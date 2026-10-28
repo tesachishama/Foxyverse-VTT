@@ -15,8 +15,9 @@ function image(url, redraw) {
 
 /**
  * hooks:
- *  state() -> { scene, tokens, selected:Set, tool:{name, radius}, gm, playerView, viewers:[{x,y,vision}], lights:[{x,y,radius}] }
- *  canMove(token), isPlayerToken(token), hpRatio(token) -> 0..1|null
+ *  state() -> { scene, tokens, selected:Set, tool:{name, radius, snap}, gm, playerView, viewers:[{x,y,vision}], lights:[{x,y,radius}] }
+ *  (state also carries viewerIds:Set of token ids whose eyes are used)
+ *  canMove(token), hpRatio(token) -> 0..1|null, onFog(totalDarkness:boolean)
  *  onSelect(Set), onMove(token, x, y, final), onOpen(token), onSceneEdit(patch)
  */
 export function createMap(canvas, hooks) {
@@ -53,17 +54,23 @@ export function createMap(canvas, hooks) {
     const g = scene.grid, s = t.size;
     return { x: scene.ox + (Math.round((x - scene.ox) / g - s / 2) + s / 2) * g, y: scene.oy + (Math.round((y - scene.oy) / g - s / 2) + s / 2) * g };
   }
-  function snapPoint(scene, x, y, free) {
+  /** mode: 'grid' (cell corners) | 'half' (half cells) | 'off' (free, but still magnetic to wall ends). `free` (Shift/Alt held) ignores everything. */
+  function snapPoint(scene, x, y, free, mode = 'grid') {
     if (free) return { x: Math.round(x), y: Math.round(y) };
     const near = 12 / cam.z; // magnetise to existing wall ends first, so corners close cleanly
     for (const w of scene.walls || []) for (const [px, py] of [[w[0], w[1]], [w[2], w[3]]]) if (Math.hypot(px - x, py - y) < near) return { x: px, y: py };
-    const g = scene.grid;
+    if (mode === 'off') return { x: Math.round(x), y: Math.round(y) };
+    const g = mode === 'half' ? scene.grid / 2 : scene.grid;
     return { x: Math.round((x - scene.ox) / g) * g + scene.ox, y: Math.round((y - scene.oy) / g) * g + scene.oy };
   }
+  const bezier = (p0, c, p2, n) => Array.from({ length: n + 1 }, (_, i) => { const t = i / n, u = 1 - t; return { x: u * u * p0.x + 2 * u * t * c.x + t * t * p2.x, y: u * u * p0.y + 2 * u * t * c.y + t * t * p2.y }; });
+  const chain = (pts, closed = false) => { const out = []; for (let i = 0; i < pts.length - (closed ? 0 : 1); i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; if (Math.hypot(a.x - b.x, a.y - b.y) > 0.5) out.push([Math.round(a.x * 10) / 10, Math.round(a.y * 10) / 10, Math.round(b.x * 10) / 10, Math.round(b.y * 10) / 10, 0, 0]); } return out; };
+  const circlePts = (c, r, grid) => { const n = Math.max(12, Math.min(64, Math.round(r / (grid / 3)))); return Array.from({ length: n }, (_, i) => ({ x: c.x + r * Math.cos((i / n) * Math.PI * 2), y: c.y + r * Math.sin((i / n) * Math.PI * 2) })); };
+  const curveSegs = (a, b, grid) => Math.max(8, Math.min(40, Math.round(Math.hypot(a.x - b.x, a.y - b.y) / (grid / 3))));
 
   // ---------------------------------------------------------------- vision & fog
   function vision(scene, st) {
-    const key = JSON.stringify([st.viewers.map((v) => [v.x, v.y, v.vision]), st.lights.map((l) => [l.x, l.y, l.radius])]);
+    const key = JSON.stringify([scene.dark, scene._rev, scene.walls?.length, st.viewers.map((v) => [v.x, v.y, v.vision]), st.lights.map((l) => [l.x, l.y, l.radius])]);
     if (visCache.scene !== scene || visCache.key !== key) visCache = { scene, key, vis: computeVision(scene, st.viewers, st.lights) };
     return visCache.vis;
   }
@@ -103,6 +110,7 @@ export function createMap(canvas, hooks) {
     if (!fitted) { fit(); if (fitted) return; }
     const godView = st.gm && !st.playerView, fogOn = scene.fog;
     const vis = fogOn ? vision(scene, st) : null;
+    hooks.onFog?.(fogOn && !godView && st.viewers.length === 0);
 
     ctx.save(); ctx.scale(cam.z, cam.z); ctx.translate(-cam.x, -cam.y);
     const { w, h } = size(scene);
@@ -114,7 +122,7 @@ export function createMap(canvas, hooks) {
     ctx.stroke();
 
     for (const t of tokens) {
-      if (fogOn && !godView && !hooks.isPlayerToken(t) && !vis.canSee(t.x, t.y)) continue;
+      if (fogOn && !godView && !st.viewerIds.has(t.id) && !vis.canSee(t.x, t.y)) continue;
       drawToken(scene, t, selected.has(t.id));
     }
     ctx.restore();
@@ -162,12 +170,23 @@ export function createMap(canvas, hooks) {
       ctx.beginPath(); ctx.moveTo(w[0], w[1]); ctx.lineTo(w[2], w[3]); ctx.stroke(); ctx.setLineDash([]);
       if (editing) { ctx.fillStyle = '#ffdbff'; for (const [px, py] of [[w[0], w[1]], [w[2], w[3]]]) { ctx.beginPath(); ctx.arc(px, py, 3 * z, 0, Math.PI * 2); ctx.fill(); } }
     }
-    if (draft?.pts.length && cursor) { // wall in progress
+    if (draft?.pts?.length && cursor) { // wall in progress
       const last = draft.pts[draft.pts.length - 1];
       ctx.strokeStyle = draft.door ? '#7ad7ff' : '#ff9a4d'; ctx.lineWidth = 3 * z; ctx.setLineDash([6 * z, 4 * z]);
       ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(cursor.x, cursor.y); ctx.stroke(); ctx.setLineDash([]);
     }
     if (draft?.rect) { const r = draft.rect; ctx.strokeStyle = '#9fe3b4'; ctx.lineWidth = 2 * z; ctx.strokeRect(r.x, r.y, r.w, r.h); }
+    ctx.strokeStyle = '#ff9a4d'; ctx.lineWidth = 3 * z; ctx.setLineDash([6 * z, 4 * z]);
+    const sh = draft?.shape;
+    if (sh?.type === 'rect') ctx.strokeRect(Math.min(sh.x, sh.x2), Math.min(sh.y, sh.y2), Math.abs(sh.x2 - sh.x), Math.abs(sh.y2 - sh.y));
+    if (sh?.type === 'circle') { ctx.beginPath(); ctx.arc(sh.x, sh.y, Math.hypot(sh.x2 - sh.x, sh.y2 - sh.y), 0, Math.PI * 2); ctx.stroke(); }
+    if (draft?.curve && cursor) {
+      const [a, b] = draft.curve.pts, ctrl = draft.curve.pts[2] ?? cursor;
+      const pts = draft.curve.pts.length === 1 ? [a, cursor] : bezier(a, ctrl, b, curveSegs(a, b, scene.grid));
+      ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.stroke();
+      ctx.fillStyle = '#ffdbff'; for (const q of draft.curve.pts) { ctx.beginPath(); ctx.arc(q.x, q.y, 4 * z, 0, Math.PI * 2); ctx.fill(); }
+    }
+    ctx.setLineDash([]);
   }
 
   // ---------------------------------------------------------------- input
@@ -184,19 +203,36 @@ export function createMap(canvas, hooks) {
   const edit = (patch) => hooks.onSceneEdit(patch);
 
   function useTool(st, e, p) {
-    const { scene, tool } = st, w = toWorld(p.x, p.y), free = e.altKey, near = 12 / cam.z;
+    const { scene, tool } = st, w = toWorld(p.x, p.y), free = e.shiftKey || e.altKey, near = 12 / cam.z, snap = (x, y) => snapPoint(scene, x, y, free, tool.snap);
     if (tool.name === 'wall' || tool.name === 'door') {
       const door = tool.name === 'door';
       if (door && !draft) { // clicking an existing door toggles it open/closed
         const i = (scene.walls || []).findIndex((s) => s[4] && distToSeg(w.x, w.y, s) < near);
         if (i >= 0) { const walls = scene.walls.map((s) => s.slice()); walls[i][5] = walls[i][5] ? 0 : 1; return edit({ walls }); }
       }
-      const pt = snapPoint(scene, w.x, w.y, free);
+      const pt = snap(w.x, w.y);
       if (!draft) { draft = { pts: [pt], door }; return redraw(); }
       const last = draft.pts[draft.pts.length - 1];
       if (last.x !== pt.x || last.y !== pt.y) edit({ walls: [...(scene.walls || []), [last.x, last.y, pt.x, pt.y, door ? 1 : 0, 0]] });
       draft = door ? null : { pts: [pt], door }; // doors are single segments, walls chain on
       return redraw();
+    }
+    if (tool.name === 'curve') { // start, end, then bend: three clicks
+      const pt = snap(w.x, w.y);
+      if (!draft?.curve) { draft = { curve: { pts: [pt] } }; return redraw(); }
+      const c = draft.curve; c.pts.push(pt);
+      if (c.pts.length < 3) return redraw();
+      const [a, b, ctrl] = c.pts;
+      draft = null;
+      return edit({ walls: [...(scene.walls || []), ...chain(bezier(a, ctrl, b, curveSegs(a, b, scene.grid)))] });
+    }
+    if (tool.name === 'edit') { // grab a wall end (every wall end at that spot moves together)
+      let best = null;
+      for (const [i, wl] of (scene.walls || []).entries()) for (const k of [0, 2]) { const d = Math.hypot(wl[k] - w.x, wl[k + 1] - w.y); if (d < near && (!best || d < best.d)) best = { d, x: wl[k], y: wl[k + 1] }; }
+      if (!best) return;
+      const walls = scene.walls.map((s) => s.slice());
+      drag = { kind: 'vertex', from: { x: best.x, y: best.y }, walls, orig: scene.walls, free };
+      scene.walls = walls; return;
     }
     if (tool.name === 'light') return edit({ lights: [...(scene.lights || []), { id: '', x: Math.round(w.x), y: Math.round(w.y), radius: tool.radius }] });
     if (tool.name === 'erase') {
@@ -222,6 +258,10 @@ export function createMap(canvas, hooks) {
     if (e.button === 1 || e.button === 2) { drag = { kind: 'pan', sx: p.x, sy: p.y, cx: cam.x, cy: cam.y, moved: false, right: e.button === 2 }; return; }
     if (tool !== 'select' && st.gm && st.scene) {
       if (tool === 'reveal') { const w = toWorld(p.x, p.y); drag = { kind: 'rect', x: w.x, y: w.y }; draft = { pts: [], rect: { x: w.x, y: w.y, w: 0, h: 0 } }; return; }
+      if (tool === 'rect' || tool === 'circle') {
+        const w = toWorld(p.x, p.y), pt = snapPoint(st.scene, w.x, w.y, e.shiftKey || e.altKey, st.tool.snap);
+        drag = { kind: 'shape', type: tool, x: pt.x, y: pt.y }; draft = { pts: [], shape: { type: tool, x: pt.x, y: pt.y, x2: pt.x, y2: pt.y } }; return;
+      }
       return useTool(st, e, p);
     }
     const t = hitToken(p.x, p.y), { selected } = st;
@@ -240,7 +280,7 @@ export function createMap(canvas, hooks) {
     const p = pos(e);
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, p);
     const st = hooks.state();
-    if (st.scene && st.tool.name !== 'select') { const w = toWorld(p.x, p.y); cursor = snapPoint(st.scene, w.x, w.y, e.altKey); if (draft) redraw(); }
+    if (st.scene && st.tool.name !== 'select') { const w = toWorld(p.x, p.y); cursor = snapPoint(st.scene, w.x, w.y, e.shiftKey || e.altKey, st.tool.snap); if (draft) redraw(); }
     if (!drag) { canvas.style.cursor = st.tool.name !== 'select' && st.gm ? 'crosshair' : hitToken(p.x, p.y) ? 'pointer' : 'grab'; return; }
     if (drag.kind === 'pinch' && pointers.size >= 2) {
       const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
@@ -252,6 +292,12 @@ export function createMap(canvas, hooks) {
     if (drag.kind === 'pan') {
       if (Math.hypot(p.x - drag.sx, p.y - drag.sy) > 3) drag.moved = true;
       cam.x = drag.cx - (p.x - drag.sx) / cam.z; cam.y = drag.cy - (p.y - drag.sy) / cam.z;
+    } else if (drag.kind === 'shape') {
+      draft.shape.x2 = cursor.x; draft.shape.y2 = cursor.y;
+    } else if (drag.kind === 'vertex') {
+      const sc = hooks.state().scene, to = cursor;
+      for (const wl of drag.walls) for (const k of [0, 2]) if (Math.abs(wl[k] - drag.from.x) < 0.01 && Math.abs(wl[k + 1] - drag.from.y) < 0.01) { wl[k] = to.x; wl[k + 1] = to.y; }
+      drag.from = { x: to.x, y: to.y }; sc._rev = (sc._rev || 0) + 1;
     } else if (drag.kind === 'rect') {
       const w = toWorld(p.x, p.y); draft.rect = { x: Math.min(drag.x, w.x), y: Math.min(drag.y, w.y), w: Math.abs(w.x - drag.x), h: Math.abs(w.y - drag.y) };
     } else if (drag.kind === 'token') {
@@ -272,7 +318,17 @@ export function createMap(canvas, hooks) {
       draft = null;
       if (r && r.w > 8 && r.h > 8) edit({ reveal: [...(scene.reveal || []), [Math.round(r.x), Math.round(r.y), Math.round(r.w), Math.round(r.h)]] });
     }
-    if (drag?.kind === 'pan' && drag.right && !drag.moved) draft = null; // right-click ends a wall chain
+    if (drag?.kind === 'shape') {
+      const sh = draft?.shape, { scene } = hooks.state(); draft = null;
+      if (sh) {
+        const dx = Math.abs(sh.x2 - sh.x), dy = Math.abs(sh.y2 - sh.y);
+        if (sh.type === 'rect' && dx > 8 && dy > 8) edit({ walls: [...(scene.walls || []), ...chain([{ x: sh.x, y: sh.y }, { x: sh.x2, y: sh.y }, { x: sh.x2, y: sh.y2 }, { x: sh.x, y: sh.y2 }], true)] });
+        const r = Math.hypot(dx, dy);
+        if (sh.type === 'circle' && r > 12) edit({ walls: [...(scene.walls || []), ...chain(circlePts({ x: sh.x, y: sh.y }, r, scene.grid), true)] });
+      }
+    }
+    if (drag?.kind === 'vertex') { const { scene } = hooks.state(); scene.walls = drag.orig; edit({ walls: drag.walls }); }
+    if (drag?.kind === 'pan' && drag.right && !drag.moved) draft = null; // right-click ends a wall chain / cancels a curve
     drag = null; redraw();
   };
   canvas.addEventListener('pointerup', end);

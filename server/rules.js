@@ -1,5 +1,6 @@
 // Applies a system definition (system/foxyverse.json, editable in-app) to actors and rolls.
-import { evaluate, evaluateStatic, parseFormula, parseCommand, hasDice, norm, FormulaError, defaultRng } from './engine.js';
+import { evaluate, evaluateStatic, parseFormula, parseCommand, hasDice, norm, translate, FormulaError, defaultRng } from './engine.js';
+import { canonizeSlotToken } from '../public/slots.js';
 import { randomBytes } from 'node:crypto';
 
 const WORD = /^[a-z_]+$/;
@@ -16,6 +17,13 @@ const REQUIRED_DERIVED = ['maxhp', 'maxmp', 'maxfav', 'act'];
 const newId = () => randomBytes(4).toString('hex');
 const int = (v, lo = -1e6, hi = 1e6) => Math.min(hi, Math.max(lo, Math.trunc(Number(v)) || 0));
 const str = (v, n = 200) => String(v ?? '').slice(0, n);
+/** One item per slot: when several claim the same slot the first keeps it ("other" can hold any number). */
+function dedupeSlots(items) {
+  const taken = new Set();
+  for (const it of items) it.usedSlots = it.usedSlots.filter((sl) => sl === 'other' || (!taken.has(sl) && taken.add(sl)));
+  return items;
+}
+export const isEquipped = (it) => (it.usedSlots?.length ?? 0) > 0;
 const setAll = (vars, names, v) => names.forEach((n) => { vars[n] = v; });
 
 // ---------------------------------------------------------------- system
@@ -106,12 +114,15 @@ export function sanitizeActorData(raw, sys) {
     talents: list(r.talents, (t) => ({ id: str(t?.id, 16) || newId(), name: str(t?.name, 80), tier: int(t?.tier ?? 1, 1, 20), enabled: t?.enabled !== false })),
     spells: list(r.spells, (s) => ({ id: str(s?.id, 16) || newId(), name: str(s?.name, 80), effect: str(s?.effect, 2000), cost: int(s?.cost, 0, 99999),
       costType: s?.costType === 'hp' ? 'hp' : 'mp', armed: !!s?.armed, continuous: !!s?.continuous })),
-    items: list(r.items, (i) => {
+    items: dedupeSlots(list(r.items, (i) => {
       const bonuses = {};
       for (const k of Object.keys(i?.bonuses ?? {})) if (statIds.has(k)) bonuses[k] = int(i.bonuses[k], -999, 999);
-      return { id: str(i?.id, 16) || newId(), name: str(i?.name, 80), type: ['weapon', 'armor', 'consumable', 'bag', 'other'].includes(i?.type) ? i.type : 'other',
-        equipped: !!i?.equipped, qty: int(i?.qty ?? 1, 0, 99999), bonuses, pdef: int(i?.pdef, 0, 9999), mdef: int(i?.mdef, 0, 9999), notes: str(i?.notes, 2000) };
-    }),
+      const type = ['weapon', 'armor', 'consumable', 'bag', 'other'].includes(i?.type) ? i.type : 'other';
+      let used = Array.isArray(i?.usedSlots) ? [...new Set(i.usedSlots.map((x) => canonizeSlotToken(x)).filter(Boolean))] : [];
+      if (!used.length && i?.equipped) used = ['other']; // sheets from before slots existed
+      return { id: str(i?.id, 16) || newId(), name: str(i?.name, 80), type, qty: int(i?.qty ?? 1, 0, 99999), bonuses, pdef: int(i?.pdef, 0, 9999), mdef: int(i?.mdef, 0, 9999),
+        notes: str(i?.notes, 2000), equipExpr: i?.equipExpr !== undefined ? str(i.equipExpr, 300) : type === 'weapon' ? '[weapons]' : '', usedSlots: used };
+    })),
     currency: { pc: int(r.currency?.pc, 0, 1e12), pa: int(r.currency?.pa, 0, 1e12), po: int(r.currency?.po, 0, 1e12) },
     notes: str(r.notes, 20000),
   };
@@ -119,7 +130,7 @@ export function sanitizeActorData(raw, sys) {
 
 /** Stat totals, defenses, derived values and the variable table formulas run against. */
 export function actorContext(sys, data) {
-  const vars = {}, stats = {}, equipped = (data.items ?? []).filter((i) => i.equipped);
+  const vars = {}, stats = {}, equipped = (data.items ?? []).filter(isEquipped);
   for (const s of sys.stats) {
     const base = Number(data.stats?.[s.id]?.base) || 0, passive = Number(data.stats?.[s.id]?.passive) || 0;
     const item = equipped.reduce((a, i) => a + (Number(i.bonuses?.[s.id]) || 0), 0);
@@ -157,6 +168,16 @@ export function pointBudget(sys, data) {
 }
 
 // ---------------------------------------------------------------- rolls
+const firstDie = (dice) => { const g = dice.find((d) => d.results.length); return g ? { roll: g.results[0], faces: g.faces } : null; };
+/** Success grade: base pass/fail, then the first die rolling its minimum (+1) or maximum (-1) shifts it (reversed for ">" comparisons). */
+function gradeOutcome(base, first, op) {
+  let level = base ? 1 : 0;
+  if (first) {
+    const min = first.roll === 1, max = first.roll === first.faces;
+    if (op === '>') { if (min) level--; if (max) level++; } else { if (min) level++; if (max) level--; }
+  }
+  return level >= 2 ? 'critSuccess' : level === 1 ? 'success' : level === 0 ? 'failure' : 'critFailure';
+}
 export function resolveType(sys, typeName) {
   const t = norm(typeName);
   for (const s of sys.stats) if (s.id === t || s.aliases.includes(t)) return { kind: 'stat', stat: s, label: s.label, id: s.id };
@@ -187,21 +208,18 @@ export function executeRoll(sys, cmd, actorData, rng = defaultRng) {
   for (let i = 0; i < cmd.count; i++) {
     const r = evaluate(formula, ctx.vars, rng);
     const out = { total: r.total, dice: r.dice };
+    const first = firstDie(r.dice);
     if (type.kind === 'stat') {
       const target = ctx.stats[type.id].total;
-      const d20 = r.dice.find((d) => d.faces === 20 && d.count >= 1)?.results[0];
-      const pass = r.total <= target;
-      out.target = target; out.margin = target - r.total; out.nat = d20;
-      if (d20 === 1) out.outcome = pass ? 'critSuccess' : 'success';
-      else if (d20 === 20) out.outcome = pass ? 'failure' : 'critFailure';
-      else out.outcome = pass ? 'success' : 'failure';
+      out.target = target; out.margin = target - r.total; out.nat = first?.roll;
+      out.outcome = gradeOutcome(r.total <= target, first, '<');
     } else if (r.success !== undefined) {
-      out.target = r.target; out.outcome = r.success ? 'success' : 'failure';
+      out.target = r.target; out.nat = first?.roll; out.outcome = gradeOutcome(r.success, first, r.cmpOp);
     }
     results.push(out);
   }
   return {
-    kind: type.kind, type: type.id, label: cmd.label || '', title: type.label, dtype: type.dtype, formula,
+    kind: type.kind, type: type.id, label: cmd.label || '', title: type.label, dtype: type.dtype, formula, translated: translate(formula, ctx.vars),
     count: cmd.count, results, sum: results.reduce((a, r) => a + r.total, 0),
     cmd: { type: cmd.type, formula: cmd.formula, count: cmd.count, label: cmd.label },
   };

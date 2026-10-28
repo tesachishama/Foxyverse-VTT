@@ -25,7 +25,7 @@ const userView = (u) => ({ id: u.id, name: u.name, role: u.role, color: u.color 
 const jparse = (s, d) => { try { return JSON.parse(s); } catch { return d; } };
 const sceneView = (s) => ({ id: s.id, name: s.name, image: s.image, width: s.width, height: s.height, grid: s.grid, ox: s.ox, oy: s.oy, active: !!s.active,
   fog: !!s.fog, dark: !!s.dark, walls: jparse(s.walls, []), lights: jparse(s.lights, []), reveal: jparse(s.reveal, []) });
-const tokenView = (t) => ({ id: t.id, sceneId: t.scene_id, name: t.name, x: t.x, y: t.y, size: t.size, image: t.image, color: t.color, actorId: t.actor_id, hidden: !!t.hidden, vision: t.vision, light: t.light });
+const tokenView = (t) => ({ id: t.id, sceneId: t.scene_id, name: t.name, x: t.x, y: t.y, size: t.size, image: t.image, color: t.color, actorId: t.actor_id, hidden: !!t.hidden, vision: t.vision, light: t.light, sight: !!t.sight });
 const soundView = (s) => ({ id: s.id, name: s.name, url: s.url, loop: !!s.loop, volume: s.volume });
 const journalView = (j) => ({ id: j.id, title: j.title, body: j.body, image: j.image, visibility: jparse(j.visibility, 'gm'), updated: j.updated });
 const canSeeJournal = (u, j) => { const v = jparse(j.visibility, 'gm'); return u.role === 'gm' || v === 'all' || (Array.isArray(v) && v.includes(u.id)); };
@@ -201,6 +201,13 @@ route('PATCH', '/api/users/:id', 'user', ({ user, params, body }) => {
   if (body.role) broadcast({ type: 'refresh' }); // permissions changed
   return userView(u);
 });
+route('POST', '/api/invite', 'gm', ({ body }) => { // the GM picks the invite code
+  if (process.env.INVITE_CODE) throw bad('Invite code is fixed by the INVITE_CODE environment variable');
+  const code = String(body.code ?? '').trim();
+  if (!/^[A-Za-z0-9_-]{4,40}$/.test(code)) throw bad('Invite code: 4-40 letters, digits, - or _');
+  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('invite', code);
+  return { code };
+});
 route('POST', '/api/invite/regenerate', 'gm', () => { if (process.env.INVITE_CODE) throw bad('Invite code is set by INVITE_CODE'); return { code: regenInvite() }; });
 
 // ---- uploads (images for everyone up to 5 MB, larger images and audio for the GM)
@@ -278,10 +285,10 @@ route('POST', '/api/tokens', 'gm', ({ user, body }) => {
   const scene = getRow('scenes', body.sceneId); if (!scene) throw bad('Unknown scene');
   const actor = body.actorId ? getRow('actors', body.actorId) : null;
   const portrait = actor ? jparse(actor.data, {}).portrait || null : null;
-  const r = db.prepare('INSERT INTO tokens (scene_id, name, x, y, size, image, color, actor_id, hidden, vision, light) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(
+  const r = db.prepare('INSERT INTO tokens (scene_id, name, x, y, size, image, color, actor_id, hidden, vision, light, sight) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(
     scene.id, String(body.name ?? actor?.name ?? 'Token').slice(0, 60), num(body.x, scene.width / 2), num(body.y, scene.height / 2),
     Math.min(10, Math.max(0.25, num(body.size, 1))), imgUrl(body.image) ?? portrait, color(body.color), actor?.id ?? null, body.hidden ? 1 : 0,
-    Math.min(100, Math.max(0, num(body.vision, 0))), Math.min(100, Math.max(0, num(body.light, 0))));
+    Math.min(100, Math.max(0, num(body.vision, 0))), Math.min(100, Math.max(0, num(body.light, 0))), body.sight ? 1 : 0);
   const row = getRow('tokens', r.lastInsertRowid);
   pushToken(row, user.id);
   return tokenView(row);
@@ -297,12 +304,13 @@ route('PATCH', '/api/tokens/:id', 'user', ({ user, params, body }) => {
     n.size = body.size !== undefined ? Math.min(10, Math.max(0.25, num(body.size, 1))) : cur.size;
     n.vision = body.vision !== undefined ? Math.min(100, Math.max(0, num(body.vision, 0))) : cur.vision;
     n.light = body.light !== undefined ? Math.min(100, Math.max(0, num(body.light, 0))) : cur.light;
+    n.sight = body.sight !== undefined ? (body.sight ? 1 : 0) : cur.sight;
     n.color = body.color !== undefined ? color(body.color) : cur.color;
     n.hidden = body.hidden !== undefined ? (body.hidden ? 1 : 0) : cur.hidden;
     n.actor_id = body.actorId !== undefined ? (body.actorId && getRow('actors', body.actorId) ? Number(body.actorId) : null) : cur.actor_id;
   }
   const m = { ...cur, ...n };
-  db.prepare('UPDATE tokens SET name=?, x=?, y=?, size=?, image=?, color=?, actor_id=?, hidden=?, vision=?, light=? WHERE id=?').run(m.name, m.x, m.y, m.size, m.image, m.color, m.actor_id, m.hidden, m.vision, m.light, cur.id);
+  db.prepare('UPDATE tokens SET name=?, x=?, y=?, size=?, image=?, color=?, actor_id=?, hidden=?, vision=?, light=?, sight=? WHERE id=?').run(m.name, m.x, m.y, m.size, m.image, m.color, m.actor_id, m.hidden, m.vision, m.light, m.sight, cur.id);
   const row = getRow('tokens', cur.id);
   pushToken(row, user.id);
   return tokenView(row);
@@ -543,6 +551,7 @@ function cleanComp(kind, data) {
   const e = sanitizeActorData({ [key]: [data] }, sys)[key][0];
   if (!e) throw bad('Bad entry');
   delete e.id;
+  if (kind === 'item') e.usedSlots = []; // a template is never "equipped"
   return e;
 }
 route('POST', '/api/compendium', 'gm', ({ body }) => {
