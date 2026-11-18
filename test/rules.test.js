@@ -179,3 +179,24 @@ test('undoApply reverses only one application', () => {
   const healed = applyRoll(sys, hit.data, { kind: 'heal', results: [{ total: 9 }], sum: 9 }); // back to 20/20
   assert.equal(undoApply(sys, healed.data, hit.report.delta).hp.cur, 20); // never above max
 });
+
+test('ticked talents add their tier modifier to stat checks only, summed', async () => {
+  const { talentModifier } = await import('../server/rules.js');
+  const a = make({ stats: { constitution: 12 } });
+  a.talents = sanitizeActorData({ talents: [{ name: 'Survivaliste', tier: 4, enabled: true }, { name: 'Boussole', tier: 2, enabled: true }, { name: 'Off', tier: 3, enabled: false }, { name: 'Zero', tier: 0, enabled: true }] }, sys).talents;
+  assert.deepEqual(talentModifier(sys, a), { total: -13, names: ['Survivaliste', 'Boussole'] }); // T4 -10 + T2 -3; unticked and T0 count for nothing
+  const check = roll('/con +1', a, fixed(11));
+  assert.equal(check.formula, '1d20+1-13'); assert.equal(check.results[0].total, -1); // 11 + 1 - 13: well under CON 12
+  assert.equal(check.results[0].outcome, 'success');
+  assert.deepEqual(check.talents, { total: -13, names: ['Survivaliste', 'Boussole'] });
+  assert.equal(check.cmd.formula, '+1'); // a reroll recomputes with the talents ticked at that time
+  const dmg = roll('/pdmg 2d6', a, fixed(3));
+  assert.equal(dmg.formula, '2d6'); assert.equal(dmg.talents, undefined); // damage, heals, free rolls: untouched
+  assert.equal(sanitizeActorData({ talents: [{ name: 'x' }] }, sys).talents[0].enabled, false); // new talents start unticked
+  assert.equal(sanitizeActorData({ talents: [{ name: 'x', tier: 0, description: 'd'.repeat(5000) }] }, sys).talents[0].description.length, 4000);
+});
+
+test('a spell description can be locked (saved) and is kept as is', () => {
+  const sp = sanitizeActorData({ spells: [{ name: 'Spark', effect: 'Fire', locked: true }, { name: 'Ward' }] }, sys).spells;
+  assert.equal(sp[0].locked, true); assert.equal(sp[0].effect, 'Fire'); assert.equal(sp[1].locked, false);
+});

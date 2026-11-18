@@ -73,7 +73,7 @@ export function validateSystem(raw) {
   });
 
   const tiers = {};
-  for (const [k, v] of Object.entries(raw.knowledgeTiers ?? {})) tiers[int(k, 1, 20)] = int(v, -100, 100);
+  for (const [k, v] of Object.entries(raw.knowledgeTiers ?? {})) tiers[int(k, 0, 20)] = int(v, -100, 100); // tier 0 counts as 0 when absent
 
   const character = {
     baseStat: int(raw.character?.baseStat ?? 5, 0, 100), startPoints: int(raw.character?.startPoints ?? 30, 0, 1000),
@@ -138,9 +138,10 @@ export function sanitizeActorData(raw, sys) {
     mp: { cur: int(r.mp?.cur, 0, 999999) },
     fav: { cur: int(r.fav?.cur, 0, 999) },
     bonact: int(r.bonact, -99, 99), bonspe: int(r.bonspe, -999, 999), elemental: !!r.elemental,
-    talents: list(r.talents, (t) => ({ id: str(t?.id, 16) || newId(), name: str(t?.name, 80), tier: int(t?.tier ?? 1, 1, 20), enabled: t?.enabled !== false })),
+    // a ticked talent is a passive modifier on every stat check (see talentModifier)
+    talents: list(r.talents, (t) => ({ id: str(t?.id, 16) || newId(), name: str(t?.name, 80), tier: int(t?.tier ?? 0, 0, 20), enabled: t?.enabled === true, description: str(t?.description, 4000) })),
     spells: list(r.spells, (s) => ({ id: str(s?.id, 16) || newId(), name: str(s?.name, 80), effect: str(s?.effect, 2000), cost: int(s?.cost, 0, 99999),
-      costType: s?.costType === 'hp' ? 'hp' : 'mp', armed: !!s?.armed, continuous: !!s?.continuous })),
+      costType: s?.costType === 'hp' ? 'hp' : 'mp', armed: !!s?.armed, continuous: !!s?.continuous, locked: !!s?.locked })), // locked: description saved, read-only until unlocked
     items: dedupeSlots(list(r.items, (i) => {
       const bonuses = {};
       for (const k of Object.keys(i?.bonuses ?? {})) if (statIds.has(k)) bonuses[k] = int(i.bonuses[k], -999, 999);
@@ -195,6 +196,11 @@ export function pointBudget(sys, data) {
 }
 
 // ---------------------------------------------------------------- rolls
+/** Sum of the ticked talents' tier modifiers (system.knowledgeTiers, roll terms: -3 makes a roll-under check easier). */
+export function talentModifier(sys, data) {
+  const used = (data?.talents ?? []).filter((t) => t.enabled && Number(sys.knowledgeTiers?.[t.tier] ?? 0) !== 0);
+  return { total: used.reduce((a, t) => a + Number(sys.knowledgeTiers[t.tier]), 0), names: used.map((t) => t.name || '?') };
+}
 const firstDie = (dice) => { const g = dice.find((d) => d.results.length); return g ? { roll: g.results[0], faces: g.faces } : null; };
 /** Success grade: base pass/fail, then the first die rolling its minimum (+1) or maximum (-1) shifts it (reversed for ">" comparisons). */
 function gradeOutcome(base, first, op) {
@@ -222,11 +228,13 @@ export function executeRoll(sys, cmd, actorData, rng = defaultRng) {
   const type = resolveType(sys, cmd.type);
   if (!type) throw new Error(`Unknown roll type "${cmd.type}"`);
   const ctx = actorData ? actorContext(sys, actorData) : { vars: {}, stats: {} };
-  let formula = cmd.formula || type.preset || '';
+  let formula = cmd.formula || type.preset || '', talents = null;
   if (type.kind === 'stat') {
     if (!actorData) throw new Error('Pick a character first to roll a stat');
     if (!formula) formula = '1d20';
     else if (!hasDice(parseFormula(formula).main)) formula = /^[+-]/.test(formula) ? `1d20${formula}` : `1d20+${formula}`;
+    talents = talentModifier(sys, actorData);
+    if (talents.total) formula = `${formula}${talents.total > 0 ? '+' : ''}${talents.total}`;
   }
   if (!formula) throw new Error('Formula is empty');
   parseFormula(formula); // surface syntax errors before rolling
@@ -247,7 +255,7 @@ export function executeRoll(sys, cmd, actorData, rng = defaultRng) {
   }
   return {
     kind: type.kind, type: type.id, label: cmd.label || '', title: type.label, dtype: type.dtype, formula, translated: translate(formula, ctx.vars),
-    count: cmd.count, results, sum: results.reduce((a, r) => a + r.total, 0),
+    count: cmd.count, results, sum: results.reduce((a, r) => a + r.total, 0), talents: talents?.total ? talents : undefined,
     cmd: { type: cmd.type, formula: cmd.formula, count: cmd.count, label: cmd.label },
   };
 }

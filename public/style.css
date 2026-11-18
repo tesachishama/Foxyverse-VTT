@@ -188,3 +188,10 @@ details.multi { position: relative; } details.multi summary { cursor: pointer; b
 details.multi[open] > label { display: flex; } details.multi > label { padding: 2px 8px; }
 ul.diff { list-style: none; padding: 0; display: grid; gap: 4px; max-height: 50vh; overflow-y: auto; }
 ul.diff .added b { color: var(--ok); } ul.diff .removed b { color: var(--bad); } ul.diff .changed b { color: var(--gold); }
+
+/* talents */
+.talent { border: 2px solid var(--line); border-radius: 18px; padding: 2px 8px; margin: 4px 0; }
+.talent.on { border-color: var(--lilac); background: rgba(235, 165, 255, .08); }
+.talent textarea { width: 100%; margin: 2px 0 6px; }
+.spell-effect { display: flex; gap: 6px; align-items: flex-start; } .spell-effect textarea { flex: 1; }
+.spell-effect.locked textarea { background: transparent; border-color: transparent; resize: none; }

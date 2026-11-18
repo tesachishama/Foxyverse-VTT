@@ -457,6 +457,7 @@ function rollCard(m, b, del) {
       h('span', { class: 'total' }, r.total),
       r.target != null && h('span', { class: 'target' }, (check ? '≤ ' : '/ ') + r.target),
       r.outcome && h('span', { class: 'badge ' + r.outcome }, t(r.outcome)))),
+    b.talents && h('div', { class: 'formula' }, `${t('talents')} : ${b.talents.names.join(', ')} (${b.talents.total < 0 ? '+' : '−'}${Math.abs(b.talents.total)})`),
     b.count > 1 && h('div', { class: 'sum' }, 'Σ ', b.sum),
     h('div', { class: 'roll-actions' },
       (mine || isGM()) && h('button', { onclick: guard(() => api('POST', `/chat/${m.id}/reroll`)) }, '↻ ' + t('reroll')),
@@ -480,6 +481,7 @@ function appliedText(a) {
 
 // ------------------------------------------------------------------ sheets
 let saveTimer;
+const openTalents = new WeakSet(); // talents whose description is unfolded
 const saveActor = (a) => { pending.add(a.id); clearTimeout(saveTimer); saveTimer = setTimeout(() => saveNow(a), 350); };
 // Saves run one after another: each one must send the HP / mana / favors the previous one got back from the server.
 let saveChain = Promise.resolve();
@@ -571,15 +573,25 @@ function sheetView(a) {
     h('div', { class: 'quick' }, sys.quickRolls.map((q) => rollBtn(q.id, q.label, 'roll wide')),
       h('label', {}, t('actions') + ' +', num(d, 'bonact', -99)), h('label', {}, '+', num(d, 'bonspe', -999)))));
 
-  const tierText = (n) => { const v = sys.knowledgeTiers[n]; return v == null ? '' : v > 0 ? `+${v}` : String(v); };
-  const talents = section(t('talents'), h('div', {}, d.talents.map((tl, i) => h('div', { class: 'line' },
-    field(a, tl, 'name', 'text', { class: 'grow' }),
-    (() => { const sel = h('select', { onchange: (e) => { tl.tier = Number(e.target.value); saveActor(a); renderPanel(); } }, Object.keys(sys.knowledgeTiers).map((k) => h('option', { value: k }, `${t('tier')} ${k} (${tierText(k)})`))); sel.value = tl.tier; return sel; })(),
-    field(a, tl, 'enabled', 'bool'),
-    h('button', { title: t('use'), onclick: () => { S.rollMod = tierText(tl.tier); modInput.value = S.rollMod; } }, t('use')),
-    h('button', { class: 'x', onclick: () => { d.talents.splice(i, 1); saveActor(a); renderPanel(); } }, '×'))),
-  h('p', { class: 'hint' }, d.talents.length >= 4 ? '4 max.' : '')),
-  h('div', { class: 'addrow' }, h('button', { class: 'add', onclick: () => { d.talents.push({ id: '', name: '', tier: 1, enabled: true }); saveActor(a); renderPanel(); } }, '+ ' + t('add'))));
+  // Tiers in roll terms (T2 = -3 on the die); shown as the bonus they are on a roll-under check ("+3").
+  const tierMod = (n) => Number(sys.knowledgeTiers[n] ?? 0);
+  const tierLabel = (n) => `T${n} ${tierMod(n) > 0 ? '−' : '+'}${Math.abs(tierMod(n))}`;
+  const tierKeys = [...new Set(['0', ...Object.keys(sys.knowledgeTiers)])].sort((x, y) => x - y);
+  const activeBonus = -d.talents.filter((tl) => tl.enabled).reduce((n, tl) => n + tierMod(tl.tier), 0);
+  const talents = section(t('talents'), h('div', {},
+    d.talents.map((tl, i) => {
+      const open = openTalents.has(tl);
+      return h('div', { class: 'talent' + (tl.enabled ? ' on' : '') },
+        h('div', { class: 'line' },
+          h('input', { type: 'checkbox', title: t('talentActive'), checked: tl.enabled, onchange: (e) => { tl.enabled = e.target.checked; saveActor(a); renderPanel(); } }),
+          field(a, tl, 'name', 'text', { class: 'grow', placeholder: t('name') }),
+          (() => { const sel = h('select', { onchange: (e) => { tl.tier = Number(e.target.value); saveActor(a); renderPanel(); } }, tierKeys.map((k) => h('option', { value: k }, tierLabel(k)))); sel.value = tl.tier; return sel; })(),
+          h('button', { class: 'x', title: t('description'), onclick: () => { if (open) openTalents.delete(tl); else openTalents.add(tl); renderPanel(); } }, open ? '▴' : '▾'),
+          h('button', { class: 'x', title: t('del'), onclick: () => { d.talents.splice(i, 1); saveActor(a); renderPanel(); } }, '×')),
+        open && field(a, tl, 'description', 'area', { rows: 3, placeholder: t('description') }));
+    }),
+    h('p', { class: 'hint' }, activeBonus ? `${t('talentsOn')} : ${activeBonus > 0 ? '+' : ''}${activeBonus}` : t('talentHint'))),
+  h('div', { class: 'addrow' }, h('button', { class: 'add', onclick: () => { const tl = { id: '', name: '', tier: 0, enabled: false, description: '' }; d.talents.push(tl); openTalents.add(tl); saveActor(a); renderPanel(); } }, '+ ' + t('add'))));
 
   const spells = section(t('spells'), h('div', {}, d.spells.map((sp, i) => h('div', { class: 'spell' },
     h('div', { class: 'line' }, field(a, sp, 'name', 'text', { class: 'grow' }), field(a, sp, 'cost', 'int', { min: 0, class: 'n', title: t('cost') }),
@@ -591,8 +603,10 @@ function sheetView(a) {
         if (pending.has(a.id)) await saveNow(a);
         const r = await api('POST', `/actors/${a.id}/cast`, { spellId: sp.id }); upsert(S.actors, r); renderPanel();
       }) }, t('cast')), compBtn('spell', sp), h('button', { class: 'x', onclick: () => { d.spells.splice(i, 1); saveActor(a); renderPanel(); } }, '×')),
-    field(a, sp, 'effect', 'area', { rows: 2, placeholder: t('effect') })))),
-  h('div', { class: 'addrow' }, h('button', { class: 'add', onclick: () => { d.spells.push({ id: '', name: '', effect: '', cost: 1, costType: 'mp', armed: false, continuous: false }); saveActor(a); renderPanel(); } }, '+ ' + t('add')), compPick('spell', (e) => { d.spells.push({ ...e, id: '' }); saveActor(a); renderPanel(); })));
+    h('div', { class: 'spell-effect' + (sp.locked ? ' locked' : '') },
+      field(a, sp, 'effect', 'area', { rows: 2, placeholder: t('effect'), readonly: sp.locked }),
+      h('button', { class: 'quiet', title: sp.locked ? t('unlockText') : t('lockText'), onclick: () => { sp.locked = !sp.locked; saveActor(a); renderPanel(); } }, sp.locked ? '✎ ' + t('edit') : '🔒 ' + t('save')))))),
+  h('div', { class: 'addrow' }, h('button', { class: 'add', onclick: () => { d.spells.push({ id: '', name: '', effect: '', cost: 1, costType: 'mp', armed: false, continuous: false, locked: false }); saveActor(a); renderPanel(); } }, '+ ' + t('add')), compPick('spell', (e) => { d.spells.push({ ...e, id: '' }); saveActor(a); renderPanel(); })));
 
   const items = inventoryView({ a, S, field, saveActor, rerender: renderPanel, compBtn, compPick });
   const money = section(t('currency'), h('div', { class: 'line' }, ['pc', 'pa', 'po'].map((k) => h('label', {}, k.toUpperCase(), field(a, d.currency, k, 'int', { min: 0, class: 'n wide' })))));
