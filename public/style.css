@@ -195,3 +195,14 @@ ul.diff .added b { color: var(--ok); } ul.diff .removed b { color: var(--bad); }
 .talent textarea { width: 100%; margin: 2px 0 6px; }
 .spell-effect { display: flex; gap: 6px; align-items: flex-start; } .spell-effect textarea { flex: 1; }
 .spell-effect.locked textarea { background: transparent; border-color: transparent; resize: none; }
+
+/* character picture: portrait + token */
+button.avatar { padding: 0; }
+.picture-row { display: flex; gap: 18px; align-items: flex-end; flex-wrap: wrap; margin: 8px 0 12px; }
+.picture-row figure { margin: 0; display: grid; justify-items: center; gap: 4px; } .picture-row figcaption { color: var(--lilac); font-size: 12px; }
+.picture-row .portrait { max-width: 240px; max-height: 300px; border-radius: 12px; border: 2px solid var(--line); display: grid; place-items: center; }
+.picture-row .portrait.empty { width: 160px; height: 200px; }
+.picture-row .token { width: 120px; height: 120px; border-radius: 50%; display: grid; place-items: center; overflow: hidden; }
+.picture-row .token.empty { border: 2px dashed var(--line); } .picture-row .token.empty img { width: 100%; height: 100%; object-fit: cover; opacity: .5; }
+.filebtn.primary { background: var(--ember); border-color: var(--ember); color: #2a0019; font-weight: 600; }
+.modal-card.crop { max-width: 380px; display: grid; gap: 8px; justify-items: center; } .crop-canvas { cursor: grab; touch-action: none; }

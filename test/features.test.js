@@ -70,6 +70,26 @@ test('player portrait propagates to linked tokens; a player with the edit right 
   assert.equal(own.body.image, null); assert.equal(own.body.name, 'Hero'); assert.equal(own.body.vision, 0); // only x, y, image are player-editable
 });
 
+test('a sheet has a full portrait and a separate round token; the token is what the map uses', async () => {
+  const portrait = await gmUpload('image/png', PNG(7)), token = await gmUpload('image/png', PNG(8));
+  const hero = await gm('POST', '/actors', { name: 'Framed' });
+  const scene = await activeScene();
+  const tok = await gm('POST', '/tokens', { sceneId: scene.id, actorId: hero.body.id });
+  const d = hero.body.data; d.portrait = portrait.body.url;
+  await gm('PATCH', `/actors/${hero.body.id}`, { data: d });
+  const imageOf = async () => (await gm('GET', '/state')).body.tokens.find((t) => t.id === tok.body.id).image;
+  assert.equal(await imageOf(), portrait.body.url); // no token yet: the portrait stands in
+  d.token = token.body.url;
+  const r = await gm('PATCH', `/actors/${hero.body.id}`, { data: d, shown: true });
+  assert.equal(r.body.data.token, token.body.url); assert.equal(r.body.data.portrait, portrait.body.url);
+  assert.equal(await imageOf(), token.body.url);
+  assert.equal((await gm('GET', '/state')).body.npcs.find((n) => n.id === hero.body.id).portrait, token.body.url);
+  const fresh = await gm('POST', '/tokens', { sceneId: scene.id, actorId: hero.body.id });
+  assert.equal(fresh.body.image, token.body.url);
+  d.token = '/uploads/evil.png';
+  assert.equal((await gm('PATCH', `/actors/${hero.body.id}`, { data: d })).body.data.token, ''); // only our own uploads
+});
+
 test('audio: GM plays/stops, players cannot, state exposes what is playing', async () => {
   const mp3 = await gmUpload('audio/mpeg', MP3);
   const snd = await gm('POST', '/sounds', { name: 'Tavern', url: mp3.body.url, loop: true, volume: 0.5 });

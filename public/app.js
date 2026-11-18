@@ -2,6 +2,7 @@ import { h, $, $$, api, request, setApiBase, eventsUrl, CLIENT_ID, upload, toast
 import { createMap } from './map.js';
 import { createAudio } from './audio.js';
 import { inventoryView } from './inventory.js';
+import { openTokenCropper } from './tokencrop.js';
 
 const S = {
   me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], table: null, allTables: [], mapMode: false,
@@ -547,8 +548,7 @@ function sheetView(a) {
   const head = h('div', { class: 'sheet-head' },
     h('button', { class: 'quiet', onclick: () => { saveNow(a); S.sheetId = null; renderPanel(); } }, '← ' + t('back')),
     h('div', { class: 'namerow' },
-      h('label', { class: 'avatar', title: t('portrait') }, d.portrait ? h('img', { src: d.portrait, alt: '' }) : '+',
-        h('input', { type: 'file', accept: 'image/*', hidden: true, onchange: guard(async (e) => { const f = e.target.files[0]; if (!f) return; d.portrait = await upload(f); saveActor(a); renderPanel(); }) })),
+      h('button', { class: 'avatar', title: t('picture'), onclick: () => pictureDialog(a) }, (d.token || d.portrait) ? h('img', { src: d.token || d.portrait, alt: '' }) : '+'),
       field(a, a, 'name', 'text', { class: 'title grow' })),
     h('div', { class: 'grid2' },
       h('label', {}, t('cls'), field(a, d.bio, 'class')), h('label', {}, t('element'), field(a, d.bio, 'element')),
@@ -620,6 +620,30 @@ function sheetView(a) {
     h('button', { class: 'quiet', onclick: () => { S.sheetId = null; renderPanel(); } }, '← ' + t('back')), h('p', { class: 'hint' }, t('viewOnly')),
     h('fieldset', { class: 'readonly', disabled: true }, head, res, stats, talents, spells, items, money, notes));
   return h('div', { class: 'sheet pad' }, head, res, stats, talents, spells, items, money, notes, perms, gm);
+}
+/** Portrait (the whole character) and token (round, framed: map, chat, NPC list). A new portrait asks for the token's framing. */
+function pictureDialog(a) {
+  const d = a.data;
+  const close = () => $('.modal')?.remove();
+  const done = () => { saveActor(a); close(); renderPanel(); };
+  const crop = guard(async () => { const f = await openTokenCropper(d.portrait); if (f) { d.token = await upload(f); done(); } });
+  const pick = (onFile) => h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', hidden: true, onchange: guard(async (e) => { const f = e.target.files[0]; if (f) await onFile(f); }) });
+  close();
+  document.body.append(h('div', { class: 'modal', onclick: (e) => { if (e.target === e.currentTarget) close(); } },
+    h('div', { class: 'modal-card picture' }, h('button', { class: 'x close', onclick: close }, '×'), h('h3', {}, t('picture')),
+      h('div', { class: 'picture-row' },
+        h('figure', {}, d.portrait ? h('img', { class: 'portrait', src: d.portrait, alt: '' }) : h('div', { class: 'portrait empty' }, '—'), h('figcaption', {}, t('portrait'))),
+        h('figure', {}, d.token ? h('img', { class: 'token', src: d.token, alt: '' }) : h('div', { class: 'token empty' }, d.portrait ? h('img', { src: d.portrait, alt: '' }) : '—'), h('figcaption', {}, t('tokenImage')))),
+      h('div', { class: 'line' },
+        h('label', { class: 'filebtn primary' }, t('newPortrait'), pick(async (f) => {
+          d.portrait = await upload(f); d.token = '';
+          const tok = await openTokenCropper(d.portrait); // frame it right away
+          if (tok) d.token = await upload(tok);
+          done();
+        })),
+        d.portrait && h('button', { onclick: crop }, t('cropToken')),
+        h('label', { class: 'filebtn' }, t('readyToken'), pick(async (f) => { d.token = await upload(f); done(); })),
+        (d.portrait || d.token) && h('button', { class: 'danger', onclick: () => { d.portrait = ''; d.token = ''; done(); } }, t('del'))))));
 }
 /** Names of the players who can edit a sheet ("—" for none). */
 const permSummary = (a) => S.users.filter((u) => a.perms?.[u.id] === 'edit').map((u) => u.name).join(', ') || '—';

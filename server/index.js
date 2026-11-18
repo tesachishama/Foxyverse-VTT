@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { db, UPLOAD_DIR, getSystem, setSystem, forgetSystem, loadDefaultSystem } from './db.js';
 import { parseCommand, evaluate, evaluateStatic, FormulaError } from './engine.js';
-import { validateSystem, defaultActorData, sanitizeActorData, actorContext, pointBudget, executeRoll, applyRoll, castSpell, undoApply, resourceMaxes, followMax, fillResources } from './rules.js';
+import { validateSystem, defaultActorData, sanitizeActorData, actorContext, pointBudget, executeRoll, applyRoll, castSpell, undoApply, tokenImage, resourceMaxes, followMax, fillResources } from './rules.js';
 import { logServerError } from './log.js';
 import { diffSystems } from './sysdiff.js';
 
@@ -69,7 +69,7 @@ function namesSeenBy(u, tableId) {
 /** Players see an entry when the GM ticked "visible", or when it is on a sheet they can edit or view. */
 const canSeeComp = (u, c, names) => u.role === 'gm' || !!c.visible || (names ?? namesSeenBy(u, c.table_id)).has(`${c.kind}:${compKey(c.name)}`);
 const npcsOf = (tableId) => db.prepare('SELECT id, name, data FROM actors WHERE table_id = ? AND shown = 1 ORDER BY name COLLATE NOCASE').all(tableId)
-  .map((a) => ({ id: a.id, name: a.name, portrait: jparse(a.data, {}).portrait || null }));
+  .map((a) => ({ id: a.id, name: a.name, portrait: tokenImage(jparse(a.data, {})) }));
 const chatView = (m) => ({ id: m.id, userId: m.user_id, userName: m.user_name, actorId: m.actor_id, whisper: m.whisper, body: JSON.parse(m.body), ts: m.ts });
 const canSeeChat = (u, m) => !m.whisper || u.role === 'gm' || m.user_id === u.id;
 
@@ -424,7 +424,7 @@ admin('POST', '/scenes/:id/copy', ({ params, body }) => {
 tbl('POST', '/tokens', 'gm', ({ table, by, body }) => {
   const scene = inTable('scenes', body.sceneId, table.id); if (!scene) throw bad('Unknown scene');
   const actor = body.actorId ? inTable('actors', body.actorId, table.id) : null;
-  const portrait = actor ? jparse(actor.data, {}).portrait || null : null;
+  const portrait = actor ? tokenImage(jparse(actor.data, {})) : null;
   const r = db.prepare('INSERT INTO tokens (scene_id, name, x, y, size, image, color, actor_id, hidden, vision, light, sight) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(
     scene.id, String(body.name ?? actor?.name ?? 'Token').slice(0, 60), num(body.x, scene.width / 2), num(body.y, scene.height / 2),
     Math.min(10, Math.max(0.25, num(body.size, 1))), imgUrl(body.image) ?? portrait, color(body.color), actor?.id ?? null, body.hidden ? 1 : 0,
@@ -499,7 +499,7 @@ tbl('PATCH', '/actors/:id', 'player', ({ user, table, by, params, body }) => {
   pushActor(row, by);
   if (body.data) syncCompendium(table);
   if (row.shown || cur.shown) pushNpcs(table.id);
-  const oldPortrait = jparse(cur.data, {}).portrait || null, newPortrait = data.portrait || null;
+  const oldPortrait = tokenImage(jparse(cur.data, {})), newPortrait = tokenImage(data); // the map tokens follow the sheet's picture
   if (body.data && oldPortrait !== newPortrait) {
     db.prepare('UPDATE tokens SET image = ? WHERE actor_id = ?').run(newPortrait, cur.id);
     for (const t of db.prepare('SELECT * FROM tokens WHERE actor_id = ?').all(cur.id)) pushToken(t, by);
@@ -853,7 +853,7 @@ const slugOf = (tableId) => (tableId == null ? null : getRow('game_tables', tabl
 admin('GET', '/compendium', () => ({
   entries: db.prepare('SELECT * FROM compendium ORDER BY kind, name COLLATE NOCASE').all().map((c) => ({ ...compView(c), table: slugOf(c.table_id) })),
   npcs: db.prepare('SELECT id, name, data, table_id, campaign_id FROM actors WHERE table_id IS NOT NULL ORDER BY name COLLATE NOCASE').all()
-    .map((a) => { const d = jparse(a.data, {}); return { id: a.id, name: a.name, portrait: d.portrait || null, level: d.bio?.level ?? 1, table: slugOf(a.table_id), campaignId: a.campaign_id ?? null }; }),
+    .map((a) => { const d = jparse(a.data, {}); return { id: a.id, name: a.name, portrait: tokenImage(d), level: d.bio?.level ?? 1, table: slugOf(a.table_id), campaignId: a.campaign_id ?? null }; }),
   tables: db.prepare('SELECT slug, name FROM game_tables ORDER BY name COLLATE NOCASE').all(),
   campaigns: campaignList(),
 }));

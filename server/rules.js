@@ -23,6 +23,8 @@ function dedupeSlots(items) {
   for (const it of items) it.usedSlots = it.usedSlots.filter((sl) => sl === 'other' || (!taken.has(sl) && taken.add(sl)));
   return items;
 }
+/** The picture of a character on the map, in the chat and the NPC list: its token, else its portrait. */
+export const tokenImage = (data) => data?.token || data?.portrait || null;
 export const isEquipped = (it) => (it.usedSlots?.length ?? 0) > 0;
 const setAll = (vars, names, v) => names.forEach((n) => { vars[n] = v; });
 
@@ -133,6 +135,7 @@ export function sanitizeActorData(raw, sys) {
   return {
     bio: { class: str(r.bio?.class, 60), element: str(r.bio?.element, 60), level: int(r.bio?.level ?? 1, 1, 999) },
     portrait: /^\/uploads\/[a-f0-9]{64}\.(png|jpg|webp|gif)$/.test(r.portrait ?? '') ? r.portrait : '',
+    token: /^\/uploads\/[a-f0-9]{64}\.(png|jpg|webp|gif)$/.test(r.token ?? '') ? r.token : '', // round framed picture for the map and chat (default: cropped from the portrait)
     stats,
     hp: { cur: int(r.hp?.cur, -9999, 999999), temp: int(r.hp?.temp, 0, 999999) },
     mp: { cur: int(r.mp?.cur, 0, 999999) },

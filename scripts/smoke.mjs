@@ -19,7 +19,7 @@ for (const page of ['/', '/smoke']) {
   const index = await fetch(BASE + page);
   if (!index.ok || !(await index.text()).includes('Foxyverse VTT')) fail(`page ${page} not served`);
 }
-for (const f of ['/app.js', '/map.js', '/vision.js', '/audio.js', '/lib.js', '/inventory.js', '/slots.js', '/style.css', '/icons/Icons_equipmentSlots.svg', '/icons/Icons_weapon.svg']) if (!(await fetch(BASE + f)).ok) fail(`static file ${f} missing`);
+for (const f of ['/app.js', '/map.js', '/vision.js', '/audio.js', '/lib.js', '/inventory.js', '/slots.js', '/tokencrop.js', '/style.css', '/icons/Icons_equipmentSlots.svg', '/icons/Icons_weapon.svg']) if (!(await fetch(BASE + f)).ok) fail(`static file ${f} missing`);
 
 const made = await call('POST', '/admin/api/tables', { name: 'Smoke', slug: 'smoke' });
 if (made.status === 403) fail('GM area refused: set SMOKE_ADMIN_SECRET to the server ADMIN_SECRET');
