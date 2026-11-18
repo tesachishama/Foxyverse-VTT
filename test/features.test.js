@@ -1,155 +1,120 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { once } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { startServer } from './helpers.js';
 
-const PORT = 3800 + Math.floor(Math.random() * 90);
-const BASE = `http://127.0.0.1:${PORT}`;
-const dataDir = mkdtempSync(join(tmpdir(), 'foxyverse-f-'));
-let proc;
-const call = async (method, path, body, cookie, extra = {}) => {
-  const res = await fetch(BASE + path, { method, headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cookie ? { Cookie: cookie } : {}), ...extra }, body: body ? JSON.stringify(body) : undefined });
-  const text = await res.text();
-  return { status: res.status, body: text ? JSON.parse(text) : null, cookie: res.headers.get('set-cookie')?.split(';')[0] };
-};
-const upload = async (cookie, type, bytes) => {
-  const res = await fetch(BASE + '/api/upload', { method: 'POST', headers: { 'Content-Type': type, Cookie: cookie }, body: bytes });
+let srv, gm, pip, pipSlot, T;
+const upload = async (prefix, cookie, type, bytes) => {
+  const res = await fetch(srv.base + prefix + '/upload', { method: 'POST', headers: { 'Content-Type': type, ...(cookie ? { Cookie: cookie } : {}) }, body: bytes });
   return { status: res.status, body: await res.json() };
 };
+const gmUpload = (type, bytes) => upload('/admin/api/t/feat', null, type, bytes);
+const pipUpload = (type, bytes) => upload('/api/t/feat', pip.cookie, type, bytes);
 const PNG = (n = 0) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, n)]);
 const MP3 = Buffer.concat([Buffer.from('ID3'), Buffer.alloc(2000, 7)]);
+const activeScene = async () => (await gm('GET', '/state')).body.scenes.find((s) => s.active);
 
 before(async () => {
-  proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT, DATA_DIR: dataDir }, stdio: 'ignore' });
-  for (let i = 0; i < 50; i++) { try { await fetch(BASE + '/api/me'); return; } catch { await new Promise((r) => setTimeout(r, 100)); } }
-  throw new Error('server did not start');
+  srv = await startServer();
+  T = await srv.table('feat');
+  gm = T.gm;
+  pipSlot = await T.slot('Pip');
+  pip = await T.join(pipSlot.id);
 });
-// wait for the server to exit so Windows releases the database file before we delete it
-after(async () => { const gone = once(proc, 'exit'); proc.kill(); await gone; rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+after(() => srv.stop());
 
 test('scenes: fog, walls, lights, reveal are stored and sanitised; GM sees all scenes\' tokens', async () => {
-  const gm = await call('POST', '/api/register', { name: 'GM', password: 'longpassword' });
-  const code = (await call('GET', '/api/state', null, gm.cookie)).body.invite.code;
-  const pl = await call('POST', '/api/register', { name: 'Pip', password: 'longpassword', invite: code });
-  const a = await call('POST', '/api/scenes', { name: 'A', width: 1000, height: 1000 }, gm.cookie);
-  const b = await call('POST', '/api/scenes', { name: 'B', width: 500, height: 500 }, gm.cookie);
+  const a = await gm('POST', '/scenes', { name: 'A', width: 1000, height: 1000 });
+  const b = await gm('POST', '/scenes', { name: 'B', width: 500, height: 500 });
   assert.equal(b.body.active, false);
-  const upd = await call('PATCH', `/api/scenes/${b.body.id}`, { fog: true, dark: true, walls: [[1.234, 2, 300, 2, 1, 0], 'junk', [0, 0, 'x', 5]], lights: [{ x: 10, y: 10, radius: 999 }], reveal: [[10, 10, -5, 20]] }, gm.cookie);
+  const upd = await gm('PATCH', `/scenes/${b.body.id}`, { fog: true, dark: true, walls: [[1.234, 2, 300, 2, 1, 0], 'junk', [0, 0, 'x', 5]], lights: [{ x: 10, y: 10, radius: 999 }], reveal: [[10, 10, -5, 20]] });
   assert.equal(upd.body.fog, true); assert.equal(upd.body.dark, true);
   assert.deepEqual(upd.body.walls[0], [1.2, 2, 300, 2, 1, 0]); assert.equal(upd.body.walls.length, 2);
   assert.equal(upd.body.lights[0].radius, 100); assert.deepEqual(upd.body.reveal[0], [10, 10, 5, 20]);
-  const tk = await call('POST', '/api/tokens', { sceneId: b.body.id, name: 'Prep', vision: 6, light: 3 }, gm.cookie);
+  const tk = await gm('POST', '/tokens', { sceneId: b.body.id, name: 'Prep', vision: 6, light: 3 });
   assert.equal(tk.body.vision, 6); assert.equal(tk.body.light, 3);
-  assert.equal((await call('GET', '/api/state', null, gm.cookie)).body.tokens.length, 1);
-  assert.equal((await call('GET', '/api/state', null, pl.cookie)).body.tokens.length, 0);
-  assert.equal((await call('GET', '/api/state', null, pl.cookie)).body.scenes.length, 0);
+  assert.equal((await gm('GET', '/state')).body.tokens.length, 1);
+  assert.equal((await pip('GET', '/state')).body.tokens.length, 0);
+  assert.equal((await pip('GET', '/state')).body.scenes.length, 0);
   assert.equal(a.body.active, true);
 });
 
 test('uploads: sniffing, player limits, audio is GM only, ranges work', async () => {
-  const gm = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
-  const pl = await call('POST', '/api/login', { name: 'Pip', password: 'longpassword' });
-  assert.equal((await upload(gm.cookie, 'image/png', Buffer.from('not a png at all'))).status, 400);
-  const png = await upload(pl.cookie, 'image/png', PNG());
+  assert.equal((await gmUpload('image/png', Buffer.from('not a png at all'))).status, 400);
+  const png = await pipUpload('image/png', PNG());
   assert.equal(png.status, 200); assert.equal(png.body.kind, 'image');
-  assert.equal((await upload(pl.cookie, 'audio/mpeg', MP3)).status, 403);
-  assert.equal((await upload(pl.cookie, 'image/png', Buffer.concat([PNG(), Buffer.alloc(6 * 1024 * 1024)]))).status, 413);
-  const mp3 = await upload(gm.cookie, 'audio/mpeg', MP3);
+  assert.equal((await pipUpload('audio/mpeg', MP3)).status, 403);
+  assert.equal((await pipUpload('image/png', Buffer.concat([PNG(), Buffer.alloc(6 * 1024 * 1024)]))).status, 413);
+  const mp3 = await gmUpload('audio/mpeg', MP3);
   assert.equal(mp3.body.kind, 'audio');
-  const full = await fetch(BASE + mp3.body.url);
+  const full = await fetch(srv.base + mp3.body.url);
   assert.equal(full.headers.get('content-type'), 'audio/mpeg'); assert.equal(full.headers.get('accept-ranges'), 'bytes');
-  const part = await fetch(BASE + mp3.body.url, { headers: { Range: 'bytes=10-19' } });
+  const part = await fetch(srv.base + mp3.body.url, { headers: { Range: 'bytes=10-19' } });
   assert.equal(part.status, 206); assert.equal((await part.arrayBuffer()).byteLength, 10);
   assert.equal(part.headers.get('content-range'), `bytes 10-19/${MP3.length}`);
-  assert.equal((await fetch(BASE + mp3.body.url, { headers: { Range: 'bytes=99999-' } })).status, 416);
+  assert.equal((await fetch(srv.base + mp3.body.url, { headers: { Range: 'bytes=99999-' } })).status, 416);
+  assert.equal((await upload('/api/t/feat', null, 'image/png', PNG())).status, 401); // no player picked
 });
 
-test('player portrait propagates to linked tokens; owner may set own token image', async () => {
-  const gm = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
-  const pl = await call('POST', '/api/login', { name: 'Pip', password: 'longpassword' });
-  const png = await upload(pl.cookie, 'image/png', PNG(3));
-  const hero = await call('POST', '/api/actors', { name: 'Hero' }, pl.cookie);
-  const scene = (await call('GET', '/api/state', null, gm.cookie)).body.scenes.find((s) => s.active);
-  const tok = await call('POST', '/api/tokens', { sceneId: scene.id, actorId: hero.body.id }, gm.cookie);
+test('player portrait propagates to linked tokens; a player with the edit right may set its token image', async () => {
+  const png = await pipUpload('image/png', PNG(3));
+  const hero = await gm('POST', '/actors', { name: 'Hero' });
+  await gm('PUT', `/actors/${hero.body.id}/perms`, { perms: { [pipSlot.id]: 'edit' } });
+  const scene = await activeScene();
+  const tok = await gm('POST', '/tokens', { sceneId: scene.id, actorId: hero.body.id });
   assert.equal(tok.body.image, null);
   const d = hero.body.data; d.portrait = png.body.url;
-  await call('PATCH', `/api/actors/${hero.body.id}`, { data: d }, pl.cookie);
-  const after = (await call('GET', '/api/state', null, pl.cookie)).body.tokens.find((t) => t.id === tok.body.id);
+  await pip('PATCH', `/actors/${hero.body.id}`, { data: d });
+  const after = (await pip('GET', '/state')).body.tokens.find((t) => t.id === tok.body.id);
   assert.equal(after.image, png.body.url);
-  const own = await call('PATCH', `/api/tokens/${tok.body.id}`, { image: null, name: 'hacked', vision: 99 }, pl.cookie);
+  const own = await pip('PATCH', `/tokens/${tok.body.id}`, { image: null, name: 'hacked', vision: 99 });
   assert.equal(own.body.image, null); assert.equal(own.body.name, 'Hero'); assert.equal(own.body.vision, 0); // only x, y, image are player-editable
 });
 
 test('audio: GM plays/stops, players cannot, state exposes what is playing', async () => {
-  const gm = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
-  const pl = await call('POST', '/api/login', { name: 'Pip', password: 'longpassword' });
-  const mp3 = await upload(gm.cookie, 'audio/mpeg', MP3);
-  const snd = await call('POST', '/api/sounds', { name: 'Tavern', url: mp3.body.url, loop: true, volume: 0.5 }, gm.cookie);
+  const mp3 = await gmUpload('audio/mpeg', MP3);
+  const snd = await gm('POST', '/sounds', { name: 'Tavern', url: mp3.body.url, loop: true, volume: 0.5 });
   assert.equal(snd.body.loop, true);
-  assert.equal((await call('POST', '/api/sounds', { name: 'x', url: '/uploads/evil.mp3' }, gm.cookie)).status, 400);
-  assert.equal((await call('POST', `/api/sounds/${snd.body.id}/play`, null, pl.cookie)).status, 403);
-  const sse = await fetch(BASE + '/api/events', { headers: { Cookie: pl.cookie } });
-  const reader = sse.body.getReader(); const dec = new TextDecoder();
-  const heard = (async () => { let buf = ''; for (;;) { const { value } = await reader.read(); buf += dec.decode(value); const m = /data: (.*"type":"audio".*)\n/.exec(buf); if (m) return JSON.parse(m[1]); } })();
-  await call('POST', `/api/sounds/${snd.body.id}/play`, null, gm.cookie);
-  const ev = await heard; reader.cancel();
+  assert.equal((await gm('POST', '/sounds', { name: 'x', url: '/uploads/evil.mp3' })).status, 400);
+  assert.equal((await pip('POST', `/sounds/${snd.body.id}/play`)).status, 404); // not on the player door
+  const sse = await srv.events('/api/t/feat/events', pip.cookie);
+  const heard = sse.next((e) => e.type === 'audio');
+  await gm('POST', `/sounds/${snd.body.id}/play`);
+  const ev = await heard; sse.close();
   assert.equal(ev.op, 'play'); assert.equal(ev.id, snd.body.id);
-  const st = (await call('GET', '/api/state', null, pl.cookie)).body;
+  const st = (await pip('GET', '/state')).body;
   assert.equal(st.playing.length, 1); assert.equal(st.sounds.length, 1); assert.ok(Math.abs(st.serverTime - Date.now()) < 5000);
-  await call('POST', '/api/audio/stop', null, gm.cookie);
-  assert.equal((await call('GET', '/api/state', null, pl.cookie)).body.playing.length, 0);
+  await gm('POST', '/audio/stop');
+  assert.equal((await pip('GET', '/state')).body.playing.length, 0);
 });
 
 test('journal visibility: gm / all / specific players; show pushes to viewers', async () => {
-  const gm = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
-  const pl = await call('POST', '/api/login', { name: 'Pip', password: 'longpassword' });
-  const st = (await call('GET', '/api/state', null, gm.cookie)).body;
-  const pip = st.users.find((u) => u.name === 'Pip');
-  const secret = await call('POST', '/api/journals', { title: 'Secret', body: 'gm only' }, gm.cookie);
-  const mine = await call('POST', '/api/journals', { title: 'For Pip', body: '[int +0|check]', visibility: [pip.id] }, gm.cookie);
-  assert.deepEqual((await call('GET', '/api/state', null, pl.cookie)).body.journals.map((j) => j.title), ['For Pip']);
-  assert.equal((await call('POST', '/api/journals', { title: 'x' }, pl.cookie)).status, 403);
-  await call('POST', `/api/journals/${secret.body.id}/show`, null, gm.cookie); // show makes a GM-only entry public
-  assert.equal((await call('GET', '/api/state', null, pl.cookie)).body.journals.length, 2);
-  await call('PATCH', `/api/journals/${mine.body.id}`, { visibility: 'gm' }, gm.cookie);
-  assert.equal((await call('GET', '/api/state', null, pl.cookie)).body.journals.length, 1);
+  const secret = await gm('POST', '/journals', { title: 'Secret', body: 'gm only' });
+  const mine = await gm('POST', '/journals', { title: 'For Pip', body: '[int +0|check]', visibility: [pipSlot.id] });
+  assert.deepEqual((await pip('GET', '/state')).body.journals.map((j) => j.title), ['For Pip']);
+  assert.equal((await pip('POST', '/journals', { title: 'x' })).status, 404);
+  await gm('POST', `/journals/${secret.body.id}/show`); // show makes a GM-only entry public
+  assert.equal((await pip('GET', '/state')).body.journals.length, 2);
+  await gm('PATCH', `/journals/${mine.body.id}`, { visibility: 'gm' });
+  assert.equal((await pip('GET', '/state')).body.journals.length, 1);
 });
 
 test('compendium: players see items/spells/talents but not NPC templates; templates instantiate with a token', async () => {
-  const gm = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
-  const pl = await call('POST', '/api/login', { name: 'Pip', password: 'longpassword' });
-  await call('POST', '/api/compendium', { kind: 'item', name: 'Round shield', data: { name: 'Round shield', type: 'armor', pdef: 2, bonuses: { strength: 1, bogus: 5 } } }, gm.cookie);
-  await call('POST', '/api/compendium', { kind: 'spell', name: 'Spark', data: { name: 'Spark', cost: 2, costType: 'mp' } }, gm.cookie);
-  const npc = await call('POST', '/api/compendium', { kind: 'actor', name: 'Goblin', data: { bio: { level: 2 }, stats: { constitution: { base: 8 } } } }, gm.cookie);
-  const view = (await call('GET', '/api/state', null, pl.cookie)).body.compendium;
+  await gm('POST', '/compendium', { kind: 'item', name: 'Round shield', data: { name: 'Round shield', type: 'armor', pdef: 2, bonuses: { strength: 1, bogus: 5 } } });
+  await gm('POST', '/compendium', { kind: 'spell', name: 'Spark', data: { name: 'Spark', cost: 2, costType: 'mp' } });
+  const npc = await gm('POST', '/compendium', { kind: 'actor', name: 'Goblin', data: { bio: { level: 2 }, stats: { constitution: { base: 8 } } } });
+  const view = (await pip('GET', '/state')).body.compendium;
   assert.deepEqual(view.map((c) => c.kind).sort(), ['item', 'spell']);
   assert.deepEqual(view.find((c) => c.kind === 'item').data.bonuses, { strength: 1 }); // unknown stat dropped
-  assert.equal((await call('POST', '/api/compendium', { kind: 'item', name: 'x', data: {} }, pl.cookie)).status, 403);
-  const scene = (await call('GET', '/api/state', null, gm.cookie)).body.scenes.find((s) => s.active);
-  const made = await call('POST', `/api/compendium/${npc.body.id}/instantiate`, { sceneId: scene.id, name: 'Gob 1' }, gm.cookie);
+  assert.equal((await pip('POST', '/compendium', { kind: 'item', name: 'x', data: {} })).status, 404);
+  const scene = await activeScene();
+  const made = await gm('POST', `/compendium/${npc.body.id}/instantiate`, { sceneId: scene.id, name: 'Gob 1' });
   assert.equal(made.body.name, 'Gob 1'); assert.equal(made.body.computed.derived.maxhp, 24); // con 8 * (lvl 2 + 1)
   assert.equal(made.body.data.hp.cur, 24); // spawned at full HP
-  assert.ok((await call('GET', '/api/state', null, gm.cookie)).body.tokens.some((t) => t.actorId === made.body.id));
-});
-
-test('invite code: GM can set a custom one, players need it, bad codes are refused', async () => {
-  const gm = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
-  const pl = await call('POST', '/api/login', { name: 'Pip', password: 'longpassword' });
-  assert.equal((await call('POST', '/api/invite', { code: 'abcd' }, pl.cookie)).status, 403);
-  assert.equal((await call('POST', '/api/invite', { code: 'no spaces!' }, gm.cookie)).status, 400);
-  assert.equal((await call('POST', '/api/invite', { code: 'ab' }, gm.cookie)).status, 400);
-  assert.equal((await call('POST', '/api/invite', { code: 'Foxy-Table_2026' }, gm.cookie)).body.code, 'Foxy-Table_2026');
-  assert.equal((await call('POST', '/api/register', { name: 'Late', password: 'longpassword', invite: 'wrong' })).status, 403);
-  assert.equal((await call('POST', '/api/register', { name: 'Late', password: 'longpassword', invite: 'Foxy-Table_2026' })).status, 200);
-  assert.equal((await call('GET', '/api/state', null, gm.cookie)).body.invite.code, 'Foxy-Table_2026');
+  assert.ok((await gm('GET', '/state')).body.tokens.some((t) => t.actorId === made.body.id));
 });
 
 test('equipment slots through the API: slots are validated, deduplicated and drive stats', async () => {
-  const gm = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
-  const hero = await call('POST', '/api/actors', { name: 'Knight' }, gm.cookie);
+  const hero = await gm('POST', '/actors', { name: 'Knight' });
   const d = hero.body.data;
   d.items = [
     { name: 'Sword', type: 'weapon', usedSlots: ['weapon1'], bonuses: { strength: 2 } },
@@ -157,65 +122,62 @@ test('equipment slots through the API: slots are validated, deduplicated and dri
     { name: 'Helm', type: 'armor', equipExpr: '[head]', usedSlots: ['hat'], pdef: 3 },
     { name: 'Junk', type: 'other', usedSlots: ['not-a-slot'] },
   ];
-  const r = await call('PATCH', `/api/actors/${hero.body.id}`, { data: d }, gm.cookie);
+  const r = await gm('PATCH', `/actors/${hero.body.id}`, { data: d });
   assert.deepEqual(r.body.data.items.map((i) => i.usedSlots), [['weapon1'], ['weapon2'], ['hat'], []]);
   assert.equal(r.body.data.items[0].equipExpr, '[weapons]');
   assert.equal(r.body.computed.stats.strength.item, 2); assert.equal(r.body.computed.pdef, 3);
-  const scene = (await call('GET', '/api/state', null, gm.cookie)).body.scenes.find((s) => s.active);
-  const tok = await call('POST', '/api/tokens', { sceneId: scene.id, actorId: hero.body.id, sight: true }, gm.cookie);
+  const scene = await activeScene();
+  const tok = await gm('POST', '/tokens', { sceneId: scene.id, actorId: hero.body.id, sight: true });
   assert.equal(tok.body.sight, true);
-  assert.equal((await call('PATCH', `/api/tokens/${tok.body.id}`, { sight: false }, gm.cookie)).body.sight, false);
+  assert.equal((await gm('PATCH', `/tokens/${tok.body.id}`, { sight: false })).body.sight, false);
 });
 
 test('favor reroll: the GM pays a favor from the rolling character too', async () => {
-  const gm = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
-  const npc = await call('POST', '/api/actors', { name: 'Favored' }, gm.cookie);
+  const npc = await gm('POST', '/actors', { name: 'Favored' });
   assert.equal(npc.body.data.fav.cur, 1);
-  const roll = await call('POST', '/api/chat', { text: '/con', actorId: npc.body.id }, gm.cookie);
-  assert.equal((await call('POST', `/api/chat/${roll.body.id}/reroll`, null, gm.cookie)).status, 200);
-  const after = (await call('GET', '/api/state', null, gm.cookie)).body.actors.find((a) => a.id === npc.body.id);
+  const roll = await gm('POST', '/chat', { text: '/con', actorId: npc.body.id });
+  assert.equal((await gm('POST', `/chat/${roll.body.id}/reroll`)).status, 200);
+  const after = (await gm('GET', '/state')).body.actors.find((a) => a.id === npc.body.id);
   assert.equal(after.data.fav.cur, 0);
-  const again = await call('POST', `/api/chat/${roll.body.id}/reroll`, null, gm.cookie);
+  const again = await gm('POST', `/chat/${roll.body.id}/reroll`);
   assert.equal(again.status, 400); assert.match(again.body.error, /favor/i);
 });
 
 test('current HP/mana/favors follow their max: sheet edits, system edits, creation', async () => {
-  const gm = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
-  const made = await call('POST', '/api/actors', { name: 'Grower', data: { bio: { level: 2 }, hp: { cur: 0 } } }, gm.cookie);
+  const made = await gm('POST', '/actors', { name: 'Grower', data: { bio: { level: 2 }, hp: { cur: 0 } } });
   assert.equal(made.body.data.hp.cur, 15); // created full whatever data was sent (con 5 * (2+1))
   const d = made.body.data; d.hp.cur = 5; d.bio.level = 3;
-  const up = await call('PATCH', `/api/actors/${made.body.id}`, { data: d }, gm.cookie);
+  const up = await gm('PATCH', `/actors/${made.body.id}`, { data: d });
   assert.equal(up.body.data.hp.cur, 10); // max 15 -> 20: +5
   d.hp.cur = 10; d.bio.level = 1;
-  assert.equal((await call('PATCH', `/api/actors/${made.body.id}`, { data: d }, gm.cookie)).body.data.hp.cur, 10); // max 20 -> 10: capped (already 10)
+  assert.equal((await gm('PATCH', `/actors/${made.body.id}`, { data: d })).body.data.hp.cur, 10); // max 20 -> 10: capped (already 10)
   d.stats.constitution.base = 4;
-  const down = await call('PATCH', `/api/actors/${made.body.id}`, { data: d }, gm.cookie);
+  const down = await gm('PATCH', `/actors/${made.body.id}`, { data: d });
   assert.equal(down.body.data.hp.cur, 8);
-  const plain = await call('PATCH', `/api/actors/${made.body.id}`, { name: 'Grown' }, gm.cookie); // no data: nothing moves
+  const plain = await gm('PATCH', `/actors/${made.body.id}`, { name: 'Grown' }); // no data: nothing moves
   assert.equal(plain.body.data.hp.cur, 8);
   // a system formula change moves every character by its own delta
-  const sys = (await call('GET', '/api/system', null, gm.cookie)).body;
+  const sys = (await gm('GET', '/system')).body;
   const hpF = sys.derived.find((x) => x.id === 'maxhp');
   const old = hpF.formula; hpF.formula = `${old} + 10`;
-  assert.equal((await call('PUT', '/api/system', sys, gm.cookie)).status, 200);
-  const st = (await call('GET', '/api/state', null, gm.cookie)).body.actors.find((a) => a.id === made.body.id);
+  assert.equal((await gm('PUT', '/system', sys)).status, 200);
+  const st = (await gm('GET', '/state')).body.actors.find((a) => a.id === made.body.id);
   assert.equal(st.computed.derived.maxhp, 18); assert.equal(st.data.hp.cur, 18);
-  hpF.formula = old; await call('PUT', '/api/system', sys, gm.cookie);
-  assert.equal((await call('GET', '/api/state', null, gm.cookie)).body.actors.find((a) => a.id === made.body.id).data.hp.cur, 8);
+  hpF.formula = old; await gm('PUT', '/system', sys);
+  assert.equal((await gm('GET', '/state')).body.actors.find((a) => a.id === made.body.id).data.hp.cur, 8);
 });
 
-test('scenes: many GMs creating scenes at once all succeed, one scene stays active', async () => {
-  const a = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
-  const b = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' }); // a second GM session
-  const made = await Promise.all(Array.from({ length: 24 }, (_, i) => call('POST', '/api/scenes', { name: `Rush ${i}`, width: 800, height: 600 }, i % 2 ? a.cookie : b.cookie)));
+test('scenes: many GMs creating scenes at once, in several tables, all succeed; one scene stays active per table', async () => {
+  const other = await srv.table('rush');
+  const made = await Promise.all(Array.from({ length: 24 }, (_, i) => (i % 2 ? gm : other.gm)('POST', '/scenes', { name: `Rush ${i}`, width: 800, height: 600 })));
   assert.deepEqual(made.map((r) => r.status), made.map(() => 200));
   assert.equal(new Set(made.map((r) => r.body.id)).size, 24);
-  const scenes = (await call('GET', '/api/state', null, a.cookie)).body.scenes;
-  assert.equal(scenes.filter((s) => s.active).length, 1);
+  for (const g of [gm, other.gm]) assert.equal((await g('GET', '/state')).body.scenes.filter((s) => s.active).length, 1);
+  assert.equal((await other.gm('GET', '/state')).body.scenes.length, 12);
 });
 
 test('a malformed URL gets a 400 and the server keeps running', async () => {
-  assert.equal((await fetch(BASE + '/%E0')).status, 400);
-  assert.equal((await fetch(BASE + '/api/%E0%A4')).status, 400);
-  assert.equal((await fetch(BASE + '/api/me')).status, 200);
+  assert.equal((await fetch(srv.base + '/%E0')).status, 400);
+  assert.equal((await fetch(srv.base + '/api/%E0%A4')).status, 400);
+  assert.equal((await fetch(srv.base + '/api/tables')).status, 200);
 });

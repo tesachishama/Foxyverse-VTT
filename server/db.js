@@ -20,6 +20,7 @@ export const db = new DatabaseSync(join(DATA_DIR, 'foxy.db'));
 db.exec(`
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
+-- users / sessions are v1 accounts, unused since v2 (kept so old foreign keys stay valid).
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, salt TEXT NOT NULL, hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'player', color TEXT NOT NULL DEFAULT '#eba5ff', created INTEGER NOT NULL);
@@ -41,9 +42,11 @@ CREATE TABLE IF NOT EXISTS chat (
   body TEXT NOT NULL, ts INTEGER NOT NULL);
 `);
 
-// Additive migrations so databases created by earlier versions keep working.
+// Additive migrations so databases created by earlier versions keep working. Returns true when the column was just added.
 function addColumn(table, name, ddl) {
-  if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${ddl}`);
+  if (db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === name)) return false;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${ddl}`);
+  return true;
 }
 addColumn('scenes', 'fog', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('scenes', 'dark', 'INTEGER NOT NULL DEFAULT 0');
@@ -62,13 +65,47 @@ CREATE TABLE IF NOT EXISTS compendium (id INTEGER PRIMARY KEY, kind TEXT NOT NUL
 const DEFAULT_SYSTEM_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'system', 'foxyverse.json');
 export const loadDefaultSystem = () => validateSystem(JSON.parse(readFileSync(DEFAULT_SYSTEM_PATH, 'utf8')));
 
-export function getSystem() {
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('system');
-  if (row) return JSON.parse(row.value);
-  const sys = loadDefaultSystem();
-  setSystem(sys);
-  return sys;
+// ---- tables (v2): a table is one game "save": its own scenes, sheets, chat, journals, sounds, compendium, rules and players.
+// Scenes with no table_id are the GM's map library (outside any table).
+db.exec(`
+CREATE TABLE IF NOT EXISTS game_tables (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL, listed INTEGER NOT NULL DEFAULT 1,
+  system TEXT NOT NULL, created INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS slots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, table_id INTEGER NOT NULL REFERENCES game_tables(id) ON DELETE CASCADE,
+  name TEXT NOT NULL, color TEXT NOT NULL DEFAULT '#eba5ff', session TEXT, seen INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS actor_perms (
+  actor_id INTEGER NOT NULL REFERENCES actors(id) ON DELETE CASCADE, slot_id INTEGER NOT NULL REFERENCES slots(id) ON DELETE CASCADE,
+  level TEXT NOT NULL, PRIMARY KEY (actor_id, slot_id));
+`);
+const OWNED = ['scenes', 'actors', 'chat', 'journals', 'sounds', 'compendium'];
+const added = OWNED.map((t) => addColumn(t, 'table_id', 'INTEGER REFERENCES game_tables(id) ON DELETE CASCADE')).some(Boolean);
+for (const t of OWNED) db.exec(`CREATE INDEX IF NOT EXISTS idx_${t}_table ON ${t}(table_id)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_slots_table ON slots(table_id)');
+
+// v1 -> v2: everything was global. It all moves into a first table "test"; v1 accounts are not kept (no GM accounts any more,
+// players pick a slot the GM creates).
+if (added && OWNED.some((t) => db.prepare(`SELECT 1 FROM ${t} LIMIT 1`).get())) {
+  const legacy = db.prepare('SELECT value FROM settings WHERE key = ?').get('system');
+  let sys; try { sys = legacy ? validateSystem(JSON.parse(legacy.value)) : loadDefaultSystem(); } catch { sys = loadDefaultSystem(); }
+  db.exec('BEGIN');
+  const id = Number(db.prepare('INSERT INTO game_tables (slug, name, listed, system, created) VALUES (?,?,?,?,?)').run('test', 'test', 1, JSON.stringify(sys), Date.now()).lastInsertRowid);
+  for (const t of OWNED) db.prepare(`UPDATE ${t} SET table_id = ? WHERE table_id IS NULL`).run(id);
+  db.exec('UPDATE actors SET owner_id = NULL; DELETE FROM sessions; DELETE FROM users;');
+  db.exec('COMMIT');
+  console.log('Migrated v1 data into the table "test".');
 }
-export function setSystem(sys) {
-  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('system', JSON.stringify(sys));
+
+const systems = new Map(); // table id -> parsed system (cache)
+export function getSystem(tableId) {
+  if (!systems.has(tableId)) {
+    const row = db.prepare('SELECT system FROM game_tables WHERE id = ?').get(tableId);
+    systems.set(tableId, row ? JSON.parse(row.system) : loadDefaultSystem());
+  }
+  return systems.get(tableId);
 }
+export function setSystem(tableId, sys) {
+  db.prepare('UPDATE game_tables SET system = ? WHERE id = ?').run(JSON.stringify(sys), tableId);
+  systems.set(tableId, sys);
+}
+export const forgetSystem = (tableId) => systems.delete(tableId);
