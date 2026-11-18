@@ -649,7 +649,7 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   let path = url.pathname, user = null;
   try {
-    path = decodeURIComponent(url.pathname);
+    try { path = decodeURIComponent(url.pathname); } catch { throw bad('Malformed URL'); } // e.g. /%E0 used to crash the whole server
     if (req.method === 'GET' && path.startsWith('/uploads/')) {
       const name = path.slice(9);
       if (!/^[a-f0-9]{64}\.(png|jpg|webp|gif|mp3|ogg|wav|m4a|flac|webm)$/.test(name)) throw notFound();

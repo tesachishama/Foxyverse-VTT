@@ -213,3 +213,9 @@ test('scenes: many GMs creating scenes at once all succeed, one scene stays acti
   const scenes = (await call('GET', '/api/state', null, a.cookie)).body.scenes;
   assert.equal(scenes.filter((s) => s.active).length, 1);
 });
+
+test('a malformed URL gets a 400 and the server keeps running', async () => {
+  assert.equal((await fetch(BASE + '/%E0')).status, 400);
+  assert.equal((await fetch(BASE + '/api/%E0%A4')).status, 400);
+  assert.equal((await fetch(BASE + '/api/me')).status, 200);
+});
