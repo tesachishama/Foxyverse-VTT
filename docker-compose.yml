@@ -7,13 +7,12 @@ services:
     init: true
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"   # this machine only. Behind Caddy, drop it and share a Docker network instead (README, "Docker, Dockge")
     volumes:
       - foxyverse-data:/data      # named volume: no permission problems. See README for backups and bind mounts.
     environment:
       TZ: Europe/Zurich
-      # INVITE_CODE: "choose-a-code"   # optional; otherwise one is generated (GM sees it in the Table tab)
-      # TRUST_PROXY: "1"               # set when behind a reverse proxy (HTTPS, correct client IPs for login throttling)
+      # ADMIN_SECRET: "long-random"   # required on a server: Caddy sends it as X-Admin-Secret for /admin (README, "GM access")
       # UPLOAD_MAX_MB: "25"            # map / image upload limit for the GM
       # AUDIO_MAX_MB: "60"             # audio upload limit
 

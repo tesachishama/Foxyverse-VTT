@@ -9,11 +9,12 @@ services:
     init: true
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"   # this machine only. Behind Caddy, drop it and share a Docker network instead (README)
     volumes:
       - foxyverse-data:/data
     environment:
       TZ: Europe/Zurich
+      # ADMIN_SECRET: "long-random"   # required on a server: Caddy sends it as X-Admin-Secret for /admin (README, "GM access")
 
 volumes:
   foxyverse-data:

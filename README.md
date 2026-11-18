@@ -7,10 +7,11 @@ install, and the rules themselves (stats, formulas, roll types, rules text) are 
 * Character sheets driven by your formulas, with the full 33-slot equipment system and silhouette
 * Dice chat with the Foxyverse roll language, nat 1 / nat max grading, favors and one-click damage/heal application
 * Journal and image handouts, synchronized soundboard, compendium of items / spells / talents / NPC templates
-* GM and player accounts with an invite code. English and French interface (switch at the bottom of the side panel)
+* Several **tables** (each one is a separate game, like a save file: its own scenes, sheets, chat, rules...), a map library outside tables
+* Players pick their player at the table's address, no password; the GM area sits behind your reverse proxy's login (Authelia). English and French interface
 
 Contents: [Install](#install) · [Docker, Dockge and reverse proxies](#docker-dockge-and-reverse-proxies) · [Where your data lives](#where-your-data-lives) ·
-[Guided tour](#guided-tour) · [Reference](#reference) · [Troubleshooting](#troubleshooting) · [Development](#development)
+[GM access](#gm-access-caddy--authelia) · [Guided tour](#guided-tour) · [Reference](#reference) · [Troubleshooting](#troubleshooting) · [Development](#development)
 
 ---
 
@@ -22,7 +23,7 @@ The GitHub workflow in `.github/workflows/docker.yml` runs the tests, builds the
 publishes `ghcr.io/<your-user>/<repo>:latest` for amd64 and arm64. On your server:
 
     docker run -d --name foxyverse-vtt --init --restart unless-stopped \
-      -p 3000:3000 -v foxyverse-data:/data \
+      -p 127.0.0.1:3000:3000 -v foxyverse-data:/data \
       ghcr.io/<your-user>/foxyverse-vtt:latest
 
 (use the repository name in lowercase). If the package is private, make it public in GitHub (Packages, Package settings) or `docker login ghcr.io`.
@@ -35,7 +36,8 @@ publishes `ghcr.io/<your-user>/<repo>:latest` for amd64 and arm64. On your serve
 
     node server/index.js        # Node 22.13 or newer, nothing to install
 
-Open `http://localhost:3000`. **The first account registered becomes the GM.**
+Open `http://localhost:3000/admin` to create a table, then share `http://localhost:3000/<table address>` with the players.
+Without `ADMIN_SECRET` (see [GM access](#gm-access-caddy--authelia)) `/admin` is open to anyone who can reach the port: fine on your machine, not on the Internet.
 
 ---
 
@@ -43,60 +45,70 @@ Open `http://localhost:3000`. **The first account registered becomes the GM.**
 
 ### A ready stack for Dockge (or any compose file)
 
+Caddy reaches the app over a shared Docker network, so **no port is published on the Internet** (the GM area must only be reachable through Caddy and Authelia):
+
     services:
       foxyverse-vtt:
         image: ghcr.io/<your-user>/foxyverse-vtt:latest
         container_name: foxyverse-vtt
         init: true
         restart: unless-stopped
-        ports:
-          - "3010:3000"            # host port : container port. The right-hand 3000 never changes.
         volumes:
           - ./data:/data           # see "Where your data lives" (run: mkdir data && chown 1000:1000 data)
         environment:
           TZ: Europe/Zurich
-          TRUST_PROXY: "1"         # when behind Caddy / nginx / Traefik
-          # INVITE_CODE: "my-table"
-
-**"port is already allocated"** means another container uses that host port. Change only the left number.
-
-### Caddy
-
-Two numbers get confused: `3010` is the port published **on the host**; inside Docker the app always listens on **3000**.
-A Caddy container also cannot see another stack's container name unless both are on the same Docker network.
-
-*Option 1, same network (cleanest).* Find Caddy's network (`docker inspect caddy` or the Networks tab in Dockge), attach the VTT stack to it, and use the container port:
-
-    # in the Foxyverse VTT stack
-    services:
-      foxyverse-vtt:
-        ...
+          ADMIN_SECRET: "paste a long random string here"   # openssl rand -hex 32; the same value goes in the Caddyfile
         networks: [default, caddy_net]
     networks:
       caddy_net:
         external: true
-        name: <the exact name of Caddy's network>
+        name: <the exact name of Caddy's network>   # docker inspect caddy, or the Networks tab in Dockge
 
-    # Caddyfile
+If Caddy is installed on the host rather than in Docker, publish the port on the loopback only: `ports: ["127.0.0.1:3010:3000"]` and use `reverse_proxy 127.0.0.1:3010`.
+Inside Docker the app always listens on **3000**; a published port is `host:container`, so only the left number may change.
+
+### GM access (Caddy + Authelia)
+
+The app has no GM accounts. Everything for the GM lives under **`/admin`** (pages) and **`/admin/api`** (its API); players use `/` and `/<table>`.
+The lock is your reverse proxy: Caddy asks **Authelia** before letting anyone into `/admin`, and whoever Authelia lets through is a GM (as many as you like).
+So that nobody can walk around Caddy, Caddy adds a secret header that the app checks:
+
     vtt.example.com {
-        reverse_proxy foxyverse-vtt:3000
+        @gm path /admin /admin/*
+        handle @gm {
+            forward_auth authelia:9091 {
+                uri /api/authz/forward-auth
+                copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+            }
+            reverse_proxy foxyverse-vtt:3000 {
+                header_up X-Admin-Secret "the same value as ADMIN_SECRET"
+            }
+        }
+        handle {
+            reverse_proxy foxyverse-vtt:3000 {
+                header_up -X-Admin-Secret
+            }
+        }
     }
 
-*Option 2, go through the host.* No shared network needed, use the published port and the machine's address:
+In Authelia's `configuration.yml`, give the hostname a rule (only `/admin` is ever sent to Authelia):
 
-    vtt.example.com {
-        reverse_proxy 192.168.1.50:3010      # the server's LAN IP and the published port
-    }
+    access_control:
+      rules:
+        - domain: vtt.example.com
+          policy: one_factor        # or two_factor
 
-(`localhost` would point at Caddy's own container, not the host.) Caddy streams the live-update connection (Server-Sent Events) fine;
-if updates ever lag, add `flush_interval -1` inside the `reverse_proxy` block. Make sure the DNS record of the hostname points to your server.
-`TRUST_PROXY=1` makes login throttling use the real client address, and cookies become `Secure` automatically behind HTTPS.
+`authelia:9091` is the Authelia container on the same Docker network (adapt the name). With a recent Authelia (4.38+) the endpoint is `/api/authz/forward-auth`.
+Check it: `https://vtt.example.com/admin` must show the Authelia login, and the app answers *403 GM area: missing or wrong X-Admin-Secret* if you reach `/admin` any other way.
+If `ADMIN_SECRET` is empty the app runs in **development mode**: `/admin` is open, the GM home shows a warning and the log says so at startup.
 
+Caddy streams the live-update connection (Server-Sent Events) fine; if updates ever lag, add `flush_interval -1` inside the `reverse_proxy` blocks.
 Nginx: set `proxy_buffering off;` for the location. Traefik works with its default settings.
 
 ### Updating
 
 Push to GitHub, wait for the green workflow, then in Dockge click **Update** on the stack (or `docker compose pull && docker compose up -d`). The database upgrades itself.
+Coming from v1 (one global game with accounts): everything moves into a first table called **`test`** (with your edited rules); the old accounts are removed, so create the player slots again in its *Table* tab.
 
 ### Environment variables
 
@@ -104,8 +116,8 @@ Push to GitHub, wait for the green workflow, then in Dockge click **Update** on 
 |---|---|---|
 | `PORT`, `HOST` | `3000`, `0.0.0.0` | listen address (inside the container) |
 | `DATA_DIR` | `/data` (Docker) | database and uploads |
-| `INVITE_CODE` | generated | fixed invite code (then it cannot be changed in the app) |
-| `TRUST_PROXY` | off | `1` behind a reverse proxy |
+| `ADMIN_SECRET` | empty | the reverse proxy must send it as `X-Admin-Secret` for every `/admin` request. Empty: development mode, `/admin` open to all |
+| `SLOT_GRACE_MS` | `60000` | how long a player slot stays taken after its page closed (reload, network blip) |
 | `UPLOAD_MAX_MB` | `25` | map and image upload limit for the GM (players: 5 MB images) |
 | `AUDIO_MAX_MB` | `60` | audio upload limit (GM only) |
 
@@ -113,7 +125,7 @@ Push to GitHub, wait for the green workflow, then in Dockge click **Update** on 
 
 ## Where your data lives
 
-Everything is saved: accounts, character sheets, scenes, walls, tokens, journals, compendium, sounds and **all uploaded images and audio**. It is a SQLite
+Everything is saved: tables, player slots, character sheets, scenes, walls, tokens, journals, compendium, sounds and **all uploaded images and audio**. It is a SQLite
 database (`foxy.db`, plus `-wal` and `-shm` files) and an `uploads/` folder, all inside one directory: `/data` in the container.
 
 * With a **named volume** (`foxyverse-data:/data`) Docker stores it in its own area, **not in your stack folder**. Dockge prefixes the stack name, so a stack called `vttest`
@@ -140,9 +152,12 @@ Avoid network shares (NFS/SMB) for the data folder: SQLite needs proper file loc
 
 ## Guided tour
 
-### 1. First launch
-Register: the first account is the GM. Everyone else needs the **invite code**: GM, **Table** tab, *Players* section. It is generated for you; you can **regenerate** it or **type your own**
-(4-40 letters, digits, `-`, `_`). With the `INVITE_CODE` variable it is fixed. Players open the address, choose *Create an account* and enter the code. The GM can promote another account to GM in the same section.
+### 1. Tables and players
+Open **`/admin`** (the GM home). Create a **table**: a name and an address (`vtt.example.com/<address>`; lowercase letters, digits and `-`; words such as `admin`, `api`, `icons`, `uploads` are reserved).
+A **listed** table appears on the players' home page `/`; an unlisted one is only reachable through its link (handy so that one table cannot peek at another of the same campaign).
+At the table, **Table** tab, *Players*: add one **player slot** per player (name and colour) and send them the link. A player opens it, answers *Who are you?* by picking their slot, and plays. No password.
+A slot is held by one browser at a time; closing the page frees it after **60 seconds** (a reload or a network blip keeps it). *Disconnect* frees it at once (ghost connections), *Switch player* at the bottom lets a player pick again.
+The GM home also holds the **map library**: maps prepared outside any table (walls, lights, grid), copied into a table with *Copy to…*. A table scene can be copied back into the library with `⇪`.
 
 ### 2. Build a scene (GM, Table tab)
 Create a scene with a map image (PNG, JPEG, WebP or GIF). Set the **grid size** in pixels so it matches your map, and the offset if the grid does not start at the corner.
@@ -150,14 +165,14 @@ The dropdown at the top right of the map lets you **prepare any scene** while pl
 Mouse wheel zooms, right/middle-drag pans, two-finger pinch works on touch screens, the arrows button fits the map.
 
 ### 3. Characters and tokens
-**Sheets** tab, *New character*. Fill stats, level and equipment. The GM can assign the character to a player (GM section at the bottom of the sheet) and press **Place token**.
-Double-click a token to open its sheet. Players move their own tokens only. Tokens snap to the grid.
+**Sheets** tab, *New character* (GM only). Fill stats, level and equipment. In *Player rights* at the bottom of the sheet, give each player **Edit**, **View only** or **None** (the sheet is then invisible to them); then **Place token**.
+Double-click a token to open its sheet. Players move the tokens of the sheets they can edit. Tokens snap to the grid.
 Select a token (GM) to edit its name, size, linked character, **vision**, **light**, whether it **shares its sight with all players**, colour, image, or hide it.
 
 ### 4. Rolling
 Type in the chat or click buttons on the sheet. `/int`, `/str +2` (a stat check: d20 roll-under with a modifier), `/pdmg 2d6+str`, `/pdmg 10 2d4|label`, `/gm /pdmg 1d8` (GM-only).
 The card shows each die, the total, the formula with your stats filled in, and the grade. The GM selects tokens on the map and presses **Apply** on a damage / heal / mana card;
-players can apply heals and mana to themselves. **Reroll** costs a player one favor; the GM rerolls for free.
+players can apply heals and mana to characters they can edit. An application can be repeated, and each one has its own `↶` undo. **Reroll** costs the rolling character one favor, GM included (a GM roll with no character is free).
 
 ### 5. Equipment
 Each item says where it can be worn with a **slot expression**, and is placed with the slot picker or by clicking the silhouette. See [Equipment slots](#equipment-slots).
@@ -170,7 +185,7 @@ Turn on **Fog** (and **Darkness** for a dark map). Draw walls with the tools at 
 *Compendium*: save items, spells, talents and NPC templates from sheets (the `⇪` button) and let players copy items, spells and talents onto their sheets.
 
 ### 8. Make the rules yours
-**System** tab (GM): edit stats, derived formulas, roll types, knowledge tiers and the rules text; changes apply to every sheet instantly. Export / import the whole system as a JSON file.
+**System** tab (GM): edit stats, derived formulas, roll types, knowledge tiers and the rules text of **this table** (each table has its own copy); changes apply to its sheets instantly. Export / import the whole system as a JSON file.
 
 ---
 
@@ -179,11 +194,13 @@ Turn on **Fog** (and **Darkness** for a dark map). Draw walls with the tools at 
 ### Roles and permissions
 | | GM | Player |
 |---|---|---|
-| Scenes, walls, lights, journal, sound, compendium, system, invite code | yes | no |
-| All characters and tokens | yes | only their own |
-| Move tokens | all | own tokens |
+| Tables, player slots, scenes, walls, lights, journal, sound, compendium, system | yes | no |
+| Create / delete characters | yes | no |
+| See a character | all | the ones they have *Edit* or *View only* on |
+| Edit a character, roll and speak as it | all | *Edit* only |
+| Move tokens | all | tokens of characters they can edit |
 | Upload | images, maps, audio | images up to 5 MB |
-| Reroll a roll | free | costs a favor |
+| Reroll a roll | costs a favor of the rolling character (free without one) | own rolls, costs a favor |
 | Apply damage to tokens | yes | no (heals / mana on self only) |
 
 ### Rolls
@@ -267,6 +284,8 @@ The derived values `maxhp`, `maxmp`, `maxfav` and `act` are required. Names are 
 |---|---|
 | `port is already allocated` | another container uses the host port: change the left number of `ports` |
 | Caddy cannot reach the app | use container port 3000 on a shared Docker network, or the host IP with the published port (see above) |
+| `403 GM area: missing or wrong X-Admin-Secret` | the request did not come through Caddy, or the `header_up X-Admin-Secret` value differs from `ADMIN_SECRET` |
+| A player's slot says *already playing* | someone holds it, or the page closed less than 60 s ago; the GM can press *Disconnect* in the Table tab |
 | Container exits, log says it cannot write to the data folder | bind mount owned by root: `sudo chown -R 1000:1000 <folder>` or use a named volume |
 | `denied` / `unauthorized` when pulling the image | the GitHub package is private: make it public or `docker login ghcr.io` |
 | Map is completely black in player view | no token gives sight: link a token to a player's character, tick *Shares its sight*, or choose *Selected token* |
@@ -278,8 +297,8 @@ The derived values `maxhp`, `maxmp`, `maxfav` and `act` are required. Names are 
 
 ## Development
 
-    node --test test/*.test.js        # engine, rules, vision geometry, server API (no dependencies needed)
-    node scripts/smoke.mjs http://localhost:3000    # end-to-end check of a running server or container
+    node --test test/*.test.js        # engine, rules, vision geometry, server API, access, migration (no dependencies needed)
+    node scripts/smoke.mjs http://localhost:3000    # end-to-end check of a running server (SMOKE_ADMIN_SECRET=... if it has one)
     ./scripts/docker-smoke.sh          # build the image, run it, check stop time and persistence
 
     server/engine.js    formula language       server/rules.js   system validation, rolls, equipment, damage
