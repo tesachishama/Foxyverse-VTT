@@ -90,6 +90,29 @@ test('a sheet has a full portrait and a separate round token; the token is what 
   assert.equal((await gm('PATCH', `/actors/${hero.body.id}`, { data: d })).body.data.token, ''); // only our own uploads
 });
 
+test('tokens look dead at 0 HP for everyone, unless the GM forces dead or alive', async () => {
+  const hero = await gm('POST', '/actors', { name: 'Mortal' });
+  const scene = await activeScene();
+  const tok = await gm('POST', '/tokens', { sceneId: scene.id, actorId: hero.body.id });
+  const loose = await gm('POST', '/tokens', { sceneId: scene.id, name: 'Barrel' });
+  assert.equal(tok.body.dead, false); assert.equal(tok.body.life, 'auto'); assert.equal(loose.body.dead, false);
+  const sse = await srv.events('/api/t/feat/events', pip.cookie); // a player who cannot see the sheet still sees the look
+  const heard = sse.next((e) => e.type === 'token' && e.data.id === tok.body.id && e.data.dead === true);
+  const kill = await gm('POST', '/chat', { text: '/tdmg 50' });
+  await gm('POST', `/chat/${kill.body.id}/apply`, { tokenIds: [tok.body.id] });
+  assert.equal((await heard).by, null); sse.close();
+  const dead = async (id) => (await pip('GET', '/state')).body.tokens.find((t) => t.id === id).dead;
+  assert.equal(await dead(tok.body.id), true);
+  assert.equal((await gm('PATCH', `/tokens/${tok.body.id}`, { life: 'alive' })).body.dead, false); // forced alive at 0 HP
+  assert.equal((await gm('PATCH', `/tokens/${loose.body.id}`, { life: 'dead' })).body.dead, true); // forced dead without a sheet
+  assert.equal((await gm('PATCH', `/tokens/${loose.body.id}`, { life: 'zombie' })).body.life, 'auto');
+  assert.equal((await pip('PATCH', `/tokens/${tok.body.id}`, { life: 'auto' })).status, 403);
+  await gm('PATCH', `/tokens/${tok.body.id}`, { life: 'auto' });
+  const heal = await gm('POST', '/chat', { text: '/heal 5' });
+  await gm('POST', `/chat/${heal.body.id}/apply`, { tokenIds: [tok.body.id] });
+  assert.equal(await dead(tok.body.id), false);
+});
+
 test('audio: GM plays/stops, players cannot, state exposes what is playing', async () => {
   const mp3 = await gmUpload('audio/mpeg', MP3);
   const snd = await gm('POST', '/sounds', { name: 'Tavern', url: mp3.body.url, loop: true, volume: 0.5 });

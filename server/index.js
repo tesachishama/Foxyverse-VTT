@@ -40,7 +40,15 @@ const tableBySlug = (slug) => db.prepare('SELECT * FROM game_tables WHERE slug =
 const tableView = (t) => ({ slug: t.slug, name: t.name, listed: !!t.listed });
 const sceneView = (s) => ({ id: s.id, name: s.name, image: s.image, width: s.width, height: s.height, grid: s.grid, ox: s.ox, oy: s.oy, active: !!s.active,
   fog: !!s.fog, dark: !!s.dark, walls: jparse(s.walls, []), lights: jparse(s.lights, []), reveal: jparse(s.reveal, []) });
-const tokenView = (t) => ({ id: t.id, sceneId: t.scene_id, name: t.name, x: t.x, y: t.y, size: t.size, image: t.image, color: t.color, actorId: t.actor_id, hidden: !!t.hidden, vision: t.vision, light: t.light, sight: !!t.sight });
+/** Shown dead (black and white, 80 %) for everyone: forced by the GM, or automatically when the linked sheet is at 0 HP or less. */
+function tokenDead(t) {
+  if (t.life === 'dead') return true;
+  if (t.life === 'alive' || !t.actor_id) return false;
+  const a = getRow('actors', t.actor_id);
+  return !!a && Number(jparse(a.data, {}).hp?.cur ?? 1) <= 0;
+}
+const tokenView = (t) => ({ id: t.id, sceneId: t.scene_id, name: t.name, x: t.x, y: t.y, size: t.size, image: t.image, color: t.color, actorId: t.actor_id, hidden: !!t.hidden, vision: t.vision, light: t.light, sight: !!t.sight,
+  life: t.life ?? 'auto', dead: tokenDead(t) });
 const soundView = (s) => ({ id: s.id, name: s.name, url: s.url, loop: !!s.loop, volume: s.volume });
 const journalView = (j) => ({ id: j.id, title: j.title, body: j.body, image: j.image, visibility: jparse(j.visibility, 'gm'), updated: j.updated });
 const canSeeJournal = (u, j) => { const v = jparse(j.visibility, 'gm'); return u.role === 'gm' || v === 'all' || (Array.isArray(v) && v.includes(u.id)); };
@@ -129,7 +137,14 @@ const hangUp = (c, ev) => { clients.delete(c); send(c, ev); c.res.end(); };
 function dropPlayer(slotId, reason = 'kicked') {
   for (const c of [...clients]) if (c.user.role === 'player' && c.user.id === slotId) hangUp(c, { type: reason });
 }
-const pushActor = (row, by) => broadcast(row.table_id, (u) => (canSeeActor(u, row) ? { type: 'actor', op: 'upsert', data: actorView(row, u), by } : null));
+const deadShown = new Map(); // token id -> last "dead" sent, so a sheet change only re-sends the tokens whose look changed
+const pushActor = (row, by) => {
+  broadcast(row.table_id, (u) => (canSeeActor(u, row) ? { type: 'actor', op: 'upsert', data: actorView(row, u), by } : null));
+  for (const t of db.prepare('SELECT * FROM tokens WHERE actor_id = ?').all(row.id)) {
+    const dead = tokenDead(t);
+    if (deadShown.get(t.id) !== dead) { deadShown.set(t.id, dead); pushToken(t, null); } // no echo id: every page, the sender's included, updates the look
+  }
+};
 const sceneOf = (id) => getRow('scenes', id);
 const pushToken = (row, by) => {
   const sc = sceneOf(row.scene_id); if (!sc?.table_id) return;
@@ -447,10 +462,11 @@ tbl('PATCH', '/tokens/:id', 'player', ({ user, table, by, params, body }) => {
     n.sight = body.sight !== undefined ? (body.sight ? 1 : 0) : cur.sight;
     n.color = body.color !== undefined ? color(body.color) : cur.color;
     n.hidden = body.hidden !== undefined ? (body.hidden ? 1 : 0) : cur.hidden;
+    n.life = body.life !== undefined ? (['auto', 'dead', 'alive'].includes(body.life) ? body.life : 'auto') : cur.life;
     n.actor_id = body.actorId !== undefined ? (body.actorId ? inTable('actors', body.actorId, table.id)?.id ?? null : null) : cur.actor_id;
   }
   const m = { ...cur, ...n };
-  db.prepare('UPDATE tokens SET name=?, x=?, y=?, size=?, image=?, color=?, actor_id=?, hidden=?, vision=?, light=?, sight=? WHERE id=?').run(m.name, m.x, m.y, m.size, m.image, m.color, m.actor_id, m.hidden, m.vision, m.light, m.sight, cur.id);
+  db.prepare('UPDATE tokens SET name=?, x=?, y=?, size=?, image=?, color=?, actor_id=?, hidden=?, vision=?, light=?, sight=?, life=? WHERE id=?').run(m.name, m.x, m.y, m.size, m.image, m.color, m.actor_id, m.hidden, m.vision, m.light, m.sight, m.life ?? 'auto', cur.id);
   const row = getRow('tokens', cur.id);
   pushToken(row, by);
   return tokenView(row);

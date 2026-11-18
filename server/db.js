@@ -56,6 +56,7 @@ addColumn('scenes', 'reveal', "TEXT NOT NULL DEFAULT '[]'");
 addColumn('tokens', 'vision', 'REAL NOT NULL DEFAULT 0');
 addColumn('tokens', 'light', 'REAL NOT NULL DEFAULT 0');
 addColumn('tokens', 'sight', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('tokens', 'life', "TEXT NOT NULL DEFAULT 'auto'"); // auto (from the sheet's HP) | dead | alive: the GM can force the look
 db.exec(`
 CREATE TABLE IF NOT EXISTS sounds (id INTEGER PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL, loop INTEGER NOT NULL DEFAULT 0, volume REAL NOT NULL DEFAULT 1, created INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS journals (id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', image TEXT, visibility TEXT NOT NULL DEFAULT '"gm"', created INTEGER NOT NULL, updated INTEGER NOT NULL);

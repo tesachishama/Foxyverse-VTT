@@ -17,7 +17,7 @@ function image(url, redraw) {
  * hooks:
  *  state() -> { scene, tokens, selected:Set, tool:{name, radius, snap}, gm, playerView, viewers:[{x,y,vision}], lights:[{x,y,radius}] }
  *  (state also carries viewerIds:Set of token ids whose eyes are used)
- *  canMove(token), hpRatio(token) -> 0..1|null, onFog(totalDarkness:boolean)
+ *  canMove(token), hpRatio(token) -> 0..1|null, isDead(token) -> boolean, onFog(totalDarkness:boolean)
  *  onSelect(Set), onMove(token, x, y, final), onOpen(token), onSceneEdit(patch)
  */
 export function createMap(canvas, hooks) {
@@ -133,11 +133,14 @@ export function createMap(canvas, hooks) {
 
   function drawToken(scene, t, selected) {
     const d = t.size * scene.grid * 0.92, r = d / 2;
-    ctx.save(); ctx.globalAlpha = t.hidden ? 0.5 : 1;
+    const dead = !!hooks.isDead?.(t);
+    ctx.save(); ctx.globalAlpha = (t.hidden ? 0.5 : 1) * (dead ? 0.8 : 1);
+    if (dead) ctx.filter = 'grayscale(1)'; // a dead character: black and white, 80 % opacity
     ctx.beginPath(); ctx.arc(t.x, t.y, r, 0, Math.PI * 2); ctx.fillStyle = t.color; ctx.fill();
     const ti = image(t.image, redraw);
     if (ti) { ctx.save(); ctx.clip(); ctx.drawImage(ti, t.x - r, t.y - r, d, d); ctx.restore(); }
     else { ctx.fillStyle = '#2a0019'; ctx.font = `600 ${r}px Georgia, serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText((t.name[0] || '?').toUpperCase(), t.x, t.y + r * 0.05); }
+    ctx.filter = 'none';
     ctx.lineWidth = (selected ? 4 : 2) / cam.z; ctx.strokeStyle = selected ? '#ff9a4d' : '#ffdbff';
     if (t.hidden) ctx.setLineDash([6 / cam.z, 4 / cam.z]);
     ctx.beginPath(); ctx.arc(t.x, t.y, r, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);

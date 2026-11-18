@@ -328,6 +328,12 @@ function buildShell() {
     },
     canMove: (tok) => isGM() || (!!tok.actorId && actorById(tok.actorId)?.perm === 'edit'),
     onFog: (total) => fogNote.classList.toggle('hidden', !total),
+    isDead: (tok) => { // forced by the GM, else the sheet's HP when this page has it, else what the server says
+      if (tok.life === 'dead') return true;
+      if (tok.life === 'alive') return false;
+      const a = tok.actorId && actorById(tok.actorId);
+      return a ? a.data.hp.cur <= 0 : !!tok.dead;
+    },
     hpRatio: (tok) => { const a = tok.actorId && actorById(tok.actorId); const max = a?.computed.derived.maxhp; return max ? a.data.hp.cur / max : null; },
     onSelect: (set) => { S.selected = set; renderInspector(); renderChat(); },
     onMove: (tok, x, y) => { api('PATCH', '/tokens/' + tok.id, { x, y }).catch(() => {}); },
@@ -766,18 +772,24 @@ function renderInspector() {
   const tok = isGM() && S.selected.size === 1 ? S.tokens.find((x) => x.id === [...S.selected][0]) : null;
   inspectorEl.classList.toggle('hidden', !tok);
   if (!tok) return inspectorEl.replaceChildren();
-  const patch = guard(async (body) => { const r = await api('PATCH', '/tokens/' + tok.id, body); Object.assign(tok, r); map.redraw(); });
-  const sizeSel = h('select', { onchange: (e) => patch({ size: Number(e.target.value) }) }, [0.5, 1, 2, 3, 4, 6].map((v) => h('option', { value: v }, v))); sizeSel.value = tok.size;
-  const actorSel = h('select', { onchange: (e) => patch({ actorId: e.target.value ? Number(e.target.value) : null }) }, h('option', { value: '' }, t('none')), S.actors.map((a) => h('option', { value: a.id }, a.name))); actorSel.value = tok.actorId ?? '';
-  const cells = (key, label) => h('label', {}, label, h('input', { type: 'number', class: 'n', min: 0, step: 0.5, value: tok[key], onchange: (e) => patch({ [key]: Number(e.target.value) || 0 }) }));
+  const patch = guard(async (body) => { const r = await api('PATCH', '/tokens/' + tok.id, body); Object.assign(tok, r); map.redraw(); renderInspector(); });
+  const select = (value, options, onchange) => { const sel = h('select', { onchange }, options.map(([v, l]) => h('option', { value: v }, l))); sel.value = value; return sel; };
+  const row = (label, control, title) => [h('span', { class: 'k', title }, label), control];
+  const cells = (key) => h('input', { type: 'number', class: 'n', min: 0, step: 0.5, value: tok[key], onchange: (e) => patch({ [key]: Number(e.target.value) || 0 }) });
+  const flag = (key) => h('input', { type: 'checkbox', checked: tok[key], onchange: (e) => patch({ [key]: e.target.checked }) });
   fill(inspectorEl,
-    h('input', { type: 'text', value: tok.name, onchange: (e) => patch({ name: e.target.value }) }),
-    h('label', {}, t('size'), sizeSel), h('label', {}, t('linked'), actorSel), cells('vision', t('vision')), cells('light', t('light')),
-    h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: tok.hidden, onchange: (e) => patch({ hidden: e.target.checked }) }), t('hidden')),
-    h('label', { class: 'check', title: t('sightHint') }, h('input', { type: 'checkbox', checked: tok.sight, onchange: (e) => patch({ sight: e.target.checked }) }), t('sight')),
-    h('input', { type: 'color', value: tok.color, onchange: (e) => patch({ color: e.target.value }) }),
-    h('label', {}, t('tokenImage'), h('input', { type: 'file', accept: 'image/*', onchange: guard(async (e) => { const f = e.target.files[0]; if (f) patch({ image: await upload(f) }); }) })),
-    h('button', { class: 'danger', onclick: guard(async () => { await api('DELETE', '/tokens/' + tok.id); remove(S.tokens, tok.id); S.selected = new Set(); renderInspector(); map.redraw(); }) }, t('del')));
+    h('div', { class: 'insp-head' },
+      h('input', { type: 'text', class: 'grow', value: tok.name, onchange: (e) => patch({ name: e.target.value }) }),
+      h('button', { class: 'x', title: t('close'), onclick: () => { S.selected = new Set(); map.redraw(); renderInspector(); } }, '×')),
+    h('div', { class: 'insp-grid' },
+      row(t('linked'), select(tok.actorId ?? '', [['', t('none')], ...S.actors.map((a) => [a.id, a.name])], (e) => patch({ actorId: e.target.value ? Number(e.target.value) : null }))),
+      row(t('size'), select(tok.size, [0.5, 1, 2, 3, 4, 6].map((v) => [v, v]), (e) => patch({ size: Number(e.target.value) }))),
+      row(t('vision'), cells('vision')), row(t('light'), cells('light')),
+      row(t('life'), select(tok.life ?? 'auto', [['auto', t('lifeAuto')], ['dead', t('lifeDead')], ['alive', t('lifeAlive')]], (e) => patch({ life: e.target.value })), t('lifeHint')),
+      row(t('hidden'), flag('hidden')), row(t('sight'), flag('sight'), t('sightHint')),
+      row(t('color'), h('input', { type: 'color', value: tok.color, onchange: (e) => patch({ color: e.target.value }) })),
+      row(t('tokenImage'), h('label', { class: 'filebtn' }, t('choose'), h('input', { type: 'file', accept: 'image/*', hidden: true, onchange: guard(async (e) => { const f = e.target.files[0]; if (f) patch({ image: await upload(f) }); }) })))),
+    h('button', { class: 'danger', onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await api('DELETE', '/tokens/' + tok.id); remove(S.tokens, tok.id); S.selected = new Set(); renderInspector(); map.redraw(); }) }, t('del')));
 }
 
 // ------------------------------------------------------------------ journal & handouts
