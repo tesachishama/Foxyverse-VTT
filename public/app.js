@@ -1,10 +1,10 @@
-import { h, $, $$, api, upload, toast, debounce, t, setLang, getLang, inline, markdown, setKnownRollTypes } from './lib.js';
+import { h, $, $$, api, request, setApiBase, eventsUrl, CLIENT_ID, upload, toast, debounce, t, setLang, getLang, inline, markdown, setKnownRollTypes } from './lib.js';
 import { createMap } from './map.js';
 import { createAudio } from './audio.js';
 import { inventoryView } from './inventory.js';
 
 const S = {
-  me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], invite: null,
+  me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], table: null, allTables: [], mapMode: false,
   tab: 'chat', sheetId: null, selected: new Set(), rollMod: '', draft: null,
   sounds: [], playing: [], journals: [], compendium: [], timeOffset: 0, viewId: null, tool: { name: 'select', radius: 6, snap: 'grid' }, playerView: false, viewAs: 'players', undo: [],
   journalId: null, journalEdit: false, modal: null, audioBlocked: false, openItems: new Set(),
@@ -23,58 +23,163 @@ const remove = (list, id) => { const i = list.findIndex((x) => x.id === id); if 
 const guard = (fn) => async (...a) => { try { return await fn(...a); } catch (e) { toast(e.message); } };
 let map, dockEl, panelEl, chatEl, chatList, chatInput, chatWho, inspectorEl, hudEl, topEl, footEl, fogNote, audio, editQueue = Promise.resolve();
 
-// ------------------------------------------------------------------ boot & auth
+// ------------------------------------------------------------------ boot & pages
+// URLs: "/" tables, "/<table>" pick a player then play, "/admin" GM home, "/admin/<table>" GM at a table, "/admin?map=<id>" map library editor.
+const ROUTE = (() => {
+  const p = location.pathname.replace(/\/+$/, '') || '/';
+  const g = /^\/admin(?:\/([a-z0-9-]+))?$/.exec(p);
+  if (g) return { gm: true, slug: g[1] ?? null, map: g[1] ? null : Number(new URLSearchParams(location.search).get('map')) || null };
+  const m = /^\/([a-z0-9-]+)$/.exec(p);
+  return { gm: false, slug: m?.[1] ?? null, map: null };
+})();
+const slugify = (x) => x.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+const langBtn = () => h('button', { class: 'quiet', title: 'FR / EN', onclick: () => { setLang(getLang() === 'fr' ? 'en' : 'fr'); location.reload(); } }, getLang().toUpperCase());
+const copyText = guard(async (text) => { await navigator.clipboard.writeText(text); toast(t('copied'), false); });
+const page = (...kids) => fill(app, h('main', { class: 'home' }, h('div', { class: 'line' }, h('h1', { class: 'grow' }, 'Foxyverse VTT'), langBtn()), ...kids));
+
 async function boot() {
-  const me = await api('GET', '/me');
-  if (!me.user) return showAuth(me.firstRun);
-  S.me = me.user;
-  await loadState();
+  if (ROUTE.gm && ROUTE.map) return mapEditor(ROUTE.map);
+  if (ROUTE.gm && !ROUTE.slug) return adminHome();
+  if (!ROUTE.slug) return playerHome();
+  setApiBase(ROUTE.gm ? `/admin/api/t/${ROUTE.slug}` : `/api/t/${ROUTE.slug}`);
+  try { await loadState(); } catch (e) {
+    if (!ROUTE.gm && e.status === 401) return lobbyPage(ROUTE.slug);
+    if (e.status === 404) return page(h('p', { class: 'hint' }, t('tableNotFound')), h('a', { href: ROUTE.gm ? '/admin' : '/' }, ROUTE.gm ? t('gmHome') : t('allTables')));
+    throw e;
+  }
+  if (ROUTE.gm) S.allTables = (await request('GET', '/admin/api/tables')).tables;
+  document.title = `${S.table.name} · Foxyverse VTT`;
   buildShell();
   connect();
 }
 
-function showAuth(firstRun) {
-  let register = firstRun;
-  const draw = () => {
-    const name = h('input', { type: 'text', placeholder: t('name'), autocomplete: 'username' });
-    const pw = h('input', { type: 'password', placeholder: t('password'), autocomplete: register ? 'new-password' : 'current-password' });
-    const inv = h('input', { type: 'text', placeholder: t('invite') });
-    const go = guard(async () => { await api('POST', register ? '/register' : '/login', { name: name.value, password: pw.value, invite: inv.value }); boot(); });
-    app.replaceChildren(h('main', { class: 'auth' },
-      h('h1', {}, 'Foxyverse VTT'),
-      firstRun && h('p', { class: 'hint' }, t('firstRun')),
-      h('div', { class: 'auth-form' }, name, pw, register && !firstRun && inv,
-        h('button', { class: 'primary', onclick: go }, register ? t('create') : t('signIn')),
-        !firstRun && h('button', { class: 'link', onclick: () => { register = !register; draw(); } }, register ? t('haveAccount') : t('needAccount'))),
-    ));
-    [name, pw, inv].forEach((i) => i.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); }));
-    name.focus();
+/** "/": the listed tables. */
+async function playerHome() {
+  const { tables } = await request('GET', '/api/tables');
+  page(h('h2', {}, t('chooseTable')),
+    tables.length ? h('ul', { class: 'list' }, tables.map((x) => h('li', { class: 'card' }, h('a', { class: 'row', href: '/' + x.slug }, h('b', {}, x.name)))))
+      : h('p', { class: 'hint' }, t('noTables')));
+}
+
+/** "/<table>" before playing: pick one of the player slots the GM created. Taken slots are greyed out; refreshed every few seconds. */
+async function lobbyPage(slug) {
+  let timer = null;
+  const draw = async () => {
+    let lb;
+    try { lb = await request('GET', `/api/t/${slug}/lobby`); } catch (e) {
+      clearInterval(timer);
+      return page(h('p', { class: 'hint' }, e.status === 404 ? t('tableNotFound') : e.message), h('a', { href: '/' }, t('allTables')));
+    }
+    document.title = `${lb.table.name} · Foxyverse VTT`;
+    const pick = guard(async (sl) => { await request('POST', `/api/t/${slug}/join`, { slotId: sl.id }); clearInterval(timer); await boot(); });
+    page(h('h2', {}, lb.table.name, ' · ', t('pickPlayer')),
+      !lb.slots.length && h('p', { class: 'hint' }, t('noSlots')),
+      h('div', { class: 'slots' }, lb.slots.map((sl) => {
+        const mine = sl.id === lb.me, busy = sl.online && !mine;
+        return h('button', { class: 'slot' + (mine ? ' on' : ''), disabled: busy, onclick: () => pick(sl) },
+          h('span', { class: 'dot', style: `background:${sl.color}` }), h('b', {}, sl.name),
+          busy && h('span', { class: 'dim' }, t('taken')), mine && h('span', { class: 'dim' }, t('you')));
+      })),
+      h('a', { class: 'dim', href: '/' }, '← ' + t('allTables')));
   };
-  draw();
+  await draw();
+  timer = setInterval(draw, 5000);
+}
+
+/** "/admin": every table, a new table, and the map library. */
+async function adminHome() {
+  document.title = `${t('gmHome')} · Foxyverse VTT`;
+  const [{ tables, devMode }, { scenes }] = await Promise.all([request('GET', '/admin/api/tables'), request('GET', '/admin/api/library')]);
+  const reload = () => adminHome().catch((e) => toast(e.message));
+  const name = h('input', { type: 'text', placeholder: t('tableName'), maxlength: 60 });
+  const slug = h('input', { type: 'text', class: 'code', placeholder: t('tableAddress'), maxlength: 40 });
+  let slugTouched = false;
+  name.addEventListener('input', () => { if (!slugTouched) slug.value = slugify(name.value); });
+  slug.addEventListener('input', () => { slugTouched = true; });
+  const listed = h('input', { type: 'checkbox', checked: true });
+  const create = guard(async () => { const r = await request('POST', '/admin/api/tables', { name: name.value, slug: slug.value || slugify(name.value), listed: listed.checked }); location.assign('/admin/' + r.slug); });
+  const mapName = h('input', { type: 'text', placeholder: t('mapName'), maxlength: 80 });
+  const mapFile = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif' });
+  const newMap = guard(async () => {
+    setApiBase('/admin/api/library', '/admin/api/upload');
+    const r = await api('POST', '/scenes', await newSceneBody(mapName.value || t('newMap'), mapFile.files[0]));
+    location.assign('/admin?map=' + r.id);
+  });
+  const copySel = (m) => tables.length > 0 && h('select', { onchange: guard(async (e) => {
+    if (!e.target.value) return;
+    await request('POST', `/admin/api/scenes/${m.id}/copy`, { table: e.target.value });
+    toast(`${t('copiedTo')} ${e.target.selectedOptions[0].textContent}`, false); e.target.value = '';
+  }) }, h('option', { value: '' }, t('copyTo')), tables.map((x) => h('option', { value: x.slug }, x.name)));
+  fill(app, h('main', { class: 'home wide' },
+    h('div', { class: 'line' }, h('h1', { class: 'grow' }, 'Foxyverse VTT · ', t('gmHome')), langBtn()),
+    devMode && h('p', { class: 'warn' }, t('devMode')),
+    h('section', { class: 'sec' }, h('h3', {}, t('tables')),
+      !tables.length && h('p', { class: 'hint' }, t('empty')),
+      h('ul', { class: 'list' }, tables.map((x) => h('li', { class: 'line card' },
+        h('a', { class: 'grow', href: '/admin/' + x.slug }, h('b', {}, x.name),
+          h('span', { class: 'dim' }, ` /${x.slug} · ${x.players} ${t('playersShort')}, ${x.online} ${t('online')}`)),
+        h('label', { class: 'check', title: t('listed') }, h('input', { type: 'checkbox', checked: x.listed, onchange: guard(async (e) => { await request('PATCH', `/admin/api/tables/${x.slug}`, { listed: e.target.checked }); reload(); }) }), t('listedShort')),
+        h('button', { title: t('playerLink'), onclick: () => copyText(`${location.origin}/${x.slug}`) }, t('copyLink')),
+        h('a', { class: 'button primary', href: '/admin/' + x.slug }, t('openTable')),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => {
+          if (prompt(`${t('confirmTable')} ${x.slug}`) !== x.slug) return;
+          await request('DELETE', `/admin/api/tables/${x.slug}`); reload();
+        }) }, '×')))),
+      h('div', { class: 'line' }, name, slug, h('label', { class: 'check' }, listed, t('listed')), h('button', { class: 'primary', onclick: create }, '+ ' + t('newTable')))),
+    h('section', { class: 'sec' }, h('h3', {}, t('mapLibrary')), h('p', { class: 'hint' }, t('mapHint')),
+      h('ul', { class: 'list' }, scenes.map((m) => h('li', { class: 'line card' },
+        h('a', { class: 'grow', href: '/admin?map=' + m.id }, h('b', {}, m.name), m.width > 0 && h('span', { class: 'dim' }, ` ${m.width}×${m.height}`)),
+        copySel(m),
+        h('a', { class: 'button', href: '/admin?map=' + m.id }, t('editMap')),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await request('DELETE', `/admin/api/library/scenes/${m.id}`); reload(); }) }, '×')))),
+      h('div', { class: 'line' }, mapName, mapFile, h('button', { class: 'primary', onclick: newMap }, '+ ' + t('newMap'))))));
+}
+
+/** "/admin?map=<id>": the map editor of the library (walls, lights...), without the game tools. */
+async function mapEditor(id) {
+  setApiBase('/admin/api/library', '/admin/api/upload');
+  const [{ scenes }, { tables }] = await Promise.all([request('GET', '/admin/api/library'), request('GET', '/admin/api/tables')]);
+  Object.assign(S, { mapMode: true, tab: 'map', me: { id: 0, name: 'MJ', role: 'gm' }, scenes, scene: null, tokens: [], actors: [], chat: [], users: [],
+    sounds: [], playing: [], journals: [], compendium: [], allTables: tables });
+  S.viewId = scenes.some((x) => x.id === id) ? id : scenes[0]?.id ?? null;
+  document.title = `${t('mapLibrary')} · Foxyverse VTT`;
+  buildShell();
 }
 
 async function loadState() {
   const st = await api('GET', '/state');
-  Object.assign(S, { me: st.me, users: st.users, system: st.system, scene: st.scene, scenes: st.scenes, tokens: st.tokens, actors: st.actors, chat: st.chat, invite: st.invite ?? null,
+  Object.assign(S, { me: st.me, table: st.table, users: st.users, system: st.system, scene: st.scene, scenes: st.scenes, tokens: st.tokens, actors: st.actors, chat: st.chat,
     sounds: st.sounds, playing: st.playing, journals: st.journals, compendium: st.compendium, timeOffset: st.serverTime - Date.now() });
   if (st.me.role === 'gm' && !S.scenes.some((x) => x.id === S.viewId)) S.viewId = st.scene?.id ?? S.scenes[0]?.id ?? null;
   if (audio) { audio.stopAll(); audio.sync(S.playing, S.sounds); }
   setKnownRollTypes(S.system);
-  if (S.actorId && !actorById(S.actorId)) S.actorId = null;
-  if (!S.actorId && S.actors.length === 1) S.actorId = S.actors[0].id;
+  const mine = S.actors.filter((a) => a.perm === 'edit'); // the characters this page can speak and roll as
+  if (S.actorId && !mine.some((a) => a.id === S.actorId)) S.actorId = null;
+  if (!S.actorId && mine.length === 1) S.actorId = mine[0].id;
   if (S.sheetId && !actorById(S.sheetId)) S.sheetId = null;
 }
 
 // ------------------------------------------------------------------ realtime
-let opened = false;
+let opened = false, es = null;
 function connect() {
-  const es = new EventSource('/api/events');
+  es = new EventSource(eventsUrl());
   es.onopen = () => { if (opened) loadState().then(renderAll).catch(() => {}); opened = true; };
   es.onmessage = (e) => onEvent(JSON.parse(e.data));
+  // The browser does not retry a refused stream (slot taken over, table deleted): find out why, or start again.
+  es.onerror = () => { if (es.readyState === EventSource.CLOSED) loadState().then(() => { renderAll(); setTimeout(connect, 2000); }).catch(() => location.reload()); };
 }
 const pending = new Set(); // actor ids with unsaved local edits
 function onEvent(ev) {
   const { type, op, data, by } = ev;
+  if (type === 'kicked' || type === 'gone') { // the GM freed our slot, or deleted the table
+    es?.close(); toast(t(type === 'gone' ? 'tableGone' : 'kicked'));
+    return setTimeout(() => (type === 'gone' ? location.assign(isGM() ? '/admin' : '/') : location.reload()), 1800);
+  }
+  if (type === 'left') { es?.close(); return location.reload(); } // "switch player" in another tab of this browser
+  if (type === 'table') { // renamed, or moved to a new address
+    if (data.slug !== S.table.slug) return location.assign((isGM() ? '/admin/' : '/') + data.slug);
+    S.table = data; document.title = `${S.table.name} · Foxyverse VTT`; if (S.tab === 'table') renderPanel(); return;
+  }
   if (type === 'refresh') return loadState().then(renderAll);
   if (type === 'user') { upsert(S.users, data); if (S.tab === 'table') renderPanel(); return; }
   if (type === 'scene') {
@@ -82,7 +187,7 @@ function onEvent(ev) {
     replaceScene(data); if (S.tab === 'table') renderPanel(); return;
   }
   if (type === 'token') {
-    if (by === S.me.id) return; // we are the source; our local copy is authoritative
+    if (by === CLIENT_ID) return; // this page is the source; its local copy is authoritative
     if (op === 'delete') remove(S.tokens, data.id); else upsert(S.tokens, data);
     map.redraw(); renderInspector(); return;
   }
@@ -106,7 +211,7 @@ function onEvent(ev) {
   }
   if (type === 'actor') {
     if (op === 'delete') { remove(S.actors, data.id); if (S.sheetId === data.id) S.sheetId = null; renderAll(); return; }
-    if (by === S.me.id && pending.has(data.id)) return;
+    if (by === CLIENT_ID && pending.has(data.id)) return;
     const had = actorById(data.id);
     const typing = S.tab === 'sheets' && S.sheetId === data.id && panelEl.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
     if (had && typing) {
@@ -136,13 +241,13 @@ const isPlayerToken = (tok) => {
   if (tok.sight) return true; // a token the GM shares with everyone (ally, torch bearer...)
   const a = tok.actorId && actorById(tok.actorId);
   if (!a) return false;
-  return isGM() ? userById(a.ownerId)?.role === 'player' : a.ownerId === S.me.id;
+  return isGM() ? Object.values(a.perms ?? {}).includes('edit') : a.perm === 'edit'; // a player's tokens: sheets they can edit
 };
 /** Whose eyes the fog uses: a player's own tokens; for the GM's "player view", all players, one player, or the selected token. */
 function viewerTokens(tokens) {
   if (!isGM()) return tokens.filter(isPlayerToken);
   if (S.viewAs === 'selected' && S.selected.size) return tokens.filter((x) => S.selected.has(x.id));
-  if (typeof S.viewAs === 'number') return tokens.filter((x) => x.sight || actorById(x.actorId)?.ownerId === S.viewAs);
+  if (typeof S.viewAs === 'number') return tokens.filter((x) => x.sight || actorById(x.actorId)?.perms?.[S.viewAs] === 'edit');
   return tokens.filter(isPlayerToken);
 }
 let editsPending = 0;
@@ -196,7 +301,7 @@ function buildShell() {
         lights: [...(sc?.lights ?? []), ...tokens.filter((x) => x.light > 0 && !x.hidden).map((x) => ({ x: x.x, y: x.y, radius: x.light }))],
       };
     },
-    canMove: (tok) => isGM() || (!!tok.actorId && actorById(tok.actorId)?.ownerId === S.me.id),
+    canMove: (tok) => isGM() || (!!tok.actorId && actorById(tok.actorId)?.perm === 'edit'),
     onFog: (total) => fogNote.classList.toggle('hidden', !total),
     hpRatio: (tok) => { const a = tok.actorId && actorById(tok.actorId); const max = a?.computed.derived.maxhp; return max ? a.data.hp.cur / max : null; },
     onSelect: (set) => { S.selected = set; renderInspector(); renderChat(); },
@@ -232,10 +337,10 @@ function renderHud() {
     S.users.filter((u) => u.role === 'player').map((u) => h('option', { value: u.id }, u.name)));
   viewAs.value = String(S.viewAs);
   add(topEl, S.scenes.length ? sel : null,
-    sc && !sc.active && h('button', { class: 'primary', onclick: guard(() => api('POST', `/scenes/${sc.id}/activate`)) }, t('activate')),
+    sc && !sc.active && !S.mapMode && h('button', { class: 'primary', onclick: guard(() => api('POST', `/scenes/${sc.id}/activate`)) }, t('activate')),
     sc && flag(t('fog'), sc.fog, (v) => { sceneEdit({ fog: v }, { undoable: false }); renderHud(); }),
     sc && flag(t('dark'), sc.dark, (v) => sceneEdit({ dark: v }, { undoable: false })),
-    sc?.fog && flag(t('playerView'), S.playerView, (v) => { S.playerView = v; renderHud(); map.redraw(); }),
+    sc?.fog && !S.mapMode && flag(t('playerView'), S.playerView, (v) => { S.playerView = v; renderHud(); map.redraw(); }),
     sc?.fog && S.playerView && viewAs);
   if (!sc) return;
   const tools = [['select', 'toolSelect'], ['wall', 'toolWall'], ['rect', 'toolRect'], ['circle', 'toolCircle'], ['curve', 'toolCurve'], ['door', 'toolDoor'], ['edit', 'toolEdit'], ['light', 'toolLight'], ['reveal', 'toolReveal'], ['erase', 'toolErase']];
@@ -258,11 +363,17 @@ function renderFoot() {
     S.audioBlocked && h('button', { class: 'primary', onclick: () => { S.audioBlocked = false; audio.unlock(); renderFoot(); } }, t('unlock')),
     h('span', { class: 'spacer' }),
     h('button', { class: 'quiet', title: 'FR / EN', onclick: () => { setLang(getLang() === 'fr' ? 'en' : 'fr'); location.reload(); } }, getLang().toUpperCase()),
-    h('button', { class: 'quiet', title: S.me.name, onclick: guard(async () => { await api('POST', '/logout'); location.reload(); }) }, t('logout')));
+    isGM() ? gmNav() : h('button', { class: 'quiet', title: t('logout'), onclick: guard(async () => { await request('POST', `/api/t/${ROUTE.slug}/leave`); location.reload(); }) }, `${S.me.name} · ${t('logout')}`));
+}
+/** GM footer: jump to another table, or back to the GM home. */
+function gmNav() {
+  const sel = !S.mapMode && S.allTables.length > 1 && h('select', { title: t('tables'), onchange: (e) => location.assign('/admin/' + e.target.value) }, S.allTables.map((x) => h('option', { value: x.slug }, x.name)));
+  if (sel) sel.value = S.table?.slug ?? '';
+  return [sel, h('a', { class: 'quiet', href: '/admin' }, t('gmHome'))];
 }
 
 function renderDock() {
-  const tabs = [['chat', t('chat')], ['sheets', t('sheets')], ['journal', t('journal')], ['rules', t('rules')],
+  const tabs = S.mapMode ? [['map', t('mapLibrary')]] : [['chat', t('chat')], ['sheets', t('sheets')], ['journal', t('journal')], ['rules', t('rules')],
     ...(isGM() ? [['table', t('table')], ['sound', t('sound')], ['comp', t('compendium')], ['system', t('system')]] : [])];
   fill(dockEl,
     h('nav', { class: 'tabs' }, tabs.map(([id, label]) => h('button', { class: S.tab === id ? 'on' : '', onclick: () => { S.tab = id; if (id === 'system') S.draft = structuredClone(S.system); renderDock(); } }, label))),
@@ -270,7 +381,7 @@ function renderDock() {
   renderPanel(); renderFoot();
 }
 function renderPanel() {
-  const panels = { chat: () => chatEl, sheets: sheetsPanel, journal: journalPanel, rules: rulesPanel, table: tablePanel, sound: soundPanel, comp: compPanel, system: systemPanel };
+  const panels = { map: mapPanel, chat: () => chatEl, sheets: sheetsPanel, journal: journalPanel, rules: rulesPanel, table: tablePanel, sound: soundPanel, comp: compPanel, system: systemPanel };
   panelEl.className = 'panel-' + S.tab;
   panelEl.replaceChildren((panels[S.tab] ?? panels.chat)());
   if (S.tab === 'chat') { chatList.scrollTop = chatList.scrollHeight; }
@@ -291,7 +402,7 @@ function buildChat() {
   chatEl = h('div', { class: 'chat' }, chatList, h('div', { class: 'chat-bar' }, chatWho, chatInput));
 }
 function renderChatWho() {
-  chatWho.replaceChildren(h('option', { value: '' }, t('noChar')), ...S.actors.map((a) => h('option', { value: a.id }, a.name)));
+  chatWho.replaceChildren(h('option', { value: '' }, t('noChar')), ...S.actors.filter((a) => a.perm === 'edit').map((a) => h('option', { value: a.id }, a.name)));
   chatWho.value = S.actorId ?? '';
 }
 const doRoll = guard(async (text, actorId = S.actorId) => {
@@ -310,7 +421,7 @@ function msgNode(m) {
   return rollCard(m, b, del);
 }
 function rollCard(m, b, del) {
-  const mine = m.userId === S.me.id, ownsActor = m.actorId && actorById(m.actorId)?.ownerId === S.me.id;
+  const mine = m.userId === S.me.id, ownsActor = m.actorId && actorById(m.actorId)?.perm === 'edit';
   const check = b.kind === 'stat';
   return h('div', { class: 'msg roll' },
     h('div', { class: 'roll-head' },
@@ -327,7 +438,7 @@ function rollCard(m, b, del) {
       (mine || isGM()) && h('button', { onclick: guard(() => api('POST', `/chat/${m.id}/reroll`)) }, '↻ ' + t('reroll')),
       ['damage', 'heal', 'theal', 'mana'].includes(b.kind) && (isGM() || (ownsActor && b.kind !== 'damage')) && h('button', { class: 'primary', onclick: applyRoll(m) }, t('apply') + (S.selected.size && isGM() ? ` (${S.selected.size})` : ''))),
     (b.applied ?? []).map((a) => h('div', { class: 'applied' + (a.undone ? ' undone' : '') }, `${a.name}: `, appliedText(a),
-      a.id && !a.undone && (isGM() || (b.kind !== 'damage' && actorById(a.actorId)?.ownerId === S.me.id)) &&
+      a.id && !a.undone && (isGM() || (b.kind !== 'damage' && actorById(a.actorId)?.perm === 'edit')) &&
         h('button', { class: 'undo', title: t('undoApply'), onclick: guard(() => api('POST', `/chat/${m.id}/undo`, { entryId: a.id })) }, '↶'))));
 }
 const applyRoll = (m) => guard(async () => {
@@ -385,10 +496,10 @@ function sheetsPanel() {
   const a = S.sheetId && actorById(S.sheetId);
   if (a) return sheetView(a);
   return h('div', { class: 'pad' },
-    h('button', { class: 'primary wide', onclick: guard(async () => { const r = await api('POST', '/actors', { name: t('newChar') }); upsert(S.actors, r); S.actorId = r.id; S.sheetId = r.id; renderAll(); }) }, '+ ' + t('newChar')),
+    isGM() && h('button', { class: 'primary wide', onclick: guard(async () => { const r = await api('POST', '/actors', { name: t('newChar') }); upsert(S.actors, r); S.actorId = r.id; S.sheetId = r.id; renderAll(); }) }, '+ ' + t('newChar')),
     !S.actors.length && h('p', { class: 'hint' }, t('empty')),
     h('ul', { class: 'list' }, S.actors.map((x) => h('li', {}, h('button', { class: 'row', onclick: () => { S.sheetId = x.id; renderPanel(); } },
-      h('b', {}, x.name), h('span', { class: 'dim' }, ` ${t('level')} ${x.data.bio.level}${isGM() ? ' · ' + (userById(x.ownerId)?.name ?? '—') : ''}`),
+      h('b', {}, x.name), h('span', { class: 'dim' }, ` ${t('level')} ${x.data.bio.level}${isGM() ? ' · ' + permSummary(x) : x.perm === 'view' ? ' · ' + t('permView') : ''}`),
       h('span', { class: 'dim right' }, `${x.data.hp.cur}/${x.computed.derived.maxhp} ${t('hp')}`))))));
 }
 
@@ -463,11 +574,29 @@ function sheetView(a) {
   const money = section(t('currency'), h('div', { class: 'line' }, ['pc', 'pa', 'po'].map((k) => h('label', {}, k.toUpperCase(), field(a, d.currency, k, 'int', { min: 0, class: 'n wide' })))));
   const notes = section(t('notes'), field(a, d, 'notes', 'area', { rows: 6 }));
   const gm = isGM() && section('GM', h('div', { class: 'line' },
-    (() => { const sel = h('select', { onchange: guard(async (e) => { const r = await api('PATCH', '/actors/' + a.id, { ownerId: e.target.value ? Number(e.target.value) : null }); upsert(S.actors, r); }) }, h('option', { value: '' }, t('none')), S.users.map((u) => h('option', { value: u.id }, u.name))); sel.value = a.ownerId ?? ''; return sel; })(),
     viewScene() && h('button', { onclick: guard(async () => { const c = map.viewCenter(); await api('POST', '/tokens', { sceneId: viewScene().id, actorId: a.id, name: a.name, x: Math.round(c.x), y: Math.round(c.y) }); toast(t('saved'), false); await loadState(); renderAll(); }) }, t('placeToken')),
     h('button', { onclick: guard(async () => { await api('POST', '/compendium', { kind: 'actor', name: a.name, data: a.data }); toast(t('saved'), false); }) }, t('template')),
     h('button', { class: 'danger', onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await api('DELETE', '/actors/' + a.id); }) }, t('del'))));
-  return h('div', { class: 'sheet pad' }, head, res, stats, talents, spells, items, money, notes, gm);
+  const perms = isGM() && section(t('perms'), permsEditor(a));
+  if (a.perm === 'view') return h('div', { class: 'sheet pad' }, // everything visible, nothing editable
+    h('button', { class: 'quiet', onclick: () => { S.sheetId = null; renderPanel(); } }, '← ' + t('back')), h('p', { class: 'hint' }, t('viewOnly')),
+    h('fieldset', { class: 'readonly', disabled: true }, head, res, stats, talents, spells, items, money, notes));
+  return h('div', { class: 'sheet pad' }, head, res, stats, talents, spells, items, money, notes, perms, gm);
+}
+/** Names of the players who can edit a sheet ("—" for none). */
+const permSummary = (a) => S.users.filter((u) => a.perms?.[u.id] === 'edit').map((u) => u.name).join(', ') || '—';
+/** GM: per player of the table, edit / view only / none (invisible). */
+function permsEditor(a) {
+  if (!S.users.length) return h('p', { class: 'hint' }, t('noSlots'));
+  return h('div', { class: 'perms' }, S.users.map((u) => {
+    const sel = h('select', { onchange: guard(async (e) => {
+      const next = { ...(a.perms ?? {}) };
+      if (e.target.value) next[u.id] = e.target.value; else delete next[u.id];
+      Object.assign(a, await api('PUT', `/actors/${a.id}/perms`, { perms: next })); // keep the same object: the open sheet holds it
+    }) }, h('option', { value: '' }, t('permNone')), h('option', { value: 'view' }, t('permView')), h('option', { value: 'edit' }, t('permEdit')));
+    sel.value = a.perms?.[u.id] ?? '';
+    return h('label', { class: 'line' }, h('b', { class: 'grow', style: `color:${u.color}` }, u.name), sel);
+  }));
 }
 
 // ------------------------------------------------------------------ rules
@@ -479,41 +608,86 @@ function rulesPanel() {
 function imageSize(file) {
   return new Promise((res, rej) => { const u = URL.createObjectURL(file), i = new Image(); i.onload = () => { res({ w: i.naturalWidth, h: i.naturalHeight }); URL.revokeObjectURL(u); }; i.onerror = rej; i.src = u; });
 }
+const sceneField = (sc, key, label) => h('label', {}, label, h('input', { type: 'number', class: 'n', value: sc[key], onchange: (e) => sceneEdit({ [key]: Number(e.target.value) }) }));
+/** Grid, offset, image and clean-up of the scene being viewed (a table scene or a library map). */
+function sceneSettings(sc) {
+  return [
+    h('div', { class: 'line' }, sceneField(sc, 'grid', t('grid')), sceneField(sc, 'ox', 'X'), sceneField(sc, 'oy', 'Y')),
+    h('div', { class: 'line' },
+      h('button', { onclick: () => confirm(t('confirmDel')) && sceneEdit({ walls: [] }) }, t('clearWalls')),
+      h('button', { onclick: () => confirm(t('confirmDel')) && sceneEdit({ lights: [] }) }, t('clearLights')),
+      h('button', { onclick: () => sceneEdit({ reveal: [] }) }, t('clearReveal'))),
+    h('label', {}, t('mapImage'), h('input', { type: 'file', accept: 'image/*', onchange: guard(async (e) => { const f = e.target.files[0]; if (!f) return; const [url, dim] = await Promise.all([upload(f), imageSize(f)]); sceneEdit({ image: url, width: dim.w, height: dim.h }); }) })),
+  ];
+}
+async function newSceneBody(name, file) {
+  if (!file) return { name };
+  const [url, dim] = await Promise.all([upload(file), imageSize(file)]);
+  return { name, image: url, width: dim.w, height: dim.h };
+}
+/** "+ from the library": copies a library map into this table. Removed when the library is empty. */
+function libraryPicker() {
+  const sel = h('select', { class: 'comp-pick', onchange: guard(async (e) => {
+    if (!e.target.value) return;
+    const r = await request('POST', `/admin/api/scenes/${e.target.value}/copy`, { table: S.table.slug });
+    S.viewId = r.id; await loadState(); renderAll();
+  }) }, h('option', { value: '' }, t('fromLibrary')));
+  request('GET', '/admin/api/library').then(({ scenes }) => { if (scenes.length) add(sel, scenes.map((m) => h('option', { value: m.id }, m.name))); else sel.remove(); }).catch(() => sel.remove());
+  return sel;
+}
+const playerUrl = () => `${location.origin}/${S.table.slug}`;
 function tablePanel() {
   const sc = viewScene();
   const nameIn = h('input', { type: 'text', placeholder: t('newScene') });
   const fileIn = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif' });
   const create = guard(async () => {
-    const f = fileIn.files[0]; let body = { name: nameIn.value || t('newScene') };
-    if (f) { const [url, dim] = await Promise.all([upload(f), imageSize(f)]); body = { ...body, image: url, width: dim.w, height: dim.h }; }
-    const r = await api('POST', '/scenes', body);
+    const r = await api('POST', '/scenes', await newSceneBody(nameIn.value || t('newScene'), fileIn.files[0]));
     S.viewId = r.id; await loadState(); renderAll();
   });
-  const sceneField = (key, label) => h('label', {}, label, h('input', { type: 'number', class: 'n', value: sc[key], onchange: (e) => sceneEdit({ [key]: Number(e.target.value) }) }));
   const tokName = h('input', { type: 'text', placeholder: t('tokenName') });
+  const slotName = h('input', { type: 'text', placeholder: t('name'), maxlength: 40 });
+  const addSlot = guard(async () => { upsert(S.users, await api('POST', '/slots', { name: slotName.value || t('player') })); renderPanel(); });
+  slotName.addEventListener('keydown', (e) => { if (e.key === 'Enter') addSlot(); });
+  const patchTable = guard(async (body) => { S.table = await request('PATCH', `/admin/api/tables/${S.table.slug}`, body); });
   return h('div', { class: 'pad' },
-    h('section', { class: 'sec' }, h('h3', {}, t('scenes')),
-      h('ul', { class: 'list' }, S.scenes.map((s) => h('li', { class: 'line' },
-        h('button', { class: 'row grow' + (s.id === S.viewId ? ' on' : ''), title: t('view'), onclick: () => { S.viewId = s.id; S.selected = new Set(); renderAll(); } }, h('b', {}, s.name)),
-        s.active ? h('span', { class: 'badge success' }, t('active')) : h('button', { onclick: guard(() => api('POST', `/scenes/${s.id}/activate`)) }, t('activate')),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) await api('DELETE', '/scenes/' + s.id); }) }, '×')))),
-      h('div', { class: 'line' }, nameIn, fileIn), h('button', { class: 'primary', onclick: create }, '+ ' + t('newScene'))),
-    sc && h('section', { class: 'sec' }, h('h3', {}, sc.name),
-      h('div', { class: 'line' }, sceneField('grid', t('grid')), sceneField('ox', 'X'), sceneField('oy', 'Y')),
-      h('div', { class: 'line' },
-        h('button', { onclick: () => confirm(t('confirmDel')) && sceneEdit({ walls: [] }) }, t('clearWalls')),
-        h('button', { onclick: () => confirm(t('confirmDel')) && sceneEdit({ lights: [] }) }, t('clearLights')),
-        h('button', { onclick: () => sceneEdit({ reveal: [] }) }, t('clearReveal'))),
-      h('label', {}, t('mapImage'), h('input', { type: 'file', accept: 'image/*', onchange: guard(async (e) => { const f = e.target.files[0]; if (!f) return; const [url, dim] = await Promise.all([upload(f), imageSize(f)]); sceneEdit({ image: url, width: dim.w, height: dim.h }); }) })),
-      h('div', { class: 'line' }, tokName, h('button', { onclick: guard(async () => { const c = map.viewCenter(); await api('POST', '/tokens', { sceneId: sc.id, name: tokName.value || 'Token', x: Math.round(c.x), y: Math.round(c.y) }); await loadState(); map.redraw(); }) }, t('addToken')))),
     h('section', { class: 'sec' }, h('h3', {}, t('players')),
-      S.users.map((u) => h('div', { class: 'line' }, h('b', { style: `color:${u.color}`, class: 'grow' }, u.name),
-        (() => { const sel = h('select', { onchange: guard(async (e) => { await api('PATCH', '/users/' + u.id, { role: e.target.value }); }) }, h('option', { value: 'gm' }, t('gm')), h('option', { value: 'player' }, t('player'))); sel.value = u.role; return sel; })())),
-      S.invite && h('div', { class: 'line' }, h('span', {}, t('inviteCode') + ': '), h('code', {}, S.invite.code),
-        !S.invite.fromEnv && h('button', { onclick: guard(async () => { S.invite = { ...S.invite, ...(await api('POST', '/invite/regenerate')) }; renderPanel(); }) }, t('regen'))),
-      S.invite && !S.invite.fromEnv && (() => { const inp = h('input', { type: 'text', class: 'code', placeholder: t('customCode'), maxlength: 40 });
-        return h('div', { class: 'line' }, inp, h('button', { onclick: guard(async () => { S.invite = { ...S.invite, ...(await api('POST', '/invite', { code: inp.value })) }; toast(t('saved'), false); renderPanel(); }) }, t('setCode'))); })(),
-      S.invite?.fromEnv && h('p', { class: 'hint' }, 'INVITE_CODE')));
+      h('div', { class: 'line' }, h('span', { class: 'dim' }, t('playerLink')), h('code', { class: 'grow' }, playerUrl()), h('button', { onclick: () => copyText(playerUrl()) }, t('copyLink'))),
+      S.users.map((u) => h('div', { class: 'line' },
+        h('span', { class: 'dot' + (u.online ? ' online' : ''), title: u.online ? t('online') : '' }),
+        h('input', { type: 'text', class: 'grow', value: u.name, maxlength: 40, onchange: guard(async (e) => upsert(S.users, await api('PATCH', `/slots/${u.id}`, { name: e.target.value }))) }),
+        h('input', { type: 'color', value: u.color, onchange: guard(async (e) => upsert(S.users, await api('PATCH', `/slots/${u.id}`, { color: e.target.value }))) }),
+        u.online && h('button', { onclick: guard(() => api('POST', `/slots/${u.id}/kick`)) }, t('kick')),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) await api('DELETE', `/slots/${u.id}`); }) }, '×'))),
+      h('div', { class: 'line' }, slotName, h('button', { class: 'primary', onclick: addSlot }, '+ ' + t('addPlayer')))),
+    h('section', { class: 'sec' }, h('h3', {}, t('scenes')),
+      h('ul', { class: 'list' }, S.scenes.map((x) => h('li', { class: 'line' },
+        h('button', { class: 'row grow' + (x.id === S.viewId ? ' on' : ''), title: t('view'), onclick: () => { S.viewId = x.id; S.selected = new Set(); renderAll(); } }, h('b', {}, x.name)),
+        x.active ? h('span', { class: 'badge success' }, t('active')) : h('button', { onclick: guard(() => api('POST', `/scenes/${x.id}/activate`)) }, t('activate')),
+        h('button', { class: 'x', title: t('toLibrary'), onclick: guard(async () => { await request('POST', `/admin/api/scenes/${x.id}/copy`, { table: null }); toast(t('saved'), false); }) }, '⇪'),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) await api('DELETE', '/scenes/' + x.id); }) }, '×')))),
+      h('div', { class: 'line' }, nameIn, fileIn),
+      h('div', { class: 'line' }, h('button', { class: 'primary', onclick: create }, '+ ' + t('newScene')), libraryPicker())),
+    sc && h('section', { class: 'sec' }, h('h3', {}, sc.name), sceneSettings(sc),
+      h('div', { class: 'line' }, tokName, h('button', { onclick: guard(async () => { const c = map.viewCenter(); await api('POST', '/tokens', { sceneId: sc.id, name: tokName.value || 'Token', x: Math.round(c.x), y: Math.round(c.y) }); await loadState(); map.redraw(); }) }, t('addToken')))),
+    h('section', { class: 'sec' }, h('h3', {}, t('tableSettings')),
+      h('label', {}, t('tableName'), h('input', { type: 'text', value: S.table.name, maxlength: 60, onchange: (e) => patchTable({ name: e.target.value }) })),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: S.table.listed, onchange: (e) => patchTable({ listed: e.target.checked }) }), t('listed'))));
+}
+
+/** Map library editor panel: name, grid, image, and "copy to" a table. */
+function mapPanel() {
+  const sc = viewScene();
+  const back = h('a', { class: 'quiet', href: '/admin' }, '← ' + t('gmHome'));
+  if (!sc) return h('div', { class: 'pad' }, back, h('p', { class: 'hint' }, t('empty')));
+  const copySel = h('select', { onchange: guard(async (e) => {
+    if (!e.target.value) return;
+    await request('POST', `/admin/api/scenes/${sc.id}/copy`, { table: e.target.value });
+    toast(`${t('copiedTo')} ${e.target.selectedOptions[0].textContent}`, false); e.target.value = '';
+  }) }, h('option', { value: '' }, t('copyTo')), S.allTables.map((x) => h('option', { value: x.slug }, x.name)));
+  return h('div', { class: 'pad' }, back,
+    h('section', { class: 'sec' }, h('h3', {}, t('mapName')),
+      h('input', { type: 'text', class: 'title', value: sc.name, maxlength: 80, onchange: (e) => { sceneEdit({ name: e.target.value }, { undoable: false }); renderHud(); } }),
+      sceneSettings(sc), S.allTables.length > 0 && h('div', { class: 'line' }, copySel)));
 }
 
 // ------------------------------------------------------------------ token inspector (GM)

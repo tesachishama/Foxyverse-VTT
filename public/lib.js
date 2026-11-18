@@ -21,14 +21,22 @@ export function h(tag, props = {}, ...kids) {
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
-export async function api(method, path, body) {
-  const res = await fetch('/api' + path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+// Each open page has its own id: realtime events carry it back ("by") so a page can skip the echo of its own changes.
+export const CLIENT_ID = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+// Where table calls go: /api/t/<slug> for a player, /admin/api/t/<slug> for the GM, /admin/api/library for the map library.
+let apiBase = '/api', uploadUrl = '/api/upload';
+export function setApiBase(base, upload = base + '/upload') { apiBase = base; uploadUrl = upload; }
+export const eventsUrl = () => `${apiBase}/events?c=${CLIENT_ID}`;
+/** Call an absolute URL. Errors carry the HTTP status (401: pick a player first, 404: no such table). */
+export async function request(method, url, body) {
+  const res = await fetch(url, { method, headers: { 'X-Client': CLIENT_ID, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status });
   return data;
 }
+export const api = (method, path, body) => request(method, apiBase + path, body);
 export async function upload(file) {
-  const res = await fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': file.type }, body: file });
+  const res = await fetch(uploadUrl, { method: 'POST', headers: { 'Content-Type': file.type, 'X-Client': CLIENT_ID }, body: file });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data.url;
@@ -43,8 +51,18 @@ export const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t);
 // ------------------------------------------------------------------ i18n
 const DICT = {
   fr: {
-    signIn: 'Se connecter', create: 'Créer le compte', name: 'Nom', password: 'Mot de passe (8 caractères min.)', invite: "Code d'invitation",
-    firstRun: 'Premier lancement : ce compte sera le MJ.', haveAccount: "J'ai déjà un compte", needAccount: 'Créer un compte', logout: 'Quitter',
+    name: 'Nom', logout: 'Changer de joueur',
+    tables: 'Tables', chooseTable: 'Choisis ta table', noTables: "Aucune table publique pour l'instant. Demande le lien à ton MJ.",
+    pickPlayer: 'Qui es-tu ?', taken: 'déjà en jeu', you: 'toi', noSlots: "Le MJ n'a pas encore créé de joueur à cette table.", tableNotFound: "Il n'y a pas de table à cette adresse.",
+    kicked: "Le MJ t'a déconnecté.", tableGone: 'Cette table a été supprimée.', allTables: 'Toutes les tables',
+    gmHome: 'Accueil MJ', newTable: 'Nouvelle table', tableName: 'Nom de la table', tableAddress: 'Adresse', listed: "Listée (visible sur la page d'accueil)", unlisted: 'non listée', listedShort: 'listée',
+    openTable: 'Ouvrir', online: 'en ligne', playersShort: 'joueurs', confirmTable: "Tape l'adresse de la table pour la supprimer avec tout son contenu :",
+    devMode: 'Mode dev : ADMIN_SECRET est vide, donc /admin est ouvert à tous ceux qui atteignent le serveur. Voir le README.',
+    addPlayer: 'Ajouter un joueur', kick: 'Déconnecter', playerLink: 'Lien pour les joueurs', copyLink: 'Copier', copied: 'Copié',
+    perms: 'Droits des joueurs', permEdit: 'Édition', permView: 'Vue seule', permNone: 'Aucun', viewOnly: 'Vue seule : tu ne peux pas modifier cette fiche.',
+    mapLibrary: 'Bibliothèque de maps', mapHint: 'Maps préparées hors table (murs, lumières...). « Copier vers » en met une copie dans une table.',
+    newMap: 'Nouvelle map', editMap: 'Éditer', copyTo: 'Copier vers…', toLibrary: 'Copier dans la bibliothèque', fromLibrary: '+ depuis la bibliothèque', copiedTo: 'Copiée vers',
+    tableSettings: 'Réglages de la table', mapName: 'Nom de la map',
     chat: 'Chat', sheets: 'Fiches', table: 'Table', rules: 'Règles', system: 'Système',
     chatHint: 'Message ou /jet… (/gm pour le MJ seul)', speakingAs: 'En tant que', noChar: '— aucun personnage —',
     newChar: 'Nouveau personnage', back: 'Retour', del: 'Supprimer', confirmDel: 'Supprimer définitivement ?', placeToken: 'Poser un jeton',
@@ -56,7 +74,7 @@ const DICT = {
     critSuccess: 'Réussite critique', success: 'Réussite', failure: 'Échec', critFailure: 'Échec critique',
     reroll: 'Relancer (faveur)', apply: 'Appliquer', noTarget: 'Sélectionnez un jeton sur la carte.', applied: 'Appliqué', undoApply: 'Annuler cette application',
     scenes: 'Scènes', newScene: 'Nouvelle scène', mapImage: 'Image de la carte', activate: 'Afficher aux joueurs', active: 'Active', grid: 'Grille (px)', offset: 'Décalage X / Y',
-    addToken: 'Ajouter un jeton', tokenName: 'Nom du jeton', players: 'Joueurs', inviteCode: "Code d'invitation", regen: 'Nouveau code', gm: 'MJ', player: 'Joueur',
+    addToken: 'Ajouter un jeton', tokenName: 'Nom du jeton', players: 'Joueurs', gm: 'MJ', player: 'Joueur',
     size: 'Taille', hidden: 'Caché', linked: 'Personnage lié', none: '— aucun —', tokenImage: 'Image du jeton',
     derived: 'Valeurs dérivées', quick: 'Jets rapides', rulesText: 'Texte des règles', rawJson: 'JSON complet', validate: 'Tester', save: 'Enregistrer', reset: 'Réinitialiser', export: 'Exporter', import: 'Importer',
     formulaTest: 'Tester une formule', saved: 'Enregistré', empty: 'Rien ici pour le moment.', roll: 'Jet', rolling: 'Jet',
@@ -66,7 +84,7 @@ const DICT = {
     toolRect: 'Rectangle', toolCircle: 'Cercle', toolCurve: 'Courbe', toolEdit: 'Éditer', undo: 'Annuler', snap: 'Aimantation', snapGrid: 'Grille', snapHalf: 'Demi-case', snapOff: 'Libre',
     viewAs: 'Voir comme', viewPlayers: 'Tous les joueurs', viewSelected: 'Jeton sélectionné', sight: 'Partage sa vue', sightHint: 'Ce jeton donne sa vue à tous les joueurs (allié, porteur de torche...)',
     noViewers: "Aucun jeton ne donne la vue : le brouillard est total. Lie un jeton à un personnage de joueur, coche « Partage sa vue », ou choisis « Jeton sélectionné ».",
-    noViewersPlayer: "Aucun jeton à toi sur cette scène : le MJ doit lier un jeton à ton personnage.", customCode: 'Choisir un code', setCode: 'Définir',
+    noViewersPlayer: "Aucun jeton à toi sur cette scène : le MJ doit lier un jeton à ton personnage.",
     portrait: 'Portrait', toComp: 'Enregistrer au compendium', fromComp: '+ compendium', journal: 'Journal', sound: 'Son', compendium: 'Compendium',
     newEntry: 'Nouvelle entrée', edit: 'Modifier', showPlayers: 'Montrer aux joueurs', visibility: 'Visible par', visGM: 'MJ seul', visAll: 'Tout le monde', visCustom: 'Joueurs choisis',
     image: 'Image', body: 'Texte', title: 'Titre', play: 'Lecture', stop: 'Stop', stopAll: 'Tout arrêter', loop: 'Boucle', volume: 'Volume', uploadAudio: 'Ajouter un son',
@@ -79,8 +97,18 @@ const DICT = {
     noPlayersTokens: 'Aucun jeton de joueur : le brouillard est total.',
   },
   en: {
-    signIn: 'Sign in', create: 'Create account', name: 'Name', password: 'Password (8+ characters)', invite: 'Invite code',
-    firstRun: 'First run: this account becomes the GM.', haveAccount: 'I already have an account', needAccount: 'Create an account', logout: 'Sign out',
+    name: 'Name', logout: 'Switch player',
+    tables: 'Tables', chooseTable: 'Pick your table', noTables: 'No public table yet. Ask your GM for the link.',
+    pickPlayer: 'Who are you?', taken: 'already playing', you: 'you', noSlots: 'The GM has not created any player at this table yet.', tableNotFound: 'There is no table at this address.',
+    kicked: 'The GM disconnected you.', tableGone: 'This table was deleted.', allTables: 'All tables',
+    gmHome: 'GM home', newTable: 'New table', tableName: 'Table name', tableAddress: 'Address', listed: 'Listed (shown on the home page)', unlisted: 'unlisted', listedShort: 'listed',
+    openTable: 'Open', online: 'online', playersShort: 'players', confirmTable: 'Type the table address to delete it with everything in it:',
+    devMode: 'Dev mode: ADMIN_SECRET is empty, so /admin is open to anyone who can reach the server. See the README.',
+    addPlayer: 'Add a player', kick: 'Disconnect', playerLink: 'Link for players', copyLink: 'Copy', copied: 'Copied',
+    perms: 'Player rights', permEdit: 'Edit', permView: 'View only', permNone: 'None', viewOnly: 'View only: you cannot change this sheet.',
+    mapLibrary: 'Map library', mapHint: 'Maps prepared outside any table (walls, lights...). "Copy to" puts a copy into a table.',
+    newMap: 'New map', editMap: 'Edit', copyTo: 'Copy to…', toLibrary: 'Copy to the library', fromLibrary: '+ from the library', copiedTo: 'Copied to',
+    tableSettings: 'Table settings', mapName: 'Map name',
     chat: 'Chat', sheets: 'Sheets', table: 'Table', rules: 'Rules', system: 'System',
     chatHint: 'Message or /roll… (/gm for GM-only)', speakingAs: 'As', noChar: '— no character —',
     newChar: 'New character', back: 'Back', del: 'Delete', confirmDel: 'Delete for good?', placeToken: 'Place token',
@@ -92,7 +120,7 @@ const DICT = {
     critSuccess: 'Critical success', success: 'Success', failure: 'Failure', critFailure: 'Critical failure',
     reroll: 'Reroll (favor)', apply: 'Apply', noTarget: 'Select a token on the map first.', applied: 'Applied', undoApply: 'Undo this application',
     scenes: 'Scenes', newScene: 'New scene', mapImage: 'Map image', activate: 'Show to players', active: 'Active', grid: 'Grid (px)', offset: 'Offset X / Y',
-    addToken: 'Add token', tokenName: 'Token name', players: 'Players', inviteCode: 'Invite code', regen: 'New code', gm: 'GM', player: 'Player',
+    addToken: 'Add token', tokenName: 'Token name', players: 'Players', gm: 'GM', player: 'Player',
     size: 'Size', hidden: 'Hidden', linked: 'Linked character', none: '— none —', tokenImage: 'Token image',
     derived: 'Derived values', quick: 'Quick rolls', rulesText: 'Rules text', rawJson: 'Raw JSON', validate: 'Test', save: 'Save', reset: 'Reset', export: 'Export', import: 'Import',
     formulaTest: 'Test a formula', saved: 'Saved', empty: 'Nothing here yet.', roll: 'Roll', rolling: 'Roll',
@@ -102,7 +130,7 @@ const DICT = {
     toolRect: 'Rectangle', toolCircle: 'Circle', toolCurve: 'Curve', toolEdit: 'Edit', undo: 'Undo', snap: 'Snapping', snapGrid: 'Grid', snapHalf: 'Half cell', snapOff: 'Free',
     viewAs: 'View as', viewPlayers: 'All players', viewSelected: 'Selected token', sight: 'Shares its sight', sightHint: 'This token gives its sight to every player (ally, torch bearer...)',
     noViewers: 'No token provides sight, so the fog is total. Link a token to a player character, tick "Shares its sight", or choose "Selected token".',
-    noViewersPlayer: 'None of your tokens is on this scene: the GM needs to link a token to your character.', customCode: 'Choose a code', setCode: 'Set',
+    noViewersPlayer: 'None of your tokens is on this scene: the GM needs to link a token to your character.',
     portrait: 'Portrait', toComp: 'Save to compendium', fromComp: '+ compendium', journal: 'Journal', sound: 'Sound', compendium: 'Compendium',
     newEntry: 'New entry', edit: 'Edit', showPlayers: 'Show to players', visibility: 'Visible to', visGM: 'GM only', visAll: 'Everyone', visCustom: 'Chosen players',
     image: 'Image', body: 'Text', title: 'Title', play: 'Play', stop: 'Stop', stopAll: 'Stop all', loop: 'Loop', volume: 'Volume', uploadAudio: 'Add a sound',
