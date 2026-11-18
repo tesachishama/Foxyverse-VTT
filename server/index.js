@@ -411,15 +411,15 @@ route('POST', '/api/chat/:id/reroll', 'user', ({ user, params }) => {
   const sys = getSystem();
   const actorRow = msg.actor_id ? getRow('actors', msg.actor_id) : null;
   let data = actorRow ? sanitizeActorData(JSON.parse(actorRow.data), sys) : null;
-  if (user.role !== 'gm') { // players pay a favor; the GM rerolls freely
-    if (!actorRow) throw bad('No character on this roll to pay the favor');
+  // A reroll always costs the rolling character a favor, GM included. Only a GM roll with no character is free.
+  if (actorRow) {
     if (data.fav.cur < 1) throw bad('No favor left');
     data.fav.cur -= 1;
-  }
+  } else if (user.role !== 'gm') throw bad('No character on this roll to pay the favor');
   const result = executeRoll(sys, body.cmd, data);
   const next = { ...body, ...result, rerolls: (body.rerolls ?? 0) + 1, history: [...(body.history ?? []), body.sum], applied: [] };
   db.prepare('UPDATE chat SET body = ? WHERE id = ?').run(JSON.stringify(next), msg.id);
-  if (user.role !== 'gm') { db.prepare('UPDATE actors SET data=?, updated=? WHERE id=?').run(JSON.stringify(data), now(), actorRow.id); pushActor(getRow('actors', actorRow.id), user.id); }
+  if (actorRow) { db.prepare('UPDATE actors SET data=?, updated=? WHERE id=?').run(JSON.stringify(data), now(), actorRow.id); pushActor(getRow('actors', actorRow.id), user.id); }
   const row = getRow('chat', msg.id); pushChat(row);
   return chatView(row);
 });

@@ -165,3 +165,15 @@ test('equipment slots through the API: slots are validated, deduplicated and dri
   assert.equal(tok.body.sight, true);
   assert.equal((await call('PATCH', `/api/tokens/${tok.body.id}`, { sight: false }, gm.cookie)).body.sight, false);
 });
+
+test('favor reroll: the GM pays a favor from the rolling character too', async () => {
+  const gm = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
+  const npc = await call('POST', '/api/actors', { name: 'Favored' }, gm.cookie);
+  assert.equal(npc.body.data.fav.cur, 1);
+  const roll = await call('POST', '/api/chat', { text: '/con', actorId: npc.body.id }, gm.cookie);
+  assert.equal((await call('POST', `/api/chat/${roll.body.id}/reroll`, null, gm.cookie)).status, 200);
+  const after = (await call('GET', '/api/state', null, gm.cookie)).body.actors.find((a) => a.id === npc.body.id);
+  assert.equal(after.data.fav.cur, 0);
+  const again = await call('POST', `/api/chat/${roll.body.id}/reroll`, null, gm.cookie);
+  assert.equal(again.status, 400); assert.match(again.body.error, /favor/i);
+});

@@ -96,7 +96,8 @@ test('full session: accounts, permissions, rolls, apply, favor, realtime', async
   const heroNow = (await call('GET', '/api/state', null, pip.cookie)).body.actors[0];
   assert.equal(heroNow.data.fav.cur, 0);
   assert.equal((await call('POST', `/api/chat/${roll.body.id}/reroll`, null, pip.cookie)).status, 400); // none left
-  assert.equal((await call('POST', `/api/chat/${roll.body.id}/reroll`, null, gm.cookie)).status, 200);  // GM rerolls are free
+  assert.equal((await call('POST', `/api/chat/${roll.body.id}/reroll`, null, gm.cookie)).status, 400);  // the GM pays a favor too: none left
+  assert.equal((await call('POST', `/api/chat/${dmg.body.id}/reroll`, null, gm.cookie)).status, 200);  // a GM roll with no character is free
 
   // system editor: invalid formulas are rejected, valid ones take effect everywhere
   const sys = state.body.system;
