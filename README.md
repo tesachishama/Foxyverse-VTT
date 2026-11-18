@@ -165,14 +165,20 @@ The dropdown at the top right of the map lets you **prepare any scene** while pl
 Mouse wheel zooms, right/middle-drag pans, two-finger pinch works on touch screens, the arrows button fits the map.
 
 ### 3. Characters and tokens
-**Sheets** tab, *New character* (GM only). Fill stats, level and equipment. In *Player rights* at the bottom of the sheet, give each player **Edit**, **View only** or **None** (the sheet is then invisible to them); then **Place token**.
+**Sheets** tab, *New character* (GM only). Click the round picture to set a **portrait** (the whole character) and frame its round **token** (drag and zoom; or send a ready-made token): the token is what the map, the chat and the NPC list show. Fill stats, level and equipment. In *Player rights* at the bottom of the sheet, give each player **Edit**, **View only** or **None** (the sheet is then invisible to them); then **Place token**.
 Double-click a token to open its sheet. Players move the tokens of the sheets they can edit. Tokens snap to the grid.
-Select a token (GM) to edit its name, size, linked character, **vision**, **light**, whether it **shares its sight with all players**, colour, image, or hide it.
+Select a token (GM) to edit its name, size, linked character, **vision**, **light**, its **state**, whether it **shares its sight with all players**, colour, image, or hide it.
+A token whose sheet is at 0 HP or less turns **black and white** (80 % opacity) for everyone; the state can force *dead* or *alive*.
 
 ### 4. Rolling
+The chat sits left of the map, outside the tabs: keep it open, or switch it to *dynamic* (a thin strip that opens on hover, when typing, or briefly when a message arrives). Shift+Enter makes a new line.
+Each message shows the speaker's token next to the name; the *As* selector chooses who speaks.
+**GM narration:** type `@` for a list of sheets (and `mj`): `@Gwen Hello` makes Gwen speak, `@mj The door creaks` narrates in italics, the speaker stays until the next `@`, and the whole text is one message.
 Type in the chat or click buttons on the sheet. `/int`, `/str +2` (a stat check: d20 roll-under with a modifier), `/pdmg 2d6+str`, `/pdmg 10 2d4|label`, `/gm /pdmg 1d8` (GM-only).
 The card shows each die, the total, the formula with your stats filled in, and the grade. The GM selects tokens on the map and presses **Apply** on a damage / heal / mana card;
 players can apply heals and mana to characters they can edit. An application can be repeated, and each one has its own `↶` undo. **Reroll** costs the rolling character one favor, GM included (a GM roll with no character is free).
+
+**Talents** are pills with a tier (T0 +0, T1 +1, T2 +3, T3 +5, T4 +10) and a description that unfolds. A **ticked** talent is a passive bonus on every stat check (T2 takes 3 off the d20); ticked talents add up; damage and other rolls are untouched. A spell's description can be saved (locked) and unlocked.
 
 ### 5. Equipment
 Each item says where it can be worn with a **slot expression**, and is placed with the slot picker or by clicking the silhouette. See [Equipment slots](#equipment-slots).
