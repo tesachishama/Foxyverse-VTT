@@ -1,29 +1,30 @@
-// Starts a throwaway server on a random port with its own data folder. Shared by the HTTP tests.
+// Starts a throwaway server with its own data folder. Shared by the HTTP tests.
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-let nextPort = 3700 + Math.floor(Math.random() * 200) * 5;
-
 export async function startServer(env = {}, prepare) {
-  const port = nextPort++;
-  const base = `http://127.0.0.1:${port}`;
   const dataDir = mkdtempSync(join(tmpdir(), 'foxy-'));
   await prepare?.(dataDir);
-  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, ADMIN_SECRET: '', PORT: String(port), DATA_DIR: dataDir, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, ADMIN_SECRET: '', PORT: '0', DATA_DIR: dataDir, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = '';
   proc.stdout.on('data', (d) => { logs += d; }); proc.stderr.on('data', (d) => { logs += d; });
+  // PORT=0: the OS picks a free port and the server prints it, so test files running in parallel never share a server.
+  const port = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('server did not start:\n' + logs)), 15_000);
+    const look = () => { const m = /listening on http:\/\/[^:]+:(\d+)/.exec(logs); if (m) { clearTimeout(timer); resolve(Number(m[1])); } };
+    proc.stdout.on('data', look);
+    proc.on('exit', () => { clearTimeout(timer); reject(new Error('server exited:\n' + logs)); });
+  });
+  const base = `http://127.0.0.1:${port}`;
   const call = async (method, path, body, cookie, extra = {}) => {
     const res = await fetch(base + path, { method, headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cookie ? { Cookie: cookie } : {}), ...extra }, body: body ? JSON.stringify(body) : undefined });
     const text = await res.text();
     let parsed = null; try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
     return { status: res.status, body: parsed, cookie: res.headers.get('set-cookie')?.split(';')[0] };
   };
-  for (let i = 0; ; i++) {
-    try { await fetch(base + '/api/tables'); break; } catch { if (i > 60) throw new Error('server did not start:\n' + logs); await new Promise((r) => setTimeout(r, 100)); }
-  }
   /** A table with GM and player helpers: gm(method, path, body), join(slotId) -> player(method, path, body, extra). */
   const table = async (slug, opts = {}) => {
     const r = await call('POST', '/admin/api/tables', { name: opts.name ?? slug, slug, listed: opts.listed });

@@ -15,7 +15,7 @@ import { validateSystem, defaultActorData, sanitizeActorData, actorContext, poin
 import { logServerError } from './log.js';
 import { diffSystems } from './sysdiff.js';
 
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = process.env.PORT === '0' ? 0 : Number(process.env.PORT) || 3000; // 0: any free port (tests)
 const HOST = process.env.HOST || '0.0.0.0';
 const MAX_UPLOAD = (Number(process.env.UPLOAD_MAX_MB) || 25) * 1024 * 1024;
 const ADMIN_SECRET = process.env.ADMIN_SECRET || '';
@@ -990,7 +990,7 @@ const server = createServer(async (req, res) => {
 for (const t of db.prepare('SELECT * FROM game_tables').all()) syncCompendium(t); // sheets saved before automatic entries existed
 
 server.listen(PORT, HOST, () => {
-  console.log(`Foxyverse VTT listening on http://${HOST}:${PORT} (players: /, GM: /admin)`);
+  console.log(`Foxyverse VTT listening on http://${HOST}:${server.address().port} (players: /, GM: /admin)`);
   if (!ADMIN_SECRET) console.warn('WARNING: ADMIN_SECRET is empty, so /admin is open to anyone who can reach this port (development mode). See README, "GM access".');
 });
 const stop = () => { server.close(); db.close(); process.exit(0); };
