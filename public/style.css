@@ -175,3 +175,16 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 /* v3 additions */
 .fog-note { position: absolute; left: 50%; top: 56px; transform: translateX(-50%); background: rgba(75, 0, 44, .95); border: 1px solid var(--bad); color: var(--blush); border-radius: 8px; padding: 6px 12px; max-width: 70%; z-index: 4; text-align: center; font-size: 13px; }
 .tools { max-width: 520px; }
+
+/* compendium */
+.seg button.on { background: var(--raised); color: var(--blush); }
+.entry { border-bottom: 1px solid var(--line); padding: 2px 0; } .entry.open { background: rgba(0, 0, 0, .12); }
+.entry summary { cursor: pointer; } .entry p { margin: 4px 0 6px 12px; white-space: pre-wrap; }
+.entry-edit { display: grid; gap: 6px; padding: 6px 4px 10px; }
+.sec h4 { margin: 10px 0 2px; color: var(--lilac); font-size: 13px; font-weight: 400; }
+.npcs { display: flex; flex-wrap: wrap; gap: 12px; } .npc { display: grid; justify-items: center; gap: 4px; width: 84px; text-align: center; }
+.npc img, .npc .avatar { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 2px solid var(--line); }
+details.multi { position: relative; } details.multi summary { cursor: pointer; border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; list-style: none; }
+details.multi[open] > label { display: flex; } details.multi > label { padding: 2px 8px; }
+ul.diff { list-style: none; padding: 0; display: grid; gap: 4px; max-height: 50vh; overflow-y: auto; }
+ul.diff .added b { color: var(--ok); } ul.diff .removed b { color: var(--bad); } ul.diff .changed b { color: var(--gold); }

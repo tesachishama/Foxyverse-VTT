@@ -6,7 +6,7 @@ import { inventoryView } from './inventory.js';
 const S = {
   me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], table: null, allTables: [], mapMode: false,
   tab: 'chat', sheetId: null, selected: new Set(), rollMod: '', draft: null,
-  sounds: [], playing: [], journals: [], compendium: [], timeOffset: 0, viewId: null, tool: { name: 'select', radius: 6, snap: 'grid' }, playerView: false, viewAs: 'players', undo: [],
+  sounds: [], playing: [], journals: [], compendium: [], npcs: [], compView: 'table', compGlobal: null, compFilter: { tables: null, campaigns: null }, campaigns: [], savedSystems: [], timeOffset: 0, viewId: null, tool: { name: 'select', radius: 6, snap: 'grid' }, playerView: false, viewAs: 'players', undo: [],
   journalId: null, journalEdit: false, modal: null, audioBlocked: false, openItems: new Set(),
   actorId: Number(localStorage.getItem('speakAs')) || null,
 };
@@ -47,10 +47,15 @@ async function boot() {
     if (e.status === 404) return page(h('p', { class: 'hint' }, t('tableNotFound')), h('a', { href: ROUTE.gm ? '/admin' : '/' }, ROUTE.gm ? t('gmHome') : t('allTables')));
     throw e;
   }
-  if (ROUTE.gm) S.allTables = (await request('GET', '/admin/api/tables')).tables;
+  if (ROUTE.gm) { await loadGmLists(); S.table.campaignId = S.allTables.find((x) => x.slug === S.table.slug)?.campaignId ?? null; }
   document.title = `${S.table.name} · Foxyverse VTT`;
   buildShell();
   connect();
+}
+
+async function loadGmLists() {
+  const [{ tables }, { campaigns }, { systems }] = await Promise.all([request('GET', '/admin/api/tables'), request('GET', '/admin/api/campaigns'), request('GET', '/admin/api/systems')]);
+  Object.assign(S, { allTables: tables, campaigns, savedSystems: systems });
 }
 
 /** "/": the listed tables. */
@@ -89,7 +94,7 @@ async function lobbyPage(slug) {
 /** "/admin": every table, a new table, and the map library. */
 async function adminHome() {
   document.title = `${t('gmHome')} · Foxyverse VTT`;
-  const [{ tables, devMode }, { scenes }] = await Promise.all([request('GET', '/admin/api/tables'), request('GET', '/admin/api/library')]);
+  const [{ tables, devMode }, { scenes }, { campaigns }, { systems }] = await Promise.all([request('GET', '/admin/api/tables'), request('GET', '/admin/api/library'), request('GET', '/admin/api/campaigns'), request('GET', '/admin/api/systems')]);
   const reload = () => adminHome().catch((e) => toast(e.message));
   const name = h('input', { type: 'text', placeholder: t('tableName'), maxlength: 60 });
   const slug = h('input', { type: 'text', class: 'code', placeholder: t('tableAddress'), maxlength: 40 });
@@ -97,7 +102,12 @@ async function adminHome() {
   name.addEventListener('input', () => { if (!slugTouched) slug.value = slugify(name.value); });
   slug.addEventListener('input', () => { slugTouched = true; });
   const listed = h('input', { type: 'checkbox', checked: true });
-  const create = guard(async () => { const r = await request('POST', '/admin/api/tables', { name: name.value, slug: slug.value || slugify(name.value), listed: listed.checked }); location.assign('/admin/' + r.slug); });
+  const campSel = (value, onchange, attrs = {}) => { const sel = h('select', { ...attrs, onchange }, h('option', { value: '' }, t('noCampaign')), campaigns.map((c) => h('option', { value: c.id }, c.name))); sel.value = value ?? ''; return sel; };
+  const sysSel = (value, onchange) => { const sel = h('select', { title: t('linkedSystem'), onchange }, h('option', { value: '' }, t('noLinkedSystem')), systems.map((x) => h('option', { value: x.id }, x.name))); sel.value = value ?? ''; return sel; };
+  const newCamp = campSel(null, null, { title: t('campaign') });
+  const create = guard(async () => { const r = await request('POST', '/admin/api/tables', { name: name.value, slug: slug.value || slugify(name.value), listed: listed.checked, campaignId: newCamp.value ? Number(newCamp.value) : null }); location.assign('/admin/' + r.slug); });
+  const campName = h('input', { type: 'text', placeholder: t('newCampaign'), maxlength: 60 });
+  const addCamp = guard(async () => { if (!campName.value.trim()) return; await request('POST', '/admin/api/campaigns', { name: campName.value }); reload(); });
   const mapName = h('input', { type: 'text', placeholder: t('mapName'), maxlength: 80 });
   const mapFile = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif' });
   const newMap = guard(async () => {
@@ -117,7 +127,7 @@ async function adminHome() {
       !tables.length && h('p', { class: 'hint' }, t('empty')),
       h('ul', { class: 'list' }, tables.map((x) => h('li', { class: 'line card' },
         h('a', { class: 'grow', href: '/admin/' + x.slug }, h('b', {}, x.name),
-          h('span', { class: 'dim' }, ` /${x.slug} · ${x.players} ${t('playersShort')}, ${x.online} ${t('online')}`)),
+          h('span', { class: 'dim' }, ` /${x.slug} · ${x.players} ${t('playersShort')}, ${x.online} ${t('online')}${x.campaignId ? ' · ' + (campaigns.find((c) => c.id === x.campaignId)?.name ?? '') : ''}`)),
         h('label', { class: 'check', title: t('listed') }, h('input', { type: 'checkbox', checked: x.listed, onchange: guard(async (e) => { await request('PATCH', `/admin/api/tables/${x.slug}`, { listed: e.target.checked }); reload(); }) }), t('listedShort')),
         h('button', { title: t('playerLink'), onclick: () => copyText(`${location.origin}/${x.slug}`) }, t('copyLink')),
         h('a', { class: 'button primary', href: '/admin/' + x.slug }, t('openTable')),
@@ -125,7 +135,20 @@ async function adminHome() {
           if (prompt(`${t('confirmTable')} ${x.slug}`) !== x.slug) return;
           await request('DELETE', `/admin/api/tables/${x.slug}`); reload();
         }) }, '×')))),
-      h('div', { class: 'line' }, name, slug, h('label', { class: 'check' }, listed, t('listed')), h('button', { class: 'primary', onclick: create }, '+ ' + t('newTable')))),
+      h('div', { class: 'line' }, name, slug, newCamp, h('label', { class: 'check' }, listed, t('listed')), h('button', { class: 'primary', onclick: create }, '+ ' + t('newTable')))),
+    h('section', { class: 'sec' }, h('h3', {}, t('campaigns')), h('p', { class: 'hint' }, t('campaignHint')),
+      h('ul', { class: 'list' }, campaigns.map((c) => h('li', { class: 'line card' },
+        h('input', { type: 'text', class: 'grow', value: c.name, maxlength: 60, onchange: guard(async (e) => { await request('PATCH', `/admin/api/campaigns/${c.id}`, { name: e.target.value }); }) }),
+        sysSel(c.systemId, guard(async (e) => { await request('PATCH', `/admin/api/campaigns/${c.id}`, { systemId: e.target.value ? Number(e.target.value) : null }); })),
+        h('span', { class: 'dim' }, `${tables.filter((x) => x.campaignId === c.id).length} ${t('tables').toLowerCase()}`),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await request('DELETE', `/admin/api/campaigns/${c.id}`); reload(); }) }, '×')))),
+      h('div', { class: 'line' }, campName, h('button', { class: 'primary', onclick: addCamp }, '+ ' + t('newCampaign')))),
+    h('section', { class: 'sec' }, h('h3', {}, t('systemsLib')), h('p', { class: 'hint' }, t('systemsHint')),
+      !systems.length && h('p', { class: 'hint' }, t('empty')),
+      h('ul', { class: 'list' }, systems.map((x) => h('li', { class: 'line card' },
+        h('input', { type: 'text', class: 'grow', value: x.name, maxlength: 60, onchange: guard(async (e) => { await request('PATCH', `/admin/api/systems/${x.id}`, { name: e.target.value }); }) }),
+        h('span', { class: 'dim' }, new Date(x.updated).toLocaleDateString()),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await request('DELETE', `/admin/api/systems/${x.id}`); reload(); }) }, '×'))))),
     h('section', { class: 'sec' }, h('h3', {}, t('mapLibrary')), h('p', { class: 'hint' }, t('mapHint')),
       h('ul', { class: 'list' }, scenes.map((m) => h('li', { class: 'line card' },
         h('a', { class: 'grow', href: '/admin?map=' + m.id }, h('b', {}, m.name), m.width > 0 && h('span', { class: 'dim' }, ` ${m.width}×${m.height}`)),
@@ -149,7 +172,7 @@ async function mapEditor(id) {
 async function loadState() {
   const st = await api('GET', '/state');
   Object.assign(S, { me: st.me, table: st.table, users: st.users, system: st.system, scene: st.scene, scenes: st.scenes, tokens: st.tokens, actors: st.actors, chat: st.chat,
-    sounds: st.sounds, playing: st.playing, journals: st.journals, compendium: st.compendium, timeOffset: st.serverTime - Date.now() });
+    sounds: st.sounds, playing: st.playing, journals: st.journals, compendium: st.compendium, npcs: st.npcs ?? [], timeOffset: st.serverTime - Date.now() });
   if (st.me.role === 'gm' && !S.scenes.some((x) => x.id === S.viewId)) S.viewId = st.scene?.id ?? S.scenes[0]?.id ?? null;
   if (audio) { audio.stopAll(); audio.sync(S.playing, S.sounds); }
   setKnownRollTypes(S.system);
@@ -207,8 +230,9 @@ function onEvent(ev) {
   if (type === 'show') { S.modal = ev.id; renderModal(); return; }
   if (type === 'comp') {
     if (op === 'delete') remove(S.compendium, data.id); else upsert(S.compendium, data);
-    if (S.tab === 'comp') renderPanel(); return;
+    if (S.tab === 'comp' && !compEditing()) renderPanel(); return;
   }
+  if (type === 'npcs') { S.npcs = data; if (S.tab === 'comp' && !compEditing()) renderPanel(); return; }
   if (type === 'actor') {
     if (op === 'delete') { remove(S.actors, data.id); if (S.sheetId === data.id) S.sheetId = null; renderAll(); return; }
     if (by === CLIENT_ID && pending.has(data.id)) return;
@@ -373,10 +397,10 @@ function gmNav() {
 }
 
 function renderDock() {
-  const tabs = S.mapMode ? [['map', t('mapLibrary')]] : [['chat', t('chat')], ['sheets', t('sheets')], ['journal', t('journal')], ['rules', t('rules')],
-    ...(isGM() ? [['table', t('table')], ['sound', t('sound')], ['comp', t('compendium')], ['system', t('system')]] : [])];
+  const tabs = S.mapMode ? [['map', t('mapLibrary')]] : [['chat', t('chat')], ['sheets', t('sheets')], ['journal', t('journal')], ['rules', t('rules')], ['comp', t('compendium')],
+    ...(isGM() ? [['table', t('table')], ['sound', t('sound')], ['system', t('system')]] : [])];
   fill(dockEl,
-    h('nav', { class: 'tabs' }, tabs.map(([id, label]) => h('button', { class: S.tab === id ? 'on' : '', onclick: () => { S.tab = id; if (id === 'system') S.draft = structuredClone(S.system); renderDock(); } }, label))),
+    h('nav', { class: 'tabs' }, tabs.map(([id, label]) => h('button', { class: S.tab === id ? 'on' : '', onclick: () => { S.tab = id; if (id === 'system') S.draft = structuredClone(S.system); if (id === 'comp') refreshComp(); renderDock(); } }, label))),
     panelEl, footEl);
   renderPanel(); renderFoot();
 }
@@ -503,7 +527,7 @@ function sheetsPanel() {
       h('span', { class: 'dim right' }, `${x.data.hp.cur}/${x.computed.derived.maxhp} ${t('hp')}`))))));
 }
 
-const compBtn = (kind, entry) => isGM() && h('button', { class: 'x', title: t('toComp'), onclick: guard(async () => { await api('POST', '/compendium', { kind, name: entry.name || '…', data: entry }); toast(t('saved'), false); }) }, '⇪');
+const compBtn = () => null; // every named item / spell enters the compendium by itself
 function compPick(kind, onPick) {
   const list = S.compendium.filter((c) => c.kind === kind);
   if (!list.length) return null;
@@ -553,9 +577,9 @@ function sheetView(a) {
     (() => { const sel = h('select', { onchange: (e) => { tl.tier = Number(e.target.value); saveActor(a); renderPanel(); } }, Object.keys(sys.knowledgeTiers).map((k) => h('option', { value: k }, `${t('tier')} ${k} (${tierText(k)})`))); sel.value = tl.tier; return sel; })(),
     field(a, tl, 'enabled', 'bool'),
     h('button', { title: t('use'), onclick: () => { S.rollMod = tierText(tl.tier); modInput.value = S.rollMod; } }, t('use')),
-    compBtn('talent', tl), h('button', { class: 'x', onclick: () => { d.talents.splice(i, 1); saveActor(a); renderPanel(); } }, '×'))),
+    h('button', { class: 'x', onclick: () => { d.talents.splice(i, 1); saveActor(a); renderPanel(); } }, '×'))),
   h('p', { class: 'hint' }, d.talents.length >= 4 ? '4 max.' : '')),
-  h('div', { class: 'addrow' }, h('button', { class: 'add', onclick: () => { d.talents.push({ id: '', name: '', tier: 1, enabled: true }); saveActor(a); renderPanel(); } }, '+ ' + t('add')), compPick('talent', (e) => { d.talents.push({ ...e, id: '' }); saveActor(a); renderPanel(); })));
+  h('div', { class: 'addrow' }, h('button', { class: 'add', onclick: () => { d.talents.push({ id: '', name: '', tier: 1, enabled: true }); saveActor(a); renderPanel(); } }, '+ ' + t('add'))));
 
   const spells = section(t('spells'), h('div', {}, d.spells.map((sp, i) => h('div', { class: 'spell' },
     h('div', { class: 'line' }, field(a, sp, 'name', 'text', { class: 'grow' }), field(a, sp, 'cost', 'int', { min: 0, class: 'n', title: t('cost') }),
@@ -575,7 +599,7 @@ function sheetView(a) {
   const notes = section(t('notes'), field(a, d, 'notes', 'area', { rows: 6 }));
   const gm = isGM() && section('GM', h('div', { class: 'line' },
     viewScene() && h('button', { onclick: guard(async () => { const c = map.viewCenter(); await api('POST', '/tokens', { sceneId: viewScene().id, actorId: a.id, name: a.name, x: Math.round(c.x), y: Math.round(c.y) }); toast(t('saved'), false); await loadState(); renderAll(); }) }, t('placeToken')),
-    h('button', { onclick: guard(async () => { await api('POST', '/compendium', { kind: 'actor', name: a.name, data: a.data }); toast(t('saved'), false); }) }, t('template')),
+    h('label', { class: 'check', title: t('npcHint') }, h('input', { type: 'checkbox', checked: a.shown, onchange: guard(async (e) => { Object.assign(a, await api('PATCH', '/actors/' + a.id, { shown: e.target.checked })); }) }), t('shownToPlayers')),
     h('button', { class: 'danger', onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await api('DELETE', '/actors/' + a.id); }) }, t('del'))));
   const perms = isGM() && section(t('perms'), permsEditor(a));
   if (a.perm === 'view') return h('div', { class: 'sheet pad' }, // everything visible, nothing editable
@@ -648,7 +672,7 @@ function tablePanel() {
   const slotName = h('input', { type: 'text', placeholder: t('name'), maxlength: 40 });
   const addSlot = guard(async () => { upsert(S.users, await api('POST', '/slots', { name: slotName.value || t('player') })); renderPanel(); });
   slotName.addEventListener('keydown', (e) => { if (e.key === 'Enter') addSlot(); });
-  const patchTable = guard(async (body) => { S.table = await request('PATCH', `/admin/api/tables/${S.table.slug}`, body); });
+  const patchTable = async (body) => { S.table = { ...S.table, ...(await request('PATCH', `/admin/api/tables/${S.table.slug}`, body)) }; };
   return h('div', { class: 'pad' },
     h('section', { class: 'sec' }, h('h3', {}, t('players')),
       h('div', { class: 'line' }, h('span', { class: 'dim' }, t('playerLink')), h('code', { class: 'grow' }, playerUrl()), h('button', { onclick: () => copyText(playerUrl()) }, t('copyLink'))),
@@ -671,7 +695,16 @@ function tablePanel() {
       h('div', { class: 'line' }, tokName, h('button', { onclick: guard(async () => { const c = map.viewCenter(); await api('POST', '/tokens', { sceneId: sc.id, name: tokName.value || 'Token', x: Math.round(c.x), y: Math.round(c.y) }); await loadState(); map.redraw(); }) }, t('addToken')))),
     h('section', { class: 'sec' }, h('h3', {}, t('tableSettings')),
       h('label', {}, t('tableName'), h('input', { type: 'text', value: S.table.name, maxlength: 60, onchange: (e) => patchTable({ name: e.target.value }) })),
-      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: S.table.listed, onchange: (e) => patchTable({ listed: e.target.checked }) }), t('listed'))));
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: S.table.listed, onchange: (e) => patchTable({ listed: e.target.checked }) }), t('listed')),
+      h('label', {}, t('campaign'), (() => {
+        const sel = h('select', { onchange: guard(async (e) => {
+          const id = e.target.value ? Number(e.target.value) : null;
+          await patchTable({ campaignId: id });
+          const linked = S.campaigns.find((c) => c.id === id)?.systemId;
+          if (linked) previewSystem(linked, t('applyLinked')); // the campaign's rules, after a look at what changes
+        }) }, h('option', { value: '' }, t('noCampaign')), S.campaigns.map((c) => h('option', { value: c.id }, c.name)));
+        sel.value = S.table.campaignId ?? ''; return sel;
+      })())));
 }
 
 /** Map library editor panel: name, grid, image, and "copy to" a table. */
@@ -781,15 +814,166 @@ function soundPanel() {
 }
 
 // ------------------------------------------------------------------ compendium (GM)
-const KIND_LABEL = () => ({ item: t('items'), spell: t('spells'), talent: t('talents'), actor: 'NPC' });
+const CATS = () => [['weapon', t('invWeapons')], ['armor', t('invArmor')], ['consumable', t('invConsumable')], ['bag', t('invBag')], ['other', t('invOther')]];
+let compOpen = new Set(); // ids of entries whose editor is open
+const compEditing = () => compOpen.size > 0 && panelEl.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+/** Players: what their sheets carry changes all the time, so the tab asks the server each time it opens. */
+const refreshComp = guard(async () => {
+  if (isGM() && S.compView === 'global') { S.compGlobal = await request('GET', '/admin/api/compendium'); }
+  else { const r = await api('GET', '/compendium'); S.compendium = r.entries; S.npcs = r.npcs; }
+  if (S.tab === 'comp') renderPanel();
+});
+const bonusText = (d) => Object.entries(d.bonuses ?? {}).map(([k, v]) => `${S.system?.stats.find((x) => x.id === k)?.label ?? k} ${v > 0 ? '+' : ''}${v}`).join(', ');
+/** One line of facts about an entry (players read it, the GM sees it above the editor). */
+function entrySummary(e) {
+  const d = e.data;
+  if (e.kind === 'spell') return [`${t('cost')} ${d.cost} ${d.costType === 'hp' ? t('hp') : t('mp')}`, d.armed && t('armed'), d.continuous && t('continuous')].filter(Boolean).join(' · ');
+  return [d.pdef && `${t('defP')} ${d.pdef}`, d.mdef && `${t('defM')} ${d.mdef}`, bonusText(d), d.equipExpr].filter(Boolean).join(' · ');
+}
+/** The GM's in-place editor of an entry. save(body) sends { name, data }. */
+function entryEditor(e, save) {
+  const d = structuredClone(e.data); let name = e.name;
+  const num = (key) => h('input', { type: 'number', class: 'n', value: d[key] ?? 0, oninput: (ev) => { d[key] = Number(ev.target.value) || 0; } });
+  const txt = (key, attrs = {}) => h('input', { type: 'text', value: d[key] ?? '', ...attrs, oninput: (ev) => { d[key] = ev.target.value; } });
+  const chk = (key, label) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!d[key], onchange: (ev) => { d[key] = ev.target.checked; } }), label);
+  const fields = e.kind === 'spell'
+    ? [h('div', { class: 'line' }, h('label', {}, t('cost'), num('cost')),
+        (() => { const sel = h('select', { onchange: (ev) => { d.costType = ev.target.value; } }, h('option', { value: 'mp' }, t('mp')), h('option', { value: 'hp' }, t('hp'))); sel.value = d.costType ?? 'mp'; return sel; })(),
+        chk('armed', t('armed')), chk('continuous', t('continuous'))),
+      h('textarea', { rows: 3, placeholder: t('effect'), oninput: (ev) => { d.effect = ev.target.value; } }, d.effect ?? '')]
+    : [h('div', { class: 'line' },
+        (() => { const sel = h('select', { onchange: (ev) => { d.type = ev.target.value; } }, CATS().map(([k, l]) => h('option', { value: k }, l))); sel.value = d.type ?? 'other'; return sel; })(),
+        h('label', {}, t('defP'), num('pdef')), h('label', {}, t('defM'), num('mdef'))),
+      h('label', {}, t('slotsExpr'), txt('equipExpr', { class: 'code' })),
+      S.system && h('div', { class: 'line' }, S.system.stats.map((st) => h('label', {}, st.label, h('input', { type: 'number', class: 'n', value: d.bonuses?.[st.id] ?? 0,
+        oninput: (ev) => { const v = Number(ev.target.value) || 0; d.bonuses ??= {}; if (v) d.bonuses[st.id] = v; else delete d.bonuses[st.id]; } })))),
+      h('textarea', { rows: 3, placeholder: t('notes'), oninput: (ev) => { d.notes = ev.target.value; } }, d.notes ?? '')];
+  return h('div', { class: 'entry-edit' },
+    h('input', { type: 'text', class: 'title', value: name, maxlength: 80, oninput: (ev) => { name = ev.target.value; } }),
+    fields, h('div', { class: 'line' }, h('button', { class: 'primary', onclick: guard(async () => { await save({ name, data: { ...d, name } }); compOpen.delete(e.id); toast(t('saved'), false); renderPanel(); }) }, t('save'))));
+}
+const byCategory = (entries) => CATS().map(([k, label]) => [label, entries.filter((e) => e.kind === 'item' && e.category === k)]).filter(([, list]) => list.length);
 function compPanel() {
-  const labels = KIND_LABEL();
-  return h('div', { class: 'pad' }, h('p', { class: 'hint' }, getLang() === 'fr' ? 'Ajoutez des entrées depuis une fiche (⇪) ; les joueurs peuvent les copier sur leur fiche.' : 'Add entries from a sheet (⇪); players can copy them onto their sheets.'),
-    Object.keys(labels).map((kind) => h('section', { class: 'sec' }, h('h3', {}, labels[kind]),
-      S.compendium.filter((c) => c.kind === kind).map((c) => h('div', { class: 'line' },
-        h('input', { type: 'text', class: 'grow', value: c.name, onchange: guard((e) => api('PATCH', '/compendium/' + c.id, { name: e.target.value })) }),
-        kind === 'actor' && h('button', { class: 'primary', onclick: guard(async () => { const sc = viewScene(), ctr = map.viewCenter(); await api('POST', `/compendium/${c.id}/instantiate`, { sceneId: sc?.id, x: Math.round(ctr.x), y: Math.round(ctr.y) }); await loadState(); renderAll(); toast(t('saved'), false); }) }, t('instantiate')),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) await api('DELETE', '/compendium/' + c.id); }) }, '×'))))));
+  if (!isGM()) return playerCompendium();
+  const sw = h('div', { class: 'line seg' },
+    ['table', 'global'].map((v) => h('button', { class: S.compView === v ? 'on' : '', onclick: () => { S.compView = v; compOpen = new Set(); refreshComp(); renderPanel(); } }, v === 'table' ? t('compThis') : t('compGlobal'))));
+  return h('div', { class: 'pad' }, sw, S.compView === 'global' ? globalCompendium() : tableCompendium());
+}
+/** Players: items by category, spells, NPCs (name and picture only). Read-only. */
+function playerCompendium() {
+  const entry = (e) => h('details', { class: 'entry' }, h('summary', {}, h('b', {}, e.name), h('span', { class: 'dim' }, ' ' + entrySummary(e))),
+    e.data.notes && h('p', {}, e.data.notes), e.data.effect && h('p', {}, e.data.effect));
+  const items = byCategory(S.compendium), spells = S.compendium.filter((e) => e.kind === 'spell');
+  return h('div', { class: 'pad' },
+    !S.compendium.length && !S.npcs.length && h('p', { class: 'hint' }, t('compPlayerHint')),
+    items.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('items')), items.map(([label, list]) => [h('h4', {}, label), list.map(entry)])),
+    spells.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('spells')), spells.map(entry)),
+    S.npcs.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('npcs')), h('div', { class: 'npcs' }, S.npcs.map((n) => h('div', { class: 'npc' }, n.portrait ? h('img', { src: n.portrait, alt: '' }) : h('span', { class: 'avatar' }, '?'), h('b', {}, n.name))))));
+}
+/** GM, this table: edit in place, show to players, update copies whose original changed, NPC list. */
+function tableCompendium() {
+  const row = (e) => {
+    const open = compOpen.has(e.id);
+    return h('div', { class: 'entry' + (open ? ' open' : '') },
+      h('div', { class: 'line' },
+        h('button', { class: 'row grow', onclick: () => { if (open) compOpen.delete(e.id); else compOpen.add(e.id); renderPanel(); } }, h('b', {}, e.name), h('span', { class: 'dim' }, ' ' + entrySummary(e))),
+        e.auto && h('span', { class: 'badge', title: t('autoHint') }, 'auto'),
+        e.source?.stale && h('button', { class: 'primary', title: t('staleCopy'), onclick: guard(async () => { upsert(S.compendium, await api('POST', `/compendium/${e.id}/refresh`)); renderPanel(); }) }, '↻ ' + t('updateCopy')),
+        h('label', { class: 'check', title: t('visibleToPlayers') }, h('input', { type: 'checkbox', checked: e.visible, onchange: guard(async (ev) => { upsert(S.compendium, await api('PATCH', '/compendium/' + e.id, { visible: ev.target.checked })); }) }), '👁'),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) { await api('DELETE', '/compendium/' + e.id); remove(S.compendium, e.id); renderPanel(); } }) }, '×')),
+      open && entryEditor(e, async (body) => upsert(S.compendium, await api('PATCH', '/compendium/' + e.id, body))));
+  };
+  const create = (kind, type) => guard(async () => {
+    const r = await api('POST', '/compendium', { kind, name: kind === 'spell' ? t('newSpell') : t('newItem'), data: type ? { type } : {} });
+    upsert(S.compendium, r); compOpen.add(r.id); renderPanel();
+  });
+  const items = S.compendium.filter((e) => e.kind === 'item'), spells = S.compendium.filter((e) => e.kind === 'spell');
+  return [
+    h('p', { class: 'hint' }, t('compGmHint')),
+    h('section', { class: 'sec' }, h('h3', {}, t('items'), h('button', { class: 'quiet', onclick: create('item', 'other') }, '+ ' + t('newItem'))),
+      !items.length && h('p', { class: 'hint' }, t('empty')),
+      CATS().map(([k, label]) => { const list = items.filter((e) => e.category === k); return list.length > 0 && [h('h4', {}, label), list.map(row)]; })),
+    h('section', { class: 'sec' }, h('h3', {}, t('spells'), h('button', { class: 'quiet', onclick: create('spell') }, '+ ' + t('newSpell'))),
+      !spells.length && h('p', { class: 'hint' }, t('empty')), spells.map(row)),
+    h('section', { class: 'sec' }, h('h3', {}, t('npcs')), h('p', { class: 'hint' }, t('npcHint')),
+      S.actors.map((a) => h('label', { class: 'line check' }, h('input', { type: 'checkbox', checked: a.shown, onchange: guard(async (ev) => { Object.assign(a, await api('PATCH', '/actors/' + a.id, { shown: ev.target.checked })); }) }),
+        h('b', { class: 'grow' }, a.name), h('span', { class: 'dim' }, `${t('level')} ${a.data.bio.level}`)))),
+  ];
+}
+/** A dropdown of checkboxes: null = everything ticked. */
+function multiPick(label, options, chosen, onChange) {
+  const all = options.map(([v]) => v), cur = chosen ?? all;
+  return h('details', { class: 'multi' }, h('summary', {}, `${label} (${cur.length}/${all.length})`),
+    options.map(([v, text]) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: cur.includes(v), onchange: (e) => {
+      const next = e.target.checked ? [...cur, v] : cur.filter((x) => x !== v);
+      onChange(next.length === all.length ? null : next);
+    } }), text)));
+}
+/** GM, everything: all tables and outside tables, filters on tables and campaigns, "add to this table". */
+function globalCompendium() {
+  const g = S.compGlobal;
+  if (!g) return h('p', { class: 'hint' }, '…');
+  const OUT = '', NONE = 0;
+  const tableOpts = [[OUT, t('outside')], ...g.tables.map((x) => [x.slug, x.name])];
+  const campOpts = [[NONE, t('noCampaign')], ...g.campaigns.map((c) => [c.id, c.name])];
+  const f = S.compFilter;
+  const keep = (x) => (!f.tables || f.tables.includes(x.table ?? OUT)) && (!f.campaigns || f.campaigns.includes(x.campaignId ?? NONE));
+  const tag = (x) => h('span', { class: 'dim' }, ' · ', x.table ? g.tables.find((tb) => tb.slug === x.table)?.name ?? x.table : t('outside'),
+    x.campaignId && ' · ' + (g.campaigns.find((c) => c.id === x.campaignId)?.name ?? ''));
+  const addHere = (path, x) => (x.table === S.table.slug ? h('span', { class: 'dim' }, t('inThisTable'))
+    : h('button', { onclick: guard(async () => { const r = await api('POST', path, { id: x.id }); if (path.includes('actors')) upsert(S.actors, r); else upsert(S.compendium, r); toast(t('saved'), false); await refreshComp(); }) }, '+ ' + t('addToTable')));
+  const row = (e) => {
+    const open = compOpen.has(e.id), outside = !e.table;
+    return h('div', { class: 'entry' + (open ? ' open' : '') },
+      h('div', { class: 'line' },
+        h('button', { class: 'row grow', onclick: () => { if (!outside) return; if (open) compOpen.delete(e.id); else compOpen.add(e.id); renderPanel(); } }, h('b', {}, e.name), tag(e)),
+        addHere('/compendium/import', e),
+        outside && h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) { await request('DELETE', '/admin/api/compendium/' + e.id); await refreshComp(); } }) }, '×')),
+      open && entryEditor(e, async (body) => { await request('PATCH', '/admin/api/compendium/' + e.id, { ...body, table: S.table.slug }); await refreshComp(); }));
+  };
+  const entries = g.entries.filter(keep), npcs = g.npcs.filter(keep);
+  const newCamp = h('select', {}, h('option', { value: '' }, t('noCampaign')), g.campaigns.map((c) => h('option', { value: c.id }, c.name)));
+  const create = (kind) => guard(async () => {
+    const r = await request('POST', '/admin/api/compendium', { kind, name: kind === 'spell' ? t('newSpell') : t('newItem'), table: S.table.slug, campaignId: newCamp.value ? Number(newCamp.value) : null });
+    compOpen.add(r.id); await refreshComp();
+  });
+  return [
+    h('div', { class: 'line' }, multiPick(t('tables'), tableOpts, f.tables, (v) => { f.tables = v; renderPanel(); }), multiPick(t('campaigns'), campOpts, f.campaigns, (v) => { f.campaigns = v; renderPanel(); })),
+    h('div', { class: 'line' }, h('span', { class: 'dim' }, t('outside') + ' :'), newCamp, h('button', { onclick: create('item') }, '+ ' + t('newItem')), h('button', { onclick: create('spell') }, '+ ' + t('newSpell'))),
+    h('section', { class: 'sec' }, h('h3', {}, t('items')), byCategory(entries).map(([label, list]) => [h('h4', {}, label), list.map(row)]), !entries.some((e) => e.kind === 'item') && h('p', { class: 'hint' }, t('empty'))),
+    h('section', { class: 'sec' }, h('h3', {}, t('spells')), entries.filter((e) => e.kind === 'spell').map(row), !entries.some((e) => e.kind === 'spell') && h('p', { class: 'hint' }, t('empty'))),
+    h('section', { class: 'sec' }, h('h3', {}, t('npcs')), npcs.map((n) => h('div', { class: 'line entry' }, h('span', { class: 'row grow' }, h('b', {}, n.name), h('span', { class: 'dim' }, ` ${t('level')} ${n.level}`), tag(n)), addHere('/actors/import', n))),
+      !npcs.length && h('p', { class: 'hint' }, t('empty'))),
+  ];
+}
+
+// ------------------------------------------------------------------ saved systems: preview the differences, then apply
+const short = (v) => { const x = typeof v === 'string' ? v : JSON.stringify(v); return x.length > 80 ? x.slice(0, 77) + '…' : x; };
+function dialog(title, body, actions) {
+  $('.modal')?.remove();
+  const close = () => $('.modal')?.remove();
+  document.body.append(h('div', { class: 'modal', onclick: (e) => { if (e.target === e.currentTarget) close(); } },
+    h('div', { class: 'modal-card' }, h('button', { class: 'x close', onclick: close }, '×'), h('h3', {}, title), body,
+      h('div', { class: 'line' }, actions.map(([label, fn, primary]) => h('button', { class: primary ? 'primary' : '', onclick: guard(async () => { await fn(); close(); }) }, label))))));
+}
+/** Show what a saved system would change in this table, and apply it on confirmation. */
+const previewSystem = guard(async (systemId, intro) => {
+  const { name, diff } = await api('GET', `/system/diff/${systemId}`);
+  const OP = { added: t('opAdded'), removed: t('opRemoved'), changed: t('opChanged') };
+  dialog(`${t('diffTitle')} : ${name}`, h('div', {}, intro && h('p', {}, intro),
+    !diff.length ? h('p', { class: 'hint' }, t('noDiff')) : h('ul', { class: 'diff' }, diff.map((d) => h('li', { class: d.op },
+      h('code', {}, d.path), ' ', h('b', {}, OP[d.op]), d.op === 'changed' ? [' : ', h('span', { class: 'dim' }, short(d.before)), ' → ', short(d.after)] : d.op === 'added' ? [' : ', short(d.after)] : null)))),
+  [[t('applyNow'), async () => { await api('POST', `/system/apply/${systemId}`); S.draft = null; await loadState(); renderAll(); toast(t('saved'), false); }, true], [t('cancel'), () => {}]]);
+});
+/** System tab, top: save this table's rules to the library, update a saved one, apply one. */
+function systemLibrary() {
+  const pick = (label, fn) => h('select', { onchange: (e) => { const id = Number(e.target.value); e.target.value = ''; if (id) fn(id); } },
+    h('option', { value: '' }, label), S.savedSystems.map((x) => h('option', { value: x.id }, x.name)));
+  const reloadLib = async () => { S.savedSystems = (await request('GET', '/admin/api/systems')).systems; renderPanel(); };
+  return h('section', { class: 'sec' }, h('h3', {}, t('systemsLib')), h('div', { class: 'line' },
+    h('button', { onclick: guard(async () => { const name = prompt(t('systemName'), S.system.name); if (!name) return; await request('POST', '/admin/api/systems', { name, table: S.table.slug }); await reloadLib(); toast(t('saved'), false); }) }, t('saveSystemAs')),
+    S.savedSystems.length > 0 && pick(t('updateSystem'), guard(async (id) => { if (!confirm(t('confirmOverwrite'))) return; await request('PATCH', `/admin/api/systems/${id}`, { table: S.table.slug }); await reloadLib(); toast(t('saved'), false); })),
+    S.savedSystems.length > 0 && pick(t('applySystem'), (id) => previewSystem(id))));
 }
 
 // ------------------------------------------------------------------ system editor (GM)
@@ -822,7 +1006,7 @@ function systemPanel() {
     h('input', { type: 'number', class: 'n', value: k, onchange: (e) => { delete draft.knowledgeTiers[k]; draft.knowledgeTiers[Number(e.target.value) || 1] = v; renderPanel(); } }), '→',
     h('input', { type: 'number', class: 'n', value: v, onchange: (e) => { draft.knowledgeTiers[k] = Number(e.target.value) || 0; } }),
     h('button', { class: 'x', onclick: () => { delete draft.knowledgeTiers[k]; renderPanel(); } }, '×')));
-  return h('div', { class: 'pad' },
+  return h('div', { class: 'pad' }, systemLibrary(),
     h('div', { class: 'line' }, h('button', { class: 'primary', onclick: save }, t('save')),
       h('button', { onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await api('POST', '/system/reset'); S.draft = null; await loadState(); renderAll(); }) }, t('reset')),
       h('button', { onclick: () => { const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(draft, null, 2)], { type: 'application/json' })), download: `${draft.id || 'system'}.json` }); a.click(); } }, t('export')),

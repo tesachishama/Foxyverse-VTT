@@ -182,9 +182,15 @@ Turn on **Fog** (and **Darkness** for a dark map). Draw walls with the tools at 
 
 ### 7. Journal, sound, compendium
 *Journal*: write notes and handouts, choose who sees them, press **Show to players** to pop one open on every screen. *Sound*: upload audio and start sounds for everyone at once.
-*Compendium*: save items, spells, talents and NPC templates from sheets (the `⇪` button) and let players copy items, spells and talents onto their sheets.
+*Compendium*: every item and spell named on a sheet enters the table's compendium by itself. Players see the entries on the sheets they can see, plus the ones you tick `👁`,
+and the NPCs you list (name and picture only). The *Global* view shows every table and the entries outside tables, with filters on tables and campaigns; *Add to this table* makes a copy.
 
-### 8. Make the rules yours
+### 8. Campaigns and saved systems (GM home)
+A **campaign** ties tables of one story together: pick it in a table's *Table settings* (or when creating a table); what the table creates carries it, which the global compendium can filter on.
+A table's rules can be **saved** under a name (*System* tab, *System library*) and applied to another table after a **preview of the differences**. A campaign can have a **linked system**:
+new tables of the campaign start with it, and choosing the campaign for an existing table offers to apply it.
+
+### 9. Make the rules yours
 **System** tab (GM): edit stats, derived formulas, roll types, knowledge tiers and the rules text of **this table** (each table has its own copy); changes apply to its sheets instantly. Export / import the whole system as a JSON file.
 
 ---
@@ -270,7 +276,11 @@ Upload MP3, OGG, WAV, M4A, FLAC or WebM. Sounds start for every connected client
 Browsers block sound until the page has been clicked once, so an *Enable sound* button appears when needed.
 
 ### Compendium
-Items, spells and talents are shared (players can copy them onto their sheets); NPC templates are GM-only and create a character plus a token in one click. Entries are created from sheets and can be renamed or deleted.
+* **Per table:** items (by category) and spells, plus an NPC list. An item or spell named on a sheet creates an *auto* entry (matched by kind and name, case-insensitive) that follows the last saved sheet until the GM edits it,
+  and disappears when no sheet carries it any more (unless it is visible). The GM edits entries in place and creates new ones; talents stay on sheets.
+* **Players** see an entry if it is on a sheet they can edit or view, or if the GM ticked it visible. NPCs listed by the GM show their name and picture only, never the sheet.
+* **Global (GM):** all tables and entries outside any table, filtered by table and campaign. *Add to this table* copies an entry (or an NPC sheet); the copy remembers its original,
+  and if that original lives outside tables and changes later, the copy shows **↻ Update**.
 
 ### System editor
 Forms for stats (id, label, aliases), character creation values, derived formulas (with a live result against the selected character), quick rolls, roll types, knowledge tiers and rules text, plus a raw JSON view.
