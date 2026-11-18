@@ -98,21 +98,6 @@ test('journal visibility: gm / all / specific players; show pushes to viewers', 
   assert.equal((await pip('GET', '/state')).body.journals.length, 1);
 });
 
-test('compendium: players see items/spells/talents but not NPC templates; templates instantiate with a token', async () => {
-  await gm('POST', '/compendium', { kind: 'item', name: 'Round shield', data: { name: 'Round shield', type: 'armor', pdef: 2, bonuses: { strength: 1, bogus: 5 } } });
-  await gm('POST', '/compendium', { kind: 'spell', name: 'Spark', data: { name: 'Spark', cost: 2, costType: 'mp' } });
-  const npc = await gm('POST', '/compendium', { kind: 'actor', name: 'Goblin', data: { bio: { level: 2 }, stats: { constitution: { base: 8 } } } });
-  const view = (await pip('GET', '/state')).body.compendium;
-  assert.deepEqual(view.map((c) => c.kind).sort(), ['item', 'spell']);
-  assert.deepEqual(view.find((c) => c.kind === 'item').data.bonuses, { strength: 1 }); // unknown stat dropped
-  assert.equal((await pip('POST', '/compendium', { kind: 'item', name: 'x', data: {} })).status, 404);
-  const scene = await activeScene();
-  const made = await gm('POST', `/compendium/${npc.body.id}/instantiate`, { sceneId: scene.id, name: 'Gob 1' });
-  assert.equal(made.body.name, 'Gob 1'); assert.equal(made.body.computed.derived.maxhp, 24); // con 8 * (lvl 2 + 1)
-  assert.equal(made.body.data.hp.cur, 24); // spawned at full HP
-  assert.ok((await gm('GET', '/state')).body.tokens.some((t) => t.actorId === made.body.id));
-});
-
 test('equipment slots through the API: slots are validated, deduplicated and drive stats', async () => {
   const hero = await gm('POST', '/actors', { name: 'Knight' });
   const d = hero.body.data;

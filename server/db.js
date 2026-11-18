@@ -96,6 +96,26 @@ if (added && OWNED.some((t) => db.prepare(`SELECT 1 FROM ${t} LIMIT 1`).get())) 
   console.log('Migrated v1 data into the table "test".');
 }
 
+// ---- v2 Phase B: campaigns (reference tags across tables), a library of saved systems, a richer compendium.
+db.exec(`
+CREATE TABLE IF NOT EXISTS systems (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, data TEXT NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS campaigns (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, system_id INTEGER REFERENCES systems(id) ON DELETE SET NULL, created INTEGER NOT NULL);
+`);
+const CAMPAIGN = 'INTEGER REFERENCES campaigns(id) ON DELETE SET NULL';
+addColumn('game_tables', 'campaign_id', CAMPAIGN);
+addColumn('actors', 'campaign_id', CAMPAIGN);
+addColumn('actors', 'shown', 'INTEGER NOT NULL DEFAULT 0');        // listed to players in the compendium's NPC list (name + picture only)
+addColumn('compendium', 'campaign_id', CAMPAIGN);
+const richer = addColumn('compendium', 'visible', 'INTEGER NOT NULL DEFAULT 0'); // the GM's "show" toggle
+addColumn('compendium', 'auto', 'INTEGER NOT NULL DEFAULT 0');      // created from a sheet and not touched by the GM since
+addColumn('compendium', 'updated', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('compendium', 'source_id', 'INTEGER');                     // copied from this entry (no foreign key: the original may go)
+addColumn('compendium', 'source_updated', 'INTEGER');                // ...as it was at that time
+if (richer) {
+  // NPCs are sheets now and talents stay on sheets: their old compendium entries go.
+  db.exec("DELETE FROM compendium WHERE kind NOT IN ('item', 'spell'); UPDATE compendium SET updated = created;");
+}
+
 const systems = new Map(); // table id -> parsed system (cache)
 export function getSystem(tableId) {
   if (!systems.has(tableId)) {

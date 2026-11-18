@@ -13,6 +13,7 @@ import { db, UPLOAD_DIR, getSystem, setSystem, forgetSystem, loadDefaultSystem }
 import { parseCommand, evaluate, evaluateStatic, FormulaError } from './engine.js';
 import { validateSystem, defaultActorData, sanitizeActorData, actorContext, pointBudget, executeRoll, applyRoll, castSpell, undoApply, resourceMaxes, followMax, fillResources } from './rules.js';
 import { logServerError } from './log.js';
+import { diffSystems } from './sysdiff.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -43,8 +44,32 @@ const tokenView = (t) => ({ id: t.id, sceneId: t.scene_id, name: t.name, x: t.x,
 const soundView = (s) => ({ id: s.id, name: s.name, url: s.url, loop: !!s.loop, volume: s.volume });
 const journalView = (j) => ({ id: j.id, title: j.title, body: j.body, image: j.image, visibility: jparse(j.visibility, 'gm'), updated: j.updated });
 const canSeeJournal = (u, j) => { const v = jparse(j.visibility, 'gm'); return u.role === 'gm' || v === 'all' || (Array.isArray(v) && v.includes(u.id)); };
-const compView = (c) => ({ id: c.id, kind: c.kind, name: c.name, data: jparse(c.data, {}) });
-const canSeeComp = (u, c) => u.role === 'gm' || c.kind !== 'actor';
+// ---- compendium entries (items and spells). They link to sheets by kind + name, case-insensitive.
+const compKey = (name) => String(name ?? '').trim().toLowerCase();
+function compView(c, u = GM) {
+  const data = jparse(c.data, {});
+  const v = { id: c.id, kind: c.kind, name: c.name, category: c.kind === 'item' ? data.type ?? 'other' : 'spell', data };
+  if (u.role !== 'gm') return v;
+  const src = c.source_id ? getRow('compendium', c.source_id) : null;
+  return { ...v, visible: !!c.visible, auto: !!c.auto, campaignId: c.campaign_id ?? null, updated: c.updated,
+    // a copy of an entry from outside any table that changed since: the GM may want to update the copy
+    source: c.source_id ? { id: c.source_id, exists: !!src, stale: !!src && src.table_id == null && src.updated > (c.source_updated ?? 0) } : null };
+}
+/** "kind:name" of every item and spell on the sheets this user can see. */
+function namesSeenBy(u, tableId) {
+  const names = new Set();
+  for (const a of db.prepare('SELECT id, data FROM actors WHERE table_id = ?').all(tableId)) {
+    if (!canSeeActor(u, a)) continue;
+    const d = jparse(a.data, {});
+    for (const x of Array.isArray(d.items) ? d.items : []) names.add('item:' + compKey(x?.name));
+    for (const x of Array.isArray(d.spells) ? d.spells : []) names.add('spell:' + compKey(x?.name));
+  }
+  return names;
+}
+/** Players see an entry when the GM ticked "visible", or when it is on a sheet they can edit or view. */
+const canSeeComp = (u, c, names) => u.role === 'gm' || !!c.visible || (names ?? namesSeenBy(u, c.table_id)).has(`${c.kind}:${compKey(c.name)}`);
+const npcsOf = (tableId) => db.prepare('SELECT id, name, data FROM actors WHERE table_id = ? AND shown = 1 ORDER BY name COLLATE NOCASE').all(tableId)
+  .map((a) => ({ id: a.id, name: a.name, portrait: jparse(a.data, {}).portrait || null }));
 const chatView = (m) => ({ id: m.id, userId: m.user_id, userName: m.user_name, actorId: m.actor_id, whisper: m.whisper, body: JSON.parse(m.body), ts: m.ts });
 const canSeeChat = (u, m) => !m.whisper || u.role === 'gm' || m.user_id === u.id;
 
@@ -58,7 +83,8 @@ function actorView(row, u) {
   const sys = getSystem(row.table_id);
   const data = sanitizeActorData(JSON.parse(row.data), sys);
   const c = actorContext(sys, data);
-  return { id: row.id, name: row.name, perm: permOf(u, row.id), perms: u.role === 'gm' ? permsOf(row.id) : undefined, data,
+  const gm = u.role === 'gm';
+  return { id: row.id, name: row.name, perm: permOf(u, row.id), perms: gm ? permsOf(row.id) : undefined, shown: gm ? !!row.shown : undefined, campaignId: gm ? row.campaign_id ?? null : undefined, data,
     computed: { stats: c.stats, derived: c.derived, errors: c.errors, pdef: c.pdef, mdef: c.mdef, points: pointBudget(sys, data) } };
 }
 
@@ -112,7 +138,8 @@ const pushToken = (row, by) => {
   if (!pub) broadcast(sc.table_id, { type: 'token', op: 'delete', data: { id: row.id }, by }, (u) => u.role !== 'gm');
 };
 const pushJournal = (row) => broadcast(row.table_id, (u) => (canSeeJournal(u, row) ? { type: 'journal', op: 'upsert', data: journalView(row) } : { type: 'journal', op: 'delete', data: { id: row.id } }));
-const pushComp = (row) => broadcast(row.table_id, { type: 'comp', op: 'upsert', data: compView(row) }, (u) => canSeeComp(u, row));
+const pushComp = (row) => broadcast(row.table_id, (u) => (canSeeComp(u, row) ? { type: 'comp', op: 'upsert', data: compView(row, u) } : { type: 'comp', op: 'delete', data: { id: row.id } }));
+const pushNpcs = (tableId) => broadcast(tableId, { type: 'npcs', data: npcsOf(tableId) });
 const pushChat = (row) => broadcast(row.table_id, { type: 'chat', op: 'upsert', data: chatView(row) }, (u) => canSeeChat(u, row));
 const playingByTable = new Map(); // table id -> Map(sound id -> { startedAt })
 const playingOf = (tableId) => { if (!playingByTable.has(tableId)) playingByTable.set(tableId, new Map()); return playingByTable.get(tableId); };
@@ -203,21 +230,23 @@ function cleanSlug(v) {
 const tableName = (v, d) => String(v ?? d ?? '').trim().slice(0, 60) || d || 'Table';
 const adminTableView = (t) => {
   const slots = slotsOf(t.id);
-  return { ...tableView(t), players: slots.length, online: slots.filter(isOnline).length };
+  return { ...tableView(t), campaignId: t.campaign_id ?? null, players: slots.length, online: slots.filter(isOnline).length };
 };
 admin('GET', '/tables', () => ({ tables: db.prepare('SELECT * FROM game_tables ORDER BY name').all().map(adminTableView), devMode: !ADMIN_SECRET }));
 admin('POST', '/tables', ({ body }) => {
   const slug = cleanSlug(body.slug);
   if (tableBySlug(slug)) throw bad('That address is taken');
-  db.prepare('INSERT INTO game_tables (slug, name, listed, system, created) VALUES (?,?,?,?,?)').run(slug, tableName(body.name, slug), body.listed === false ? 0 : 1, JSON.stringify(loadDefaultSystem()), now());
+  // a table of a campaign starts with the campaign's system, otherwise with the default rules
+  const camp = campaignId(body.campaignId), linked = camp ? getRow('systems', getRow('campaigns', camp).system_id) : null;
+  db.prepare('INSERT INTO game_tables (slug, name, listed, system, created, campaign_id) VALUES (?,?,?,?,?,?)').run(slug, tableName(body.name, slug), body.listed === false ? 0 : 1, linked ? linked.data : JSON.stringify(loadDefaultSystem()), now(), camp);
   return adminTableView(tableBySlug(slug));
 });
 admin('PATCH', '/tables/:slug', ({ params, body }) => {
   const cur = tableBySlug(params.slug); if (!cur) throw notFound();
   const slug = body.slug !== undefined ? cleanSlug(body.slug) : cur.slug;
   if (slug !== cur.slug && tableBySlug(slug)) throw bad('That address is taken');
-  db.prepare('UPDATE game_tables SET slug = ?, name = ?, listed = ? WHERE id = ?').run(slug, body.name !== undefined ? tableName(body.name, cur.name) : cur.name,
-    body.listed !== undefined ? (body.listed ? 1 : 0) : cur.listed, cur.id);
+  db.prepare('UPDATE game_tables SET slug = ?, name = ?, listed = ?, campaign_id = ? WHERE id = ?').run(slug, body.name !== undefined ? tableName(body.name, cur.name) : cur.name,
+    body.listed !== undefined ? (body.listed ? 1 : 0) : cur.listed, body.campaignId !== undefined ? campaignId(body.campaignId) : cur.campaign_id, cur.id);
   const row = getRow('game_tables', cur.id);
   broadcast(cur.id, { type: 'table', data: tableView(row) }); // a new address sends everyone to it
   return adminTableView(row);
@@ -277,7 +306,8 @@ tbl('GET', '/state', 'player', ({ user, table }) => {
     playing: [...playingOf(table.id)].map(([id, v]) => ({ id, startedAt: v.startedAt })),
     serverTime: now(),
     journals: db.prepare('SELECT * FROM journals WHERE table_id = ? ORDER BY title').all(table.id).filter((j) => canSeeJournal(user, j)).map(journalView),
-    compendium: db.prepare('SELECT * FROM compendium WHERE table_id = ? ORDER BY kind, name').all(table.id).filter((c) => canSeeComp(user, c)).map(compView),
+    compendium: (() => { const names = gm ? null : namesSeenBy(user, table.id); return db.prepare('SELECT * FROM compendium WHERE table_id = ? ORDER BY kind, name COLLATE NOCASE').all(table.id).filter((c) => canSeeComp(user, c, names)).map((c) => compView(c, user)); })(),
+    npcs: npcsOf(table.id),
     actors: db.prepare('SELECT * FROM actors WHERE table_id = ? ORDER BY name').all(table.id).filter((a) => canSeeActor(user, a)).map((a) => actorView(a, user)),
     chat: chat.map(chatView),
   };
@@ -436,7 +466,8 @@ tbl('DELETE', '/tokens/:id', 'gm', ({ table, by, params }) => {
 // ---- actors (sheets). Only the GM creates and deletes them; players edit the ones they have the "edit" right on.
 function insertActor(table, name, data) {
   const t = now();
-  const r = db.prepare('INSERT INTO actors (table_id, name, owner_id, data, created, updated) VALUES (?,?,?,?,?,?)').run(table.id, String(name ?? 'New character').slice(0, 80) || 'New character', null, JSON.stringify(data), t, t);
+  const r = db.prepare('INSERT INTO actors (table_id, name, owner_id, data, created, updated, campaign_id) VALUES (?,?,?,?,?,?,?)').run(table.id, String(name ?? 'New character').slice(0, 80) || 'New character', null, JSON.stringify(data), t, t, table.campaign_id ?? null);
+  syncCompendium(table);
   return getRow('actors', r.lastInsertRowid);
 }
 tbl('POST', '/actors', 'gm', ({ table, by, body }) => {
@@ -459,9 +490,15 @@ tbl('PATCH', '/actors/:id', 'player', ({ user, table, by, params, body }) => {
     const next = sanitizeActorData(body.data, sys);
     data = followMax(resourceMaxes(sys, sanitizeActorData(data, sys)), resourceMaxes(sys, next), next);
   }
+  if (body.shown !== undefined) { // list it to players in the compendium (name + picture only)
+    if (user.role !== 'gm') throw forbidden();
+    db.prepare('UPDATE actors SET shown = ? WHERE id = ?').run(body.shown ? 1 : 0, cur.id);
+  }
   db.prepare('UPDATE actors SET name=?, data=?, updated=? WHERE id=?').run(name, JSON.stringify(data), now(), cur.id);
   const row = getRow('actors', cur.id);
   pushActor(row, by);
+  if (body.data) syncCompendium(table);
+  if (row.shown || cur.shown) pushNpcs(table.id);
   const oldPortrait = jparse(cur.data, {}).portrait || null, newPortrait = data.portrait || null;
   if (body.data && oldPortrait !== newPortrait) {
     db.prepare('UPDATE tokens SET image = ? WHERE actor_id = ?').run(newPortrait, cur.id);
@@ -487,6 +524,8 @@ tbl('DELETE', '/actors/:id', 'gm', ({ table, params }) => {
   const cur = inTable('actors', params.id, table.id); if (!cur) throw notFound();
   db.prepare('DELETE FROM actors WHERE id = ?').run(cur.id);
   broadcast(table.id, { type: 'actor', op: 'delete', data: { id: cur.id } });
+  syncCompendium(table);
+  if (cur.shown) pushNpcs(table.id);
   return { ok: true };
 });
 tbl('POST', '/actors/:id/cast', 'player', ({ user, table, by, params, body }) => {
@@ -705,46 +744,179 @@ tbl('POST', '/journals/:id/show', 'gm', ({ table, params }) => {
   return journalView(row);
 });
 
-// ---- compendium (reusable items, spells, talents and NPC templates), per table for now
-const COMP_KINDS = ['item', 'spell', 'talent', 'actor'];
+// ---- compendium: the items and spells of a table, plus the GM's global view across tables and outside them.
+// Everything named on a sheet gets an entry by itself ("auto"); it follows the last saved sheet until the GM edits it,
+// and goes away when no sheet carries it any more (unless the GM made it visible).
+const COMP_KINDS = ['item', 'spell'];
 function cleanComp(sys, kind, data) {
-  if (kind === 'actor') return sanitizeActorData(data, sys);
-  const key = { item: 'items', spell: 'spells', talent: 'talents' }[kind];
-  const e = sanitizeActorData({ [key]: [data] }, sys)[key][0];
-  if (!e) throw bad('Bad entry');
+  if (!COMP_KINDS.includes(kind)) throw bad('Bad kind');
+  const key = { item: 'items', spell: 'spells' }[kind];
+  const e = sanitizeActorData({ [key]: [data && typeof data === 'object' ? data : {}] }, sys)[key][0];
   delete e.id;
   if (kind === 'item') e.usedSlots = []; // a template is never "equipped"
   return e;
 }
+const compName = (v, d) => String(v ?? d ?? '').trim().slice(0, 80) || d || 'Entry';
+const compInTableByName = (tableId, kind, name) => db.prepare('SELECT * FROM compendium WHERE table_id IS ? AND kind = ? AND lower(trim(name)) = ?').get(tableId, kind, compKey(name));
+function insertComp(tableId, kind, name, data, { visible = 0, auto = 0, campaignId = null, sourceId = null, sourceUpdated = null } = {}) {
+  const t = now();
+  const r = db.prepare('INSERT INTO compendium (table_id, kind, name, data, created, updated, visible, auto, campaign_id, source_id, source_updated) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+    .run(tableId, kind, name, JSON.stringify(data), t, t, visible ? 1 : 0, auto ? 1 : 0, campaignId, sourceId, sourceUpdated);
+  return getRow('compendium', r.lastInsertRowid);
+}
+function syncCompendium(table) {
+  const sys = getSystem(table.id);
+  const onSheets = new Map(); // "kind:name" -> the item / spell on the most recently saved sheet
+  for (const a of db.prepare('SELECT data FROM actors WHERE table_id = ? ORDER BY updated, id').all(table.id)) {
+    const d = jparse(a.data, {});
+    for (const [kind, list] of [['item', d.items], ['spell', d.spells]]) for (const x of Array.isArray(list) ? list : []) {
+      const k = compKey(x?.name); if (k) onSheets.set(`${kind}:${k}`, { kind, name: compName(x.name), data: x });
+    }
+  }
+  const rows = db.prepare('SELECT * FROM compendium WHERE table_id = ?').all(table.id);
+  const byKey = new Map(rows.map((r) => [`${r.kind}:${compKey(r.name)}`, r]));
+  for (const [key, v] of onSheets) {
+    const r = byKey.get(key), data = JSON.stringify(cleanComp(sys, v.kind, v.data));
+    if (!r) pushComp(insertComp(table.id, v.kind, v.name, JSON.parse(data), { auto: 1, campaignId: table.campaign_id ?? null }));
+    else if (r.auto && (r.data !== data || r.name !== v.name)) {
+      db.prepare('UPDATE compendium SET name = ?, data = ?, updated = ? WHERE id = ?').run(v.name, data, now(), r.id);
+      pushComp(getRow('compendium', r.id));
+    }
+  }
+  for (const r of rows) if (r.auto && !r.visible && !onSheets.has(`${r.kind}:${compKey(r.name)}`)) {
+    db.prepare('DELETE FROM compendium WHERE id = ?').run(r.id);
+    broadcast(table.id, { type: 'comp', op: 'delete', data: { id: r.id } });
+  }
+}
 const compIn = (table, id) => { const c = inTable('compendium', id, table.id); if (!c) throw notFound(); return c; };
+function patchComp(cur, body, sys) {
+  const name = body.name !== undefined ? compName(body.name, cur.name) : cur.name;
+  if (compKey(name) !== compKey(cur.name) && compInTableByName(cur.table_id, cur.kind, name)) throw bad('An entry of that name already exists');
+  const edited = body.name !== undefined || body.data !== undefined; // the GM's own version from now on
+  db.prepare('UPDATE compendium SET name = ?, data = ?, visible = ?, campaign_id = ?, auto = ?, updated = ? WHERE id = ?').run(
+    name, body.data !== undefined ? JSON.stringify(cleanComp(sys, cur.kind, body.data)) : cur.data,
+    body.visible !== undefined ? (body.visible ? 1 : 0) : cur.visible, body.campaignId !== undefined ? campaignId(body.campaignId) : cur.campaign_id,
+    edited ? 0 : cur.auto, edited ? now() : cur.updated, cur.id);
+  const row = getRow('compendium', cur.id);
+  if (row.table_id != null) pushComp(row);
+  return row;
+}
+tbl('GET', '/compendium', 'player', ({ user, table }) => { // a player's fresh view (what their sheets carry changes all the time)
+  const names = user.role === 'gm' ? null : namesSeenBy(user, table.id);
+  return { entries: db.prepare('SELECT * FROM compendium WHERE table_id = ? ORDER BY kind, name COLLATE NOCASE').all(table.id).filter((c) => canSeeComp(user, c, names)).map((c) => compView(c, user)), npcs: npcsOf(table.id) };
+});
 tbl('POST', '/compendium', 'gm', ({ table, body }) => {
-  if (!COMP_KINDS.includes(body.kind)) throw bad('Bad kind');
-  const r = db.prepare('INSERT INTO compendium (table_id, kind, name, data, created) VALUES (?,?,?,?,?)').run(table.id, body.kind, String(body.name ?? 'Entry').slice(0, 80) || 'Entry', JSON.stringify(cleanComp(getSystem(table.id), body.kind, body.data ?? {})), now());
-  const row = getRow('compendium', r.lastInsertRowid); pushComp(row);
+  const kind = body.kind, name = compName(body.name, body.data?.name);
+  const data = cleanComp(getSystem(table.id), kind, { ...(body.data ?? {}), name });
+  if (compInTableByName(table.id, kind, name)) throw bad('An entry of that name already exists');
+  const row = insertComp(table.id, kind, name, data, { visible: body.visible, campaignId: table.campaign_id ?? null }); pushComp(row);
   return compView(row);
 });
-tbl('PATCH', '/compendium/:id', 'gm', ({ table, params, body }) => {
-  const cur = compIn(table, params.id);
-  db.prepare('UPDATE compendium SET name=?, data=? WHERE id=?').run(body.name !== undefined ? String(body.name).slice(0, 80) || cur.name : cur.name, body.data ? JSON.stringify(cleanComp(getSystem(table.id), cur.kind, body.data)) : cur.data, cur.id);
-  const row = getRow('compendium', cur.id); pushComp(row);
-  return compView(row);
-});
+tbl('PATCH', '/compendium/:id', 'gm', ({ table, params, body }) => compView(patchComp(compIn(table, params.id), body, getSystem(table.id))));
 tbl('DELETE', '/compendium/:id', 'gm', ({ table, params }) => {
   const { id } = compIn(table, params.id);
   db.prepare('DELETE FROM compendium WHERE id = ?').run(id);
   broadcast(table.id, { type: 'comp', op: 'delete', data: { id } });
   return { ok: true };
 });
-tbl('POST', '/compendium/:id/instantiate', 'gm', ({ table, by, params, body }) => {
-  const c = compIn(table, params.id); if (c.kind !== 'actor') throw bad('Only actor templates can be instantiated');
-  const sys = getSystem(table.id), data = fillResources(sys, sanitizeActorData(jparse(c.data, {}), sys)); // spawned at full HP/mana/favors
-  const actor = insertActor(table, body.name ?? c.name, data); pushActor(actor, by);
-  const scene = body.sceneId ? inTable('scenes', body.sceneId, table.id) : null;
-  if (scene) {
-    const tr = db.prepare('INSERT INTO tokens (scene_id, name, x, y, size, image, color, actor_id, hidden, vision, light) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(scene.id, actor.name, num(body.x, scene.width / 2), num(body.y, scene.height / 2), 1, data.portrait || null, '#eba5ff', actor.id, 0, 0, 0);
-    pushToken(getRow('tokens', tr.lastInsertRowid), by);
-  }
-  return actorView(actor, GM);
+/** "Add to the current table": a copy (not a live link) that remembers its original. Replaces an entry of the same name. */
+tbl('POST', '/compendium/import', 'gm', ({ table, body }) => {
+  const src = getRow('compendium', body.id); if (!src) throw notFound();
+  if (src.table_id === table.id) throw bad('Already in this table');
+  const data = cleanComp(getSystem(table.id), src.kind, jparse(src.data, {}));
+  const same = compInTableByName(table.id, src.kind, src.name);
+  let row;
+  if (same) {
+    db.prepare('UPDATE compendium SET name = ?, data = ?, auto = 0, source_id = ?, source_updated = ?, updated = ? WHERE id = ?').run(src.name, JSON.stringify(data), src.id, src.updated, now(), same.id);
+    row = getRow('compendium', same.id);
+  } else row = insertComp(table.id, src.kind, src.name, data, { campaignId: table.campaign_id ?? null, sourceId: src.id, sourceUpdated: src.updated });
+  pushComp(row);
+  return compView(row);
+});
+tbl('POST', '/compendium/:id/refresh', 'gm', ({ table, params }) => { // take the original's current version
+  const cur = compIn(table, params.id);
+  const src = cur.source_id ? getRow('compendium', cur.source_id) : null; if (!src) throw bad('The original no longer exists');
+  db.prepare('UPDATE compendium SET name = ?, data = ?, auto = 0, source_updated = ?, updated = ? WHERE id = ?').run(src.name, JSON.stringify(cleanComp(getSystem(table.id), cur.kind, jparse(src.data, {}))), src.updated, now(), cur.id);
+  const row = getRow('compendium', cur.id); pushComp(row);
+  return compView(row);
+});
+tbl('POST', '/actors/import', 'gm', ({ table, by, body }) => { // copy an NPC (any table's sheet) into this table
+  const src = getRow('actors', body.id); if (!src || src.table_id == null) throw notFound();
+  const sys = getSystem(table.id);
+  const row = insertActor(table, src.name, sanitizeActorData(jparse(src.data, {}), sys));
+  pushActor(row, by);
+  return actorView(row, GM);
+});
+
+// The GM's global compendium: every entry of every table and outside tables, and every sheet (NPCs), with filters on the client.
+const slugOf = (tableId) => (tableId == null ? null : getRow('game_tables', tableId)?.slug ?? null);
+admin('GET', '/compendium', () => ({
+  entries: db.prepare('SELECT * FROM compendium ORDER BY kind, name COLLATE NOCASE').all().map((c) => ({ ...compView(c), table: slugOf(c.table_id) })),
+  npcs: db.prepare('SELECT id, name, data, table_id, campaign_id FROM actors WHERE table_id IS NOT NULL ORDER BY name COLLATE NOCASE').all()
+    .map((a) => { const d = jparse(a.data, {}); return { id: a.id, name: a.name, portrait: d.portrait || null, level: d.bio?.level ?? 1, table: slugOf(a.table_id), campaignId: a.campaign_id ?? null }; }),
+  tables: db.prepare('SELECT slug, name FROM game_tables ORDER BY name COLLATE NOCASE').all(),
+  campaigns: campaignList(),
+}));
+/** Entries outside any table. Bonuses are checked against the rules of the table the GM is looking from ("table"), or the default rules. */
+const contextSystem = (slug) => { const t = slug ? tableBySlug(slug) : null; return t ? getSystem(t.id) : loadDefaultSystem(); };
+const globalComp = (id) => { const c = getRow('compendium', id); if (!c) throw notFound(); return c; };
+admin('POST', '/compendium', ({ body }) => {
+  const name = compName(body.name, body.data?.name);
+  const data = cleanComp(contextSystem(body.table), body.kind, { ...(body.data ?? {}), name });
+  if (compInTableByName(null, body.kind, name)) throw bad('An entry of that name already exists');
+  return compView(insertComp(null, body.kind, name, data, { campaignId: campaignId(body.campaignId) }));
+});
+admin('PATCH', '/compendium/:id', ({ body, params }) => { const c = globalComp(params.id); return compView(patchComp(c, body, c.table_id != null ? getSystem(c.table_id) : contextSystem(body.table))); });
+admin('DELETE', '/compendium/:id', ({ params }) => {
+  const c = globalComp(params.id);
+  db.prepare('DELETE FROM compendium WHERE id = ?').run(c.id);
+  if (c.table_id != null) broadcast(c.table_id, { type: 'comp', op: 'delete', data: { id: c.id } });
+  return { ok: true };
+});
+
+// ---- campaigns: a tag for a story / world, outside tables. A table may have one; what it creates is tagged with it.
+const campaignView = (c) => ({ id: c.id, name: c.name, systemId: c.system_id ?? null });
+const campaignList = () => db.prepare('SELECT * FROM campaigns ORDER BY name COLLATE NOCASE').all().map(campaignView);
+function campaignId(v) { if (v == null || v === '') return null; const c = getRow('campaigns', v); if (!c) throw bad('Unknown campaign'); return c.id; }
+function systemId(v) { if (v == null || v === '') return null; const s = getRow('systems', v); if (!s) throw bad('Unknown system'); return s.id; }
+const campaignName = (v, d) => String(v ?? d ?? '').trim().slice(0, 60) || d || 'Campaign';
+admin('GET', '/campaigns', () => ({ campaigns: campaignList() }));
+admin('POST', '/campaigns', ({ body }) => {
+  const r = db.prepare('INSERT INTO campaigns (name, system_id, created) VALUES (?,?,?)').run(campaignName(body.name, 'Campaign'), systemId(body.systemId), now());
+  return campaignView(getRow('campaigns', r.lastInsertRowid));
+});
+admin('PATCH', '/campaigns/:id', ({ params, body }) => {
+  const c = getRow('campaigns', params.id); if (!c) throw notFound();
+  db.prepare('UPDATE campaigns SET name = ?, system_id = ? WHERE id = ?').run(body.name !== undefined ? campaignName(body.name, c.name) : c.name, body.systemId !== undefined ? systemId(body.systemId) : c.system_id, c.id);
+  return campaignView(getRow('campaigns', c.id));
+});
+admin('DELETE', '/campaigns/:id', ({ params }) => { db.prepare('DELETE FROM campaigns WHERE id = ?').run(idOf(params.id)); return { ok: true }; });
+
+// ---- system library: a table's rules saved under a name, to apply (after a preview of the differences) to other tables.
+const systemView = (s) => ({ id: s.id, name: s.name, updated: s.updated, systemName: jparse(s.data, {}).name ?? '',
+  campaigns: db.prepare('SELECT id FROM campaigns WHERE system_id = ?').all(s.id).map((c) => c.id) });
+const savedSystem = (id) => { const s = getRow('systems', id); if (!s) throw notFound('Unknown system'); return s; };
+const systemName = (v, d) => String(v ?? d ?? '').trim().slice(0, 60) || d || 'System';
+const systemFromTable = (slug) => { const t = tableBySlug(slug); if (!t) throw bad('Unknown table'); return JSON.stringify(getSystem(t.id)); };
+admin('GET', '/systems', () => ({ systems: db.prepare('SELECT * FROM systems ORDER BY name COLLATE NOCASE').all().map(systemView) }));
+admin('POST', '/systems', ({ body }) => {
+  const t = now();
+  const r = db.prepare('INSERT INTO systems (name, data, created, updated) VALUES (?,?,?,?)').run(systemName(body.name), systemFromTable(body.table), t, t);
+  return systemView(getRow('systems', r.lastInsertRowid));
+});
+admin('PATCH', '/systems/:id', ({ params, body }) => { // rename, and/or overwrite with a table's current rules
+  const s = savedSystem(params.id);
+  db.prepare('UPDATE systems SET name = ?, data = ?, updated = ? WHERE id = ?').run(body.name !== undefined ? systemName(body.name, s.name) : s.name, body.table ? systemFromTable(body.table) : s.data, body.table ? now() : s.updated, s.id);
+  return systemView(getRow('systems', s.id));
+});
+admin('DELETE', '/systems/:id', ({ params }) => { db.prepare('DELETE FROM systems WHERE id = ?').run(savedSystem(params.id).id); return { ok: true }; });
+tbl('GET', '/system/diff/:id', 'gm', ({ table, params }) => {
+  const s = savedSystem(params.id);
+  return { name: s.name, diff: diffSystems(getSystem(table.id), jparse(s.data, {})) };
+});
+tbl('POST', '/system/apply/:id', 'gm', ({ table, params }) => {
+  let sys; try { sys = validateSystem(jparse(savedSystem(params.id).data, {})); } catch (e) { throw bad(e.message); }
+  return changeSystem(table, sys);
 });
 
 // ------------------------------------------------------------------ server
@@ -814,6 +986,8 @@ const server = createServer(async (req, res) => {
     return json(res, 500, { error: 'Server error' });
   }
 });
+
+for (const t of db.prepare('SELECT * FROM game_tables').all()) syncCompendium(t); // sheets saved before automatic entries existed
 
 server.listen(PORT, HOST, () => {
   console.log(`Foxyverse VTT listening on http://${HOST}:${PORT} (players: /, GM: /admin)`);

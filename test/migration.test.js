@@ -42,7 +42,7 @@ test('v1 data moves into the table "test" with its rules; v1 accounts are droppe
       INSERT INTO chat (user_id, user_name, body, ts) VALUES (2, 'Pip', '{"t":"text","text":"hello from v1"}', 1);
       INSERT INTO journals (title, visibility, created, updated) VALUES ('Lore', '"all"', 1, 1);
       INSERT INTO sounds (name, url, created) VALUES ('Rain', '/uploads/${'a'.repeat(64)}.mp3', 1);
-      INSERT INTO compendium (kind, name, data, created) VALUES ('spell', 'Spark', '{"name":"Spark"}', 1);`);
+      INSERT INTO compendium (kind, name, data, created) VALUES ('spell', 'Spark', '{"name":"Spark"}', 1), ('talent', 'Old talent', '{}', 1), ('actor', 'Old goblin', '{}', 1);`);
     db.prepare('INSERT INTO settings VALUES (?, ?)').run('system', JSON.stringify(sys));
     db.close();
   });
@@ -55,7 +55,8 @@ test('v1 data moves into the table "test" with its rules; v1 accounts are droppe
     assert.equal(st.actors[0].name, 'Old hero'); assert.deepEqual(st.actors[0].perms, {});
     assert.equal(st.actors[0].computed.derived.maxhp, 21); // con 7 * 3: the table kept the edited v1 rules
     assert.equal(st.chat[0].body.text, 'hello from v1');
-    assert.equal(st.journals.length, 1); assert.equal(st.sounds.length, 1); assert.equal(st.compendium.length, 1);
+    assert.equal(st.journals.length, 1); assert.equal(st.sounds.length, 1);
+    assert.deepEqual(st.compendium.map((c) => c.name), ['Spark']); // v1 NPC templates and talent entries are gone
     assert.equal((await srv.call('GET', '/admin/api/library')).body.scenes.length, 0); // nothing left outside a table
     assert.match(srv.logs(), /Migrated v1 data into the table "test"/);
     // a fresh table next to it gets the default rules
