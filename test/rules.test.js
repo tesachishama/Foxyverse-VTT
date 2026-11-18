@@ -135,3 +135,27 @@ test('nat grading follows the plugin: first die min/max shifts the grade, any di
   assert.equal(roll('/str +2', a, fixed(5)).translated, '1d20+2');
   assert.equal(roll('/pdmg 1d6+str', a, fixed(3)).translated, '1d6+10');
 });
+
+test('resources follow their maximum: +delta when it rises, capped when it falls', async () => {
+  const { resourceMaxes, followMax, fillResources } = await import('../server/rules.js');
+  const a = make({ stats: { constitution: 5 } });           // level 1: maxhp 10
+  assert.deepEqual([a.hp.cur, a.mp.cur, a.fav.cur], Object.values(resourceMaxes(sys, a))); // created full
+  const before = resourceMaxes(sys, a);
+  a.hp.cur = 4;                                              // wounded: 4/10
+  a.bio.level = 2;                                           // maxhp 15, maxfav 1
+  followMax(before, resourceMaxes(sys, a), a);
+  assert.equal(a.hp.cur, 9);                                 // +5, not refilled
+  const full = make(); const b0 = resourceMaxes(sys, full);
+  full.bio.level = 3; followMax(b0, resourceMaxes(sys, full), full);
+  assert.equal(full.hp.cur, 20); assert.equal(full.fav.cur, 2); // 10/10 -> 20/20, favors 1 -> 2
+  assert.equal(full.mp.cur, resourceMaxes(sys, full).mp);
+  const b1 = resourceMaxes(sys, full);
+  full.bio.level = 1; followMax(b1, resourceMaxes(sys, full), full);
+  assert.equal(full.hp.cur, 10); assert.equal(full.fav.cur, 1); // falls: capped at the new max
+  const low = make(); low.hp.cur = 3; const b2 = resourceMaxes(sys, low);
+  low.bio.level = 1; followMax(b2, resourceMaxes(sys, low), low);
+  assert.equal(low.hp.cur, 3);                               // unchanged max: untouched
+  const raw = { stats: {}, bio: { level: 1 } };              // raw stored data with no resources yet
+  followMax({ hp: 10 }, { hp: 12 }, raw); assert.equal(raw.hp.cur, 2);
+  assert.equal(fillResources(sys, sanitizeActorData({ bio: { level: 2 } }, sys)).hp.cur, 15);
+});

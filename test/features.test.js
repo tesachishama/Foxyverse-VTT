@@ -131,6 +131,7 @@ test('compendium: players see items/spells/talents but not NPC templates; templa
   const scene = (await call('GET', '/api/state', null, gm.cookie)).body.scenes.find((s) => s.active);
   const made = await call('POST', `/api/compendium/${npc.body.id}/instantiate`, { sceneId: scene.id, name: 'Gob 1' }, gm.cookie);
   assert.equal(made.body.name, 'Gob 1'); assert.equal(made.body.computed.derived.maxhp, 24); // con 8 * (lvl 2 + 1)
+  assert.equal(made.body.data.hp.cur, 24); // spawned at full HP
   assert.ok((await call('GET', '/api/state', null, gm.cookie)).body.tokens.some((t) => t.actorId === made.body.id));
 });
 
@@ -176,4 +177,29 @@ test('favor reroll: the GM pays a favor from the rolling character too', async (
   assert.equal(after.data.fav.cur, 0);
   const again = await call('POST', `/api/chat/${roll.body.id}/reroll`, null, gm.cookie);
   assert.equal(again.status, 400); assert.match(again.body.error, /favor/i);
+});
+
+test('current HP/mana/favors follow their max: sheet edits, system edits, creation', async () => {
+  const gm = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
+  const made = await call('POST', '/api/actors', { name: 'Grower', data: { bio: { level: 2 }, hp: { cur: 0 } } }, gm.cookie);
+  assert.equal(made.body.data.hp.cur, 15); // created full whatever data was sent (con 5 * (2+1))
+  const d = made.body.data; d.hp.cur = 5; d.bio.level = 3;
+  const up = await call('PATCH', `/api/actors/${made.body.id}`, { data: d }, gm.cookie);
+  assert.equal(up.body.data.hp.cur, 10); // max 15 -> 20: +5
+  d.hp.cur = 10; d.bio.level = 1;
+  assert.equal((await call('PATCH', `/api/actors/${made.body.id}`, { data: d }, gm.cookie)).body.data.hp.cur, 10); // max 20 -> 10: capped (already 10)
+  d.stats.constitution.base = 4;
+  const down = await call('PATCH', `/api/actors/${made.body.id}`, { data: d }, gm.cookie);
+  assert.equal(down.body.data.hp.cur, 8);
+  const plain = await call('PATCH', `/api/actors/${made.body.id}`, { name: 'Grown' }, gm.cookie); // no data: nothing moves
+  assert.equal(plain.body.data.hp.cur, 8);
+  // a system formula change moves every character by its own delta
+  const sys = (await call('GET', '/api/system', null, gm.cookie)).body;
+  const hpF = sys.derived.find((x) => x.id === 'maxhp');
+  const old = hpF.formula; hpF.formula = `${old} + 10`;
+  assert.equal((await call('PUT', '/api/system', sys, gm.cookie)).status, 200);
+  const st = (await call('GET', '/api/state', null, gm.cookie)).body.actors.find((a) => a.id === made.body.id);
+  assert.equal(st.computed.derived.maxhp, 18); assert.equal(st.data.hp.cur, 18);
+  hpF.formula = old; await call('PUT', '/api/system', sys, gm.cookie);
+  assert.equal((await call('GET', '/api/state', null, gm.cookie)).body.actors.find((a) => a.id === made.body.id).data.hp.cur, 8);
 });

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypto';
 import { db, UPLOAD_DIR, getSystem, setSystem, loadDefaultSystem } from './db.js';
 import { parseCommand, evaluate, evaluateStatic, FormulaError } from './engine.js';
-import { validateSystem, defaultActorData, sanitizeActorData, actorContext, pointBudget, executeRoll, applyRoll, castSpell } from './rules.js';
+import { validateSystem, defaultActorData, sanitizeActorData, actorContext, pointBudget, executeRoll, applyRoll, castSpell, resourceMaxes, followMax, fillResources } from './rules.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -327,7 +327,7 @@ route('DELETE', '/api/tokens/:id', 'gm', ({ params, user }) => {
 route('POST', '/api/actors', 'user', ({ user, body }) => {
   const sys = getSystem();
   const owner = user.role === 'gm' && body.ownerId !== undefined ? (getRow('users', body.ownerId)?.id ?? null) : user.id;
-  const data = body.data ? sanitizeActorData(body.data, sys) : defaultActorData(sys);
+  const data = body.data ? fillResources(sys, sanitizeActorData(body.data, sys)) : defaultActorData(sys); // new characters start full
   const t = now();
   const r = db.prepare('INSERT INTO actors (name, owner_id, data, created, updated) VALUES (?,?,?,?,?)').run(String(body.name ?? 'New character').slice(0, 80), owner, JSON.stringify(data), t, t);
   const row = getRow('actors', r.lastInsertRowid);
@@ -342,7 +342,11 @@ function editableActor(user, id) {
 route('PATCH', '/api/actors/:id', 'user', ({ user, params, body }) => {
   const cur = editableActor(user, params.id), sys = getSystem();
   const name = body.name !== undefined ? String(body.name).slice(0, 80) || cur.name : cur.name;
-  const data = body.data ? sanitizeActorData(body.data, sys) : JSON.parse(cur.data);
+  let data = JSON.parse(cur.data);
+  if (body.data) { // a higher max (level, stats, gear) raises current HP/mana/favors by the same amount
+    const next = sanitizeActorData(body.data, sys);
+    data = followMax(resourceMaxes(sys, sanitizeActorData(data, sys)), resourceMaxes(sys, next), next);
+  }
   const owner = user.role === 'gm' && body.ownerId !== undefined ? (getRow('users', body.ownerId)?.id ?? null) : cur.owner_id;
   db.prepare('UPDATE actors SET name=?, owner_id=?, data=?, updated=? WHERE id=?').run(name, owner, JSON.stringify(data), now(), cur.id);
   const row = getRow('actors', cur.id);
@@ -464,12 +468,28 @@ route('DELETE', '/api/chat/:id', 'gm', ({ params }) => {
 
 // ---- system editor
 route('GET', '/api/system', 'user', () => getSystem());
+/** Swap the rules; every character's current HP/mana/favors follow the change of their maximum. */
+function changeSystem(next) {
+  const prev = getSystem();
+  db.exec('BEGIN');
+  try {
+    for (const row of db.prepare('SELECT id, data FROM actors').all()) {
+      const raw = jparse(row.data, {});
+      const before = JSON.stringify(raw);
+      followMax(resourceMaxes(prev, sanitizeActorData(raw, prev)), resourceMaxes(next, sanitizeActorData(raw, next)), raw);
+      if (JSON.stringify(raw) !== before) db.prepare('UPDATE actors SET data=?, updated=? WHERE id=?').run(JSON.stringify(raw), now(), row.id);
+    }
+    setSystem(next);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  broadcast({ type: 'refresh' });
+  return next;
+}
 route('PUT', '/api/system', 'gm', ({ body }) => {
   let sys; try { sys = validateSystem(body); } catch (e) { throw bad(e.message); }
-  setSystem(sys); broadcast({ type: 'refresh' });
-  return sys;
+  return changeSystem(sys);
 });
-route('POST', '/api/system/reset', 'gm', () => { const sys = loadDefaultSystem(); setSystem(sys); broadcast({ type: 'refresh' }); return sys; });
+route('POST', '/api/system/reset', 'gm', () => changeSystem(loadDefaultSystem()));
 route('POST', '/api/system/test', 'gm', ({ body }) => {
   const sys = getSystem();
   const row = body.actorId ? getRow('actors', body.actorId) : db.prepare('SELECT * FROM actors LIMIT 1').get();
@@ -574,7 +594,8 @@ route('DELETE', '/api/compendium/:id', 'gm', ({ params }) => {
 route('POST', '/api/compendium/:id/instantiate', 'gm', ({ user, params, body }) => {
   const c = getRow('compendium', params.id); if (!c || c.kind !== 'actor') throw bad('Only actor templates can be instantiated');
   const t = now();
-  const r = db.prepare('INSERT INTO actors (name, owner_id, data, created, updated) VALUES (?,?,?,?,?)').run(String(body.name ?? c.name).slice(0, 80), body.ownerId ? (getRow('users', body.ownerId)?.id ?? null) : null, c.data, t, t);
+  const sys = getSystem(), data = fillResources(sys, sanitizeActorData(jparse(c.data, {}), sys)); // spawned at full HP/mana/favors
+  const r = db.prepare('INSERT INTO actors (name, owner_id, data, created, updated) VALUES (?,?,?,?,?)').run(String(body.name ?? c.name).slice(0, 80), body.ownerId ? (getRow('users', body.ownerId)?.id ?? null) : null, JSON.stringify(data), t, t);
   const actor = getRow('actors', r.lastInsertRowid); pushActor(actor, user.id);
   const scene = body.sceneId ? getRow('scenes', body.sceneId) : null;
   if (scene) {

@@ -344,9 +344,19 @@ function appliedText(a) {
 // ------------------------------------------------------------------ sheets
 let saveTimer;
 const saveActor = (a) => { pending.add(a.id); clearTimeout(saveTimer); saveTimer = setTimeout(() => saveNow(a), 350); };
-const saveNow = guard(async (a) => {
-  clearTimeout(saveTimer);
+// Saves run one after another: each one must send the HP / mana / favors the previous one got back from the server.
+let saveChain = Promise.resolve();
+const saveNow = (a) => { clearTimeout(saveTimer); const p = saveChain.then(() => sendSave(a)); saveChain = p; return p; };
+const sendSave = guard(async (a) => {
+  const sent = { hp: a.data.hp.cur, mp: a.data.mp.cur, fav: a.data.fav.cur };
   const res = await api('PATCH', '/actors/' + a.id, { name: a.name, data: a.data });
+  // The server moves current values when a maximum changes (level, stats, gear); take them unless the user typed a new one meanwhile.
+  for (const k of ['hp', 'mp', 'fav']) {
+    if (a.data[k].cur !== sent[k] || res.data[k].cur === sent[k]) continue;
+    a.data[k].cur = res.data[k].cur;
+    const input = $(`[data-r="${k}"]`, panelEl);
+    if (input && document.activeElement !== input) input.value = res.data[k].cur;
+  }
   for (const k of ['talents', 'spells', 'items']) a.data[k].forEach((x, i) => { if (!x.id) x.id = res.data[k][i]?.id ?? ''; });
   a.data.items.forEach((x) => { if (x._k && x.id && S.openItems.has(x._k)) S.openItems.add(x.id); }); // a new card stays open once it has its real id
   a.computed = res.computed; pending.delete(a.id); patchComputed(a); map.redraw(); renderChatWho();
@@ -407,10 +417,10 @@ function sheetView(a) {
       h('label', { class: 'check' }, field(a, d, 'elemental', 'bool'), t('elemental'))));
 
   const res = section(t('hp') + ' / ' + t('mp') + ' / ' + t('fav'), h('div', { class: 'res-grid' },
-    h('label', {}, t('hp'), num(d.hp, 'cur', -9999), ' / ', C(a, 'derived.maxhp')),
+    h('label', {}, t('hp'), field(a, d.hp, 'cur', 'int', { min: -9999, class: 'n', 'data-r': 'hp' }), ' / ', C(a, 'derived.maxhp')),
     h('label', {}, t('temp'), num(d.hp, 'temp')),
-    h('label', {}, t('mp'), num(d.mp, 'cur'), ' / ', C(a, 'derived.maxmp')),
-    h('label', {}, t('fav'), num(d.fav, 'cur'), ' / ', C(a, 'derived.maxfav')),
+    h('label', {}, t('mp'), field(a, d.mp, 'cur', 'int', { min: 0, class: 'n', 'data-r': 'mp' }), ' / ', C(a, 'derived.maxmp')),
+    h('label', {}, t('fav'), field(a, d.fav, 'cur', 'int', { min: 0, class: 'n', 'data-r': 'fav' }), ' / ', C(a, 'derived.maxfav')),
     h('label', {}, t('actions'), C(a, 'derived.act')),
     h('label', {}, t('defP'), C(a, 'pdef'), ' ', t('defM'), ' ', C(a, 'mdef'))));
 

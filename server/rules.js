@@ -92,8 +92,35 @@ export function defaultActorData(sys) {
   sys.stats.forEach((s) => { stats[s.id] = { base: sys.character.baseStat, passive: 0 }; });
   const data = { bio: { class: '', element: '', level: 1 }, stats, hp: { cur: 0, temp: 0 }, mp: { cur: 0 }, fav: { cur: 0 },
     bonact: 0, bonspe: 0, elemental: false, talents: [], spells: [], items: [], currency: { pc: 0, pa: 0, po: 0 }, notes: '' };
-  const c = actorContext(sys, data);
-  data.hp.cur = c.derived.maxhp; data.mp.cur = c.derived.maxmp; data.fav.cur = c.derived.maxfav;
+  return fillResources(sys, data);
+}
+
+// Current HP / mana / favors follow their maximum: see resourceMaxes() and followMax().
+const RESOURCES = { hp: 'maxhp', mp: 'maxmp', fav: 'maxfav' };
+/** { hp, mp, fav } maxima of a character under a system. */
+export function resourceMaxes(sys, data) {
+  const d = actorContext(sys, data).derived;
+  return Object.fromEntries(Object.entries(RESOURCES).map(([k, m]) => [k, Number(d[m]) || 0]));
+}
+/** A new character starts with full HP, mana and favors (mutates and returns data). */
+export function fillResources(sys, data) {
+  const max = resourceMaxes(sys, data);
+  for (const k of Object.keys(RESOURCES)) { data[k] ??= {}; data[k].cur = max[k]; }
+  return data;
+}
+/**
+ * When a maximum goes up (level, stat, gear, system formula...), the current value goes up by the same amount
+ * (10/10 -> 20/20); when it goes down, the current value is capped at the new maximum. Mutates and returns data.
+ * Only touches data.hp.cur / data.mp.cur / data.fav.cur, so it is safe on raw stored data.
+ */
+export function followMax(before, after, data) {
+  for (const k of Object.keys(RESOURCES)) {
+    const delta = (after[k] ?? 0) - (before[k] ?? 0);
+    if (!delta) continue;
+    data[k] ??= {};
+    const cur = Number(data[k].cur) || 0;
+    data[k].cur = delta > 0 ? cur + delta : Math.min(cur, after[k]);
+  }
   return data;
 }
 

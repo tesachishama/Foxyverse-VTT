@@ -55,6 +55,7 @@ test('full session: accounts, permissions, rolls, apply, favor, realtime', async
   const data = hero.body.data; data.stats.constitution.base = 15; data.bio.level = 3;
   const upd = await call('PATCH', `/api/actors/${hero.body.id}`, { data }, pip.cookie);
   assert.equal(upd.body.computed.derived.maxhp, 60);
+  assert.equal(upd.body.data.hp.cur, 60); assert.equal(upd.body.data.fav.cur, 2); // full stays full: 10/10 -> 60/60, favors 1 -> 2
 
   // SSE: the GM hears about a player's roll
   const sse = await fetch(BASE + '/api/events', { headers: { Cookie: gm.cookie } });
@@ -90,11 +91,12 @@ test('full session: accounts, permissions, rolls, apply, favor, realtime', async
   await call('PATCH', `/api/tokens/${tok.body.id}`, { hidden: true }, gm.cookie);
   assert.equal((await call('GET', '/api/state', null, pip2.cookie)).body.tokens.length, 0);
 
-  // favor reroll costs the player a favor (created at level 1 -> 1 favor; leveling does not refill it)
+  // favor reroll costs the player a favor (level 3 -> 2 favors)
   const r1 = await call('POST', `/api/chat/${roll.body.id}/reroll`, null, pip.cookie);
   assert.equal(r1.body.body.rerolls, 1);
   const heroNow = (await call('GET', '/api/state', null, pip.cookie)).body.actors[0];
-  assert.equal(heroNow.data.fav.cur, 0);
+  assert.equal(heroNow.data.fav.cur, 1);
+  assert.equal((await call('POST', `/api/chat/${roll.body.id}/reroll`, null, pip.cookie)).status, 200);
   assert.equal((await call('POST', `/api/chat/${roll.body.id}/reroll`, null, pip.cookie)).status, 400); // none left
   assert.equal((await call('POST', `/api/chat/${roll.body.id}/reroll`, null, gm.cookie)).status, 400);  // the GM pays a favor too: none left
   assert.equal((await call('POST', `/api/chat/${dmg.body.id}/reroll`, null, gm.cookie)).status, 200);  // a GM roll with no character is free
