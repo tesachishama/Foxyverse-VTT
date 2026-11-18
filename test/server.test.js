@@ -1,6 +1,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,7 +22,8 @@ before(async () => {
   for (let i = 0; i < 50; i++) { try { await fetch(BASE + '/api/me'); return; } catch { await new Promise((r) => setTimeout(r, 100)); } }
   throw new Error('server did not start');
 });
-after(() => { proc.kill(); rmSync(dataDir, { recursive: true, force: true }); });
+// wait for the server to exit so Windows releases the database file before we delete it
+after(async () => { const gone = once(proc, 'exit'); proc.kill(); await gone; rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
 
 test('full session: accounts, permissions, rolls, apply, favor, realtime', async () => {
   // first user is GM; second needs the invite code
