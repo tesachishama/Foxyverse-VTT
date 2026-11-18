@@ -326,7 +326,9 @@ function rollCard(m, b, del) {
     h('div', { class: 'roll-actions' },
       (mine || isGM()) && h('button', { onclick: guard(() => api('POST', `/chat/${m.id}/reroll`)) }, '↻ ' + t('reroll')),
       ['damage', 'heal', 'theal', 'mana'].includes(b.kind) && (isGM() || (ownsActor && b.kind !== 'damage')) && h('button', { class: 'primary', onclick: applyRoll(m) }, t('apply') + (S.selected.size && isGM() ? ` (${S.selected.size})` : ''))),
-    (b.applied ?? []).map((a) => h('div', { class: 'applied' }, `${a.name}: `, appliedText(a))));
+    (b.applied ?? []).map((a) => h('div', { class: 'applied' + (a.undone ? ' undone' : '') }, `${a.name}: `, appliedText(a),
+      a.id && !a.undone && (isGM() || (b.kind !== 'damage' && actorById(a.actorId)?.ownerId === S.me.id)) &&
+        h('button', { class: 'undo', title: t('undoApply'), onclick: guard(() => api('POST', `/chat/${m.id}/undo`, { entryId: a.id })) }, '↶'))));
 }
 const applyRoll = (m) => guard(async () => {
   const tokenIds = isGM() ? [...S.selected] : [];

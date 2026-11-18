@@ -83,6 +83,8 @@ label.check { gap: 4px; }
 .badge.failure { color: var(--bad); } .badge.critFailure { color: var(--bad); font-weight: 700; background: rgba(255, 138, 138, .14); }
 .sum { color: var(--lilac); } .roll-actions { display: flex; gap: 6px; flex-wrap: wrap; } .roll-actions button { font-size: 12px; padding: 2px 8px; }
 .applied { font-size: 12px; color: var(--ok); }
+.applied.undone { text-decoration: line-through; opacity: .55; }
+.applied .undo { background: transparent; border: 0; color: var(--lilac); padding: 0 4px; margin-left: 4px; font-size: 13px; line-height: 1; cursor: pointer; }
 .inline-roll { padding: 0 7px; border-radius: 10px; border-color: var(--ember); color: var(--ember); background: transparent; font-size: 13px; }
 .inline-roll:hover { background: rgba(255, 154, 77, .18); }
 

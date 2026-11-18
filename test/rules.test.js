@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { validateSystem, defaultActorData, sanitizeActorData, actorContext, executeRoll, applyRoll, castSpell, pointBudget } from '../server/rules.js';
+import { validateSystem, defaultActorData, sanitizeActorData, actorContext, executeRoll, applyRoll, undoApply, castSpell, pointBudget } from '../server/rules.js';
 import { parseCommand } from '../server/engine.js';
 
 const sys = validateSystem(JSON.parse(readFileSync(new URL('../system/foxyverse.json', import.meta.url), 'utf8')));
@@ -158,4 +158,24 @@ test('resources follow their maximum: +delta when it rises, capped when it falls
   const raw = { stats: {}, bio: { level: 1 } };              // raw stored data with no resources yet
   followMax({ hp: 10 }, { hp: 12 }, raw); assert.equal(raw.hp.cur, 2);
   assert.equal(fillResources(sys, sanitizeActorData({ bio: { level: 2 } }, sys)).hp.cur, 15);
+});
+
+test('undoApply reverses only one application', () => {
+  const a = make({ stats: { constitution: 10 } }); a.hp.cur = 20; // 20/20
+  a.hp.temp = 3;
+  const dmg = { kind: 'damage', dtype: 'true', results: [{ total: 5 }], sum: 5 };
+  const one = applyRoll(sys, a, dmg);                          // temp 3 -> 0, hp 20 -> 18
+  const two = applyRoll(sys, one.data, dmg);                   // hp 18 -> 13
+  assert.deepEqual(one.report.delta, { hp: -2, temp: -3, mp: 0 });
+  const back = undoApply(sys, two.data, one.report.delta);
+  assert.equal(back.hp.cur, 15); assert.equal(back.hp.temp, 3); // the second hit stays
+  const heal = applyRoll(sys, back, { kind: 'heal', results: [{ total: 4 }], sum: 4 });
+  assert.equal(heal.data.hp.cur, 19);
+  assert.equal(undoApply(sys, heal.data, heal.report.delta).hp.cur, 15);
+  const theal = applyRoll(sys, back, { kind: 'theal', results: [{ total: 6 }], sum: 6 });
+  assert.equal(undoApply(sys, theal.data, theal.report.delta).hp.temp, 3);
+  const full = make({ stats: { constitution: 10 } }); full.hp.cur = 20;
+  const hit = applyRoll(sys, full, dmg);
+  const healed = applyRoll(sys, hit.data, { kind: 'heal', results: [{ total: 9 }], sum: 9 }); // back to 20/20
+  assert.equal(undoApply(sys, healed.data, hit.report.delta).hp.cur, 20); // never above max
 });

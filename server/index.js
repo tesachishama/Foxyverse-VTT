@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypto';
 import { db, UPLOAD_DIR, getSystem, setSystem, loadDefaultSystem } from './db.js';
 import { parseCommand, evaluate, evaluateStatic, FormulaError } from './engine.js';
-import { validateSystem, defaultActorData, sanitizeActorData, actorContext, pointBudget, executeRoll, applyRoll, castSpell, resourceMaxes, followMax, fillResources } from './rules.js';
+import { validateSystem, defaultActorData, sanitizeActorData, actorContext, pointBudget, executeRoll, applyRoll, castSpell, undoApply, resourceMaxes, followMax, fillResources } from './rules.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -449,12 +449,30 @@ route('POST', '/api/chat/:id/apply', 'user', ({ user, params, body }) => {
   roll.applied ??= [];
   for (const tg of targets) {
     if (!tg.actor) { roll.applied.push({ name: tg.name, note: 'no character linked' }); continue; }
-    if (roll.applied.some((x) => x.actorId === tg.actor.id)) { roll.applied.push({ name: tg.name, note: 'already applied' }); continue; }
     const { data, report } = applyRoll(sys, sanitizeActorData(JSON.parse(tg.actor.data), sys), roll);
     db.prepare('UPDATE actors SET data=?, updated=? WHERE id=?').run(JSON.stringify(data), now(), tg.actor.id);
     pushActor(getRow('actors', tg.actor.id), user.id);
-    roll.applied.push({ name: tg.name, actorId: tg.actor.id, ...report });
+    roll.applied.push({ id: randomBytes(4).toString('hex'), name: tg.name, actorId: tg.actor.id, ...report });
   }
+  db.prepare('UPDATE chat SET body = ? WHERE id = ?').run(JSON.stringify(roll), msg.id);
+  const row = getRow('chat', msg.id); pushChat(row);
+  return chatView(row);
+});
+
+// Undo one application: gives back exactly what it took (or takes back what it gave); the same roll can be applied again.
+route('POST', '/api/chat/:id/undo', 'user', ({ user, params, body }) => {
+  const msg = getRow('chat', params.id); if (!msg || !canSeeChat(user, msg)) throw notFound();
+  const roll = JSON.parse(msg.body);
+  const entry = (roll.applied ?? []).find((x) => x.id && x.id === body.entryId);
+  if (!entry || !entry.actorId) throw notFound('Unknown application');
+  if (entry.undone) throw bad('Already undone');
+  const actor = getRow('actors', entry.actorId); if (!actor) throw bad('That character no longer exists');
+  if (user.role !== 'gm' && (roll.kind === 'damage' || actor.owner_id !== user.id)) throw forbidden();
+  const sys = getSystem();
+  const data = undoApply(sys, sanitizeActorData(JSON.parse(actor.data), sys), entry.delta);
+  db.prepare('UPDATE actors SET data=?, updated=? WHERE id=?').run(JSON.stringify(data), now(), actor.id);
+  pushActor(getRow('actors', actor.id), user.id);
+  entry.undone = true;
   db.prepare('UPDATE chat SET body = ? WHERE id = ?').run(JSON.stringify(roll), msg.id);
   const row = getRow('chat', msg.id); pushChat(row);
   return chatView(row);

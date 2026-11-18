@@ -81,7 +81,16 @@ test('full session: accounts, permissions, rolls, apply, favor, realtime', async
   const applied = await call('POST', `/api/chat/${dmg.body.id}/apply`, { tokenIds: [tok.body.id] }, gm.cookie);
   assert.equal(applied.body.body.applied[0].dealt, 7);
   const again = await call('POST', `/api/chat/${dmg.body.id}/apply`, { tokenIds: [tok.body.id] }, gm.cookie);
-  assert.equal(again.body.body.applied.at(-1).note, 'already applied');
+  assert.equal(again.body.body.applied.length, 2); assert.equal(again.body.body.applied[1].dealt, 7); // can be applied again
+  const hpOf = async () => (await call('GET', '/api/state', null, gm.cookie)).body.actors.find((a) => a.id === hero.body.id).data.hp.cur;
+  assert.equal(await hpOf(), 46);
+  const first = again.body.body.applied[0];
+  assert.equal((await call('POST', `/api/chat/${dmg.body.id}/undo`, { entryId: first.id }, pip.cookie)).status, 403); // players cannot undo damage
+  const undone = await call('POST', `/api/chat/${dmg.body.id}/undo`, { entryId: first.id }, gm.cookie);
+  assert.equal(undone.body.body.applied[0].undone, true); assert.ok(!undone.body.body.applied[1].undone);
+  assert.equal(await hpOf(), 53); // only that application is given back
+  assert.equal((await call('POST', `/api/chat/${dmg.body.id}/undo`, { entryId: first.id }, gm.cookie)).status, 400); // once
+  assert.equal((await call('POST', `/api/chat/${dmg.body.id}/undo`, { entryId: 'nope' }, gm.cookie)).status, 404);
 
   // token movement: owner may move it, others may not
   assert.equal((await call('PATCH', `/api/tokens/${tok.body.id}`, { x: 210, y: 140 }, pip.cookie)).body.x, 210);

@@ -281,7 +281,21 @@ export function applyRoll(sys, data, body) {
     const before = next.mp.cur; next.mp.cur = Math.min(maxmp, next.mp.cur + body.sum);
     Object.assign(report, { restored: next.mp.cur - before, mp: next.mp.cur });
   } else throw new Error('This roll has nothing to apply');
+  // Exact changes made, so this one application can be undone later without touching anything else (see undoApply).
+  report.delta = { hp: next.hp.cur - data.hp.cur, temp: next.hp.temp - data.hp.temp, mp: next.mp.cur - data.mp.cur };
   return { data: next, report };
+}
+
+/** Reverse one application (its report.delta). Later changes to the character are kept. */
+export function undoApply(sys, data, delta) {
+  const next = structuredClone(data);
+  const { derived } = actorContext(sys, next);
+  next.hp.cur -= Number(delta?.hp) || 0;
+  next.hp.temp = Math.max(0, next.hp.temp - (Number(delta?.temp) || 0));
+  next.mp.cur = Math.max(0, next.mp.cur - (Number(delta?.mp) || 0));
+  if (delta?.hp < 0) next.hp.cur = Math.min(next.hp.cur, derived.maxhp); // giving back lost HP never goes above the max
+  if (delta?.mp < 0) next.mp.cur = Math.min(next.mp.cur, derived.maxmp);
+  return next;
 }
 
 /** Spend a spell's cost. At 0 mana the remainder comes out of HP (heals cast this way cannot refund it). */
