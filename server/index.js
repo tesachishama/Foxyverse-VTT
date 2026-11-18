@@ -14,6 +14,7 @@ import { parseCommand, evaluate, evaluateStatic, FormulaError } from './engine.j
 import { validateSystem, defaultActorData, sanitizeActorData, actorContext, pointBudget, executeRoll, applyRoll, castSpell, undoApply, tokenImage, resourceMaxes, followMax, fillResources } from './rules.js';
 import { logServerError } from './log.js';
 import { diffSystems } from './sysdiff.js';
+import { parseNarration } from './narration.js';
 
 const PORT = process.env.PORT === '0' ? 0 : Number(process.env.PORT) || 3000; // 0: any free port (tests)
 const HOST = process.env.HOST || '0.0.0.0';
@@ -568,8 +569,9 @@ function actorForRoll(user, table, actorId) {
   if (!canEditActor(user, row)) throw forbidden('You cannot act as this character');
   return row;
 }
+const avatarOf = (row) => (row ? tokenImage(jparse(row.data, {})) : null); // shown left of the name in the chat
 tbl('POST', '/chat', 'player', ({ user, table, body }) => {
-  let text = String(body.text ?? '').trim().slice(0, 2000);
+  let text = String(body.text ?? '').trim().slice(0, 6000);
   if (!text) throw bad('Empty message');
   let whisper = null;
   if (/^\/gm\s/i.test(text)) { whisper = 'gm'; text = text.slice(4).trim(); }
@@ -581,9 +583,21 @@ tbl('POST', '/chat', 'player', ({ user, table, body }) => {
     try { result = executeRoll(sys, cmd, actor ? sanitizeActorData(JSON.parse(actor.data), sys) : null); }
     catch (e) { if (e instanceof FormulaError || e instanceof Error) throw bad(e.message); throw e; }
     const name = actor?.name ?? user.name;
-    return chatView(postChat(table, user, actor?.id, whisper, { t: 'roll', actorName: name, ...result }));
+    return chatView(postChat(table, user, actor?.id, whisper, { t: 'roll', actorName: name, avatar: avatarOf(actor), ...result }));
   }
-  return chatView(postChat(table, user, actorForRoll(user, table, body.actorId)?.id, whisper, { t: 'text', text }));
+  const speaker = actorForRoll(user, table, body.actorId);
+  if (user.role === 'gm') { // narration: "@Sheet text" lines and "@mj" narration, all in one message
+    const actors = db.prepare('SELECT id, name, data FROM actors WHERE table_id = ?').all(table.id);
+    const parts = parseNarration(text, actors);
+    if (parts) {
+      const byId = new Map(actors.map((a) => [a.id, a]));
+      return chatView(postChat(table, user, speaker?.id, whisper, { t: 'narration', parts: parts.map((p) =>
+        p.kind === 'narration' ? { narration: true, text: p.text }
+          : p.kind === 'actor' ? { actorId: p.actorId, name: byId.get(p.actorId).name, avatar: avatarOf(byId.get(p.actorId)), text: p.text }
+            : { actorId: speaker?.id ?? null, name: speaker?.name ?? user.name, avatar: avatarOf(speaker), text: p.text }) }));
+    }
+  }
+  return chatView(postChat(table, user, speaker?.id, whisper, { t: 'text', text, avatar: avatarOf(speaker), name: speaker?.name }));
 });
 const chatIn = (user, table, id) => { const m = inTable('chat', id, table.id); if (!m || !canSeeChat(user, m)) throw notFound(); return m; };
 tbl('POST', '/chat/:id/reroll', 'player', ({ user, table, by, params }) => {

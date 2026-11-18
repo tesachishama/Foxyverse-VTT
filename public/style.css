@@ -55,7 +55,7 @@ fieldset.readonly { border: 0; padding: 0; margin: 0; min-width: 0; }
 fieldset.readonly .sheet-head > .quiet { display: none; } /* its own back button would be disabled too: a live one sits above */
 
 /* layout */
-#layout { display: grid; grid-template-columns: 1fr minmax(340px, 440px); height: 100dvh; }
+#layout { display: grid; grid-template-columns: auto 1fr minmax(320px, 420px); height: 100dvh; } #layout.no-chat { grid-template-columns: 1fr minmax(320px, 420px); }
 #stage { position: relative; min-width: 0; overflow: hidden; }
 #map { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
 .hud { position: absolute; left: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
@@ -127,7 +127,9 @@ details { border-bottom: 1px solid var(--line); padding: 6px 0; } summary { curs
 .toast.bad { border-color: var(--bad); }
 
 @media (max-width: 760px) {
-  #layout { grid-template-columns: 1fr; grid-template-rows: 45dvh 1fr; }
+  #layout, #layout.no-chat { grid-template-columns: 1fr; grid-template-rows: 40dvh 30dvh 1fr; }
+  #chatpane, #chatpane.dynamic { width: auto; order: 2; border-right: 0; border-top: 1px solid var(--line); } #stage { order: 1; } #dock { order: 3; }
+  #chatpane.dynamic .chat-wrap { position: static; transform: none; width: auto; } #chatpane .strip { display: none !important; }
   #dock { border-left: 0; border-top: 1px solid var(--line); }
 }
 
@@ -210,3 +212,24 @@ button.avatar { padding: 0; }
 .picture-row .token.empty { border: 2px dashed var(--line); } .picture-row .token.empty img { width: 100%; height: 100%; object-fit: cover; opacity: .5; }
 .filebtn.primary { background: var(--ember); border-color: var(--ember); color: #2a0019; font-weight: 600; }
 .modal-card.crop { max-width: 380px; display: grid; gap: 8px; justify-items: center; } .crop-canvas { cursor: grab; touch-action: none; }
+
+/* chat pane (left of the map) */
+#chatpane { position: relative; width: 340px; background: var(--plum); border-right: 2px solid var(--line); display: flex; flex-direction: column; min-height: 0; z-index: 5; }
+#chatpane .chat-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--plum); }
+#chatpane.dynamic { width: 44px; }
+#chatpane.dynamic .chat-wrap { position: absolute; left: 0; top: 0; bottom: 0; width: 340px; border-right: 2px solid var(--lilac); box-shadow: 6px 0 18px rgba(0, 0, 0, .45); transform: translateX(-105%); transition: transform .18s ease; }
+#chatpane.dynamic.open .chat-wrap { transform: none; }
+#chatpane .strip { display: none; } #chatpane.dynamic .strip { display: flex; flex-direction: column; align-items: center; padding-top: 12px; gap: 8px; height: 100%; cursor: pointer; }
+.chat-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.chat-bar { position: relative; display: grid; gap: 6px; } .chat-bar .who { max-width: none; }
+textarea.chat-input { resize: none; min-height: 34px; max-height: 180px; line-height: 1.35; }
+.chat-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex: none; display: inline-grid; place-items: center; }
+.chat-avatar.none { width: 0; } .suggest .chat-avatar.none { width: 28px; background: var(--raised); color: var(--lilac); }
+.msg-head { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.msg .body { white-space: pre-wrap; }
+.msg.said, .said { display: grid; grid-template-columns: auto 1fr; gap: 0 8px; align-items: start; } .said > .chat-avatar { grid-row: span 2; }
+.msg.narration { display: grid; gap: 8px; background: rgba(0, 0, 0, .12); border-radius: 10px; padding: 6px 8px; }
+.narr { font-style: italic; color: var(--lilac); white-space: pre-wrap; margin: 0; }
+.suggest { position: absolute; bottom: 100%; left: 8px; right: 8px; background: var(--void); border: 2px solid var(--lilac); border-radius: 12px; overflow: hidden; margin-bottom: 4px; z-index: 6; }
+.suggest button { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; border-radius: 0; background: transparent; text-align: left; padding: 5px 10px; }
+.suggest button.on, .suggest button:hover { background: var(--raised); }

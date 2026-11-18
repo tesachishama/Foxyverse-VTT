@@ -109,3 +109,30 @@ test('full session: table, player slot, sheet rights, rolls, apply, undo, favor,
   const t = await gm('POST', '/system/test', { formula: 'con*(lvl+1)' });
   assert.equal(t.body.total, 60);
 });
+
+test('chat: avatars next to names; GM narration with @mentions in one message; players cannot narrate', async () => {
+  const { gm, slot, join } = await srv.table('talk');
+  const pipSlot = await slot('Pip');
+  const pip = await join(pipSlot.id);
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 9)]);
+  const up = await (await fetch(srv.base + '/admin/api/t/talk/upload', { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: png })).json();
+  const gwen = (await gm('POST', '/actors', { name: 'Gwen' })).body;
+  await gm('PATCH', `/actors/${gwen.id}`, { data: { ...gwen.data, token: up.url } });
+  const dawn = (await gm('POST', '/actors', { name: 'Dawn Upper' })).body;
+  await gm('PUT', `/actors/${gwen.id}/perms`, { perms: { [pipSlot.id]: 'edit' } });
+  const said = await pip('POST', '/chat', { text: 'Hello', actorId: gwen.id });
+  assert.equal(said.body.body.avatar, up.url); assert.equal(said.body.actorId, gwen.id);
+  const rolled = await pip('POST', '/chat', { text: '/con', actorId: gwen.id });
+  assert.equal(rolled.body.body.avatar, up.url);
+  assert.equal((await pip('POST', '/chat', { text: '@mj I narrate' })).body.body.t, 'text'); // players: plain text
+  const n = await gm('POST', '/chat', { text: 'Listen.\n@Gwen Hi!\n@Dawn Upper Hello back\n@mj Silence falls.', actorId: dawn.id });
+  assert.equal(n.body.body.t, 'narration');
+  assert.deepEqual(n.body.body.parts, [
+    { actorId: dawn.id, name: 'Dawn Upper', avatar: null, text: 'Listen.' }, // before any @: the identity chosen in the selector
+    { actorId: gwen.id, name: 'Gwen', avatar: up.url, text: 'Hi!' },
+    { actorId: dawn.id, name: 'Dawn Upper', avatar: null, text: 'Hello back' },
+    { narration: true, text: 'Silence falls.' },
+  ]);
+  assert.equal((await gm('POST', '/chat', { text: '@mj   ' })).status, 200); // nothing left to say: still one message
+  assert.equal((await gm('POST', '/chat', { text: 'x'.repeat(5000) })).body.body.text.length, 5000); // long scenes fit
+});

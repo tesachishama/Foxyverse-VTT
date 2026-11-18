@@ -6,7 +6,7 @@ import { openTokenCropper } from './tokencrop.js';
 
 const S = {
   me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], table: null, allTables: [], mapMode: false,
-  tab: 'chat', sheetId: null, selected: new Set(), rollMod: '', draft: null,
+  tab: 'sheets', sheetId: null, selected: new Set(), rollMod: '', draft: null,
   sounds: [], playing: [], journals: [], compendium: [], npcs: [], compView: 'table', compGlobal: null, compFilter: { tables: null, campaigns: null }, campaigns: [], savedSystems: [], timeOffset: 0, viewId: null, tool: { name: 'select', radius: 6, snap: 'grid' }, playerView: false, viewAs: 'players', undo: [],
   journalId: null, journalEdit: false, modal: null, audioBlocked: false, openItems: new Set(),
   actorId: Number(localStorage.getItem('speakAs')) || null,
@@ -22,7 +22,7 @@ const add = (el, ...kids) => { el.append(...clean(kids)); return el; };
 const upsert = (list, item) => { const i = list.findIndex((x) => x.id === item.id); if (i >= 0) list[i] = item; else list.push(item); };
 const remove = (list, id) => { const i = list.findIndex((x) => x.id === id); if (i >= 0) list.splice(i, 1); };
 const guard = (fn) => async (...a) => { try { return await fn(...a); } catch (e) { toast(e.message); } };
-let map, dockEl, panelEl, chatEl, chatList, chatInput, chatWho, inspectorEl, hudEl, topEl, footEl, fogNote, audio, editQueue = Promise.resolve();
+let map, dockEl, panelEl, chatEl, chatPane, chatList, chatInput, chatWho, inspectorEl, hudEl, topEl, footEl, fogNote, audio, editQueue = Promise.resolve();
 
 // ------------------------------------------------------------------ boot & pages
 // URLs: "/" tables, "/<table>" pick a player then play, "/admin" GM home, "/admin/<table>" GM at a table, "/admin?map=<id>" map library editor.
@@ -252,9 +252,11 @@ function onEvent(ev) {
     return;
   }
   if (type === 'chat') {
+    const fresh = op !== 'delete' && !S.chat.some((m) => m.id === data.id);
     if (op === 'delete') remove(S.chat, data.id); else upsert(S.chat, data);
     if (S.chat.length > 300) S.chat.splice(0, S.chat.length - 300);
     renderChat();
+    if (fresh) peekChat();
   }
 }
 
@@ -312,7 +314,8 @@ function buildShell() {
   dockEl = h('aside', { id: 'dock' });
   panelEl = h('section', { id: 'panel' });
   footEl = h('div', { class: 'dock-foot' });
-  app.replaceChildren(h('div', { id: 'layout' }, stage, dockEl));
+  chatPane = !S.mapMode && h('aside', { id: 'chatpane' });
+  app.replaceChildren(h('div', { id: 'layout', class: S.mapMode ? 'no-chat' : '' }, chatPane, stage, dockEl));
   audio = createAudio({ getOffset: () => S.timeOffset, onBlocked: () => { if (!S.audioBlocked) { S.audioBlocked = true; renderFoot(); } } });
   document.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName ?? '') && isGM()) { e.preventDefault(); undoSceneEdit(); } });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.modal) { S.modal = null; renderModal(); } });
@@ -341,6 +344,7 @@ function buildShell() {
     onSceneEdit: sceneEdit,
   });
   buildChat();
+  if (chatPane) mountChat();
   renderAll();
   audio.sync(S.playing, S.sounds);
 }
@@ -404,7 +408,7 @@ function gmNav() {
 }
 
 function renderDock() {
-  const tabs = S.mapMode ? [['map', t('mapLibrary')]] : [['chat', t('chat')], ['sheets', t('sheets')], ['journal', t('journal')], ['rules', t('rules')], ['comp', t('compendium')],
+  const tabs = S.mapMode ? [['map', t('mapLibrary')]] : [['sheets', t('sheets')], ['journal', t('journal')], ['rules', t('rules')], ['comp', t('compendium')],
     ...(isGM() ? [['table', t('table')], ['sound', t('sound')], ['system', t('system')]] : [])];
   fill(dockEl,
     h('nav', { class: 'tabs' }, tabs.map(([id, label]) => h('button', { class: S.tab === id ? 'on' : '', onclick: () => { S.tab = id; if (id === 'system') S.draft = structuredClone(S.system); if (id === 'comp') refreshComp(); renderDock(); } }, label))),
@@ -412,25 +416,76 @@ function renderDock() {
   renderPanel(); renderFoot();
 }
 function renderPanel() {
-  const panels = { map: mapPanel, chat: () => chatEl, sheets: sheetsPanel, journal: journalPanel, rules: rulesPanel, table: tablePanel, sound: soundPanel, comp: compPanel, system: systemPanel };
+  const panels = { map: mapPanel, sheets: sheetsPanel, journal: journalPanel, rules: rulesPanel, table: tablePanel, sound: soundPanel, comp: compPanel, system: systemPanel };
   panelEl.className = 'panel-' + S.tab;
   panelEl.replaceChildren((panels[S.tab] ?? panels.chat)());
-  if (S.tab === 'chat') { chatList.scrollTop = chatList.scrollHeight; }
 }
 
 // ------------------------------------------------------------------ chat
 function buildChat() {
   chatList = h('div', { class: 'chat-list' });
   chatWho = h('select', { class: 'who', title: t('speakingAs'), onchange: (e) => { S.actorId = Number(e.target.value) || null; localStorage.setItem('speakAs', S.actorId ?? ''); } });
-  chatInput = h('input', { type: 'text', class: 'chat-input', placeholder: t('chatHint'), maxlength: 2000 });
-  const hist = []; let hi = 0;
+  chatInput = h('textarea', { class: 'chat-input', rows: 1, placeholder: isGM() ? t('chatHintGm') : t('chatHint'), maxlength: 6000 });
+  const sugg = h('div', { class: 'suggest hidden' });
+  const hist = []; let hi = 0, opts = [], active = 0;
+  const grow = () => { chatInput.style.height = 'auto'; chatInput.style.height = Math.min(chatInput.scrollHeight, 180) + 'px'; };
+  // "@" for the GM: suggest sheet names (they may contain spaces) and "mj" for narration
+  const mention = () => { const pos = chatInput.selectionStart, m = /(^|\s)@([^@\n]{0,40})$/.exec(chatInput.value.slice(0, pos)); return m ? { start: pos - m[2].length - 1, end: pos, q: m[2].toLowerCase() } : null; };
+  const showSugg = () => {
+    const mq = isGM() && mention();
+    opts = mq ? [{ name: 'mj', label: t('narrator') }, ...S.actors.map((a) => ({ name: a.name, avatar: a.data.token || a.data.portrait }))].filter((o) => o.name.toLowerCase().startsWith(mq.q)).slice(0, 8) : [];
+    active = Math.min(active, Math.max(0, opts.length - 1));
+    sugg.classList.toggle('hidden', !opts.length);
+    fill(sugg, opts.map((o, i) => h('button', { type: 'button', class: i === active ? 'on' : '', onmousedown: (e) => { e.preventDefault(); pick(o); } },
+      o.avatar ? h('img', { class: 'chat-avatar', src: o.avatar, alt: '' }) : h('span', { class: 'chat-avatar none' }, '@'), h('b', {}, o.name), o.label && h('span', { class: 'dim' }, o.label))));
+  };
+  const pick = (o) => {
+    const mq = mention(); if (!mq) return;
+    chatInput.value = chatInput.value.slice(0, mq.start) + '@' + o.name + ' ' + chatInput.value.slice(mq.end);
+    const caret = mq.start + o.name.length + 2; chatInput.setSelectionRange(caret, caret); opts = []; showSugg(); grow();
+  };
+  chatInput.addEventListener('input', () => { grow(); active = 0; showSugg(); });
+  chatInput.addEventListener('blur', () => setTimeout(() => sugg.classList.add('hidden'), 100));
   chatInput.addEventListener('keydown', async (e) => {
-    if (e.key === 'ArrowUp' && hist.length) { hi = Math.max(0, hi - 1); chatInput.value = hist[hi]; e.preventDefault(); }
-    if (e.key !== 'Enter' || !chatInput.value.trim()) return;
-    const text = chatInput.value.trim(); hist.push(text); hi = hist.length; chatInput.value = '';
+    if (opts.length && !sugg.classList.contains('hidden')) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { active = (active + (e.key === 'ArrowDown' ? 1 : opts.length - 1)) % opts.length; showSugg(); e.preventDefault(); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { pick(opts[active]); e.preventDefault(); return; }
+      if (e.key === 'Escape') { opts = []; sugg.classList.add('hidden'); return; }
+    }
+    if (e.key === 'ArrowUp' && hist.length && !chatInput.value) { hi = Math.max(0, hi - 1); chatInput.value = hist[hi]; grow(); e.preventDefault(); return; }
+    if (e.key !== 'Enter' || e.shiftKey) return; // Shift+Enter: new line (a whole scene in one message)
+    e.preventDefault();
+    const text = chatInput.value.trim(); if (!text) return;
+    hist.push(text); hi = hist.length; chatInput.value = ''; grow();
     await doRoll(text);
   });
-  chatEl = h('div', { class: 'chat' }, chatList, h('div', { class: 'chat-bar' }, chatWho, chatInput));
+  chatEl = h('div', { class: 'chat' }, chatList, h('div', { class: 'chat-bar' }, sugg, chatWho, chatInput));
+}
+/** The chat lives left of the map, outside the tabs: pinned open, or "dynamic" (a thin strip that opens on hover, focus or a new message). */
+let chatMode = (() => { try { return localStorage.getItem('chatMode') === 'dynamic' ? 'dynamic' : 'pinned'; } catch { return 'pinned'; } })();
+let chatPeek = null;
+function mountChat() {
+  const toggle = h('button', { class: 'quiet', title: t(chatMode === 'pinned' ? 'chatToDynamic' : 'chatToPinned'), onclick: () => {
+    chatMode = chatMode === 'pinned' ? 'dynamic' : 'pinned';
+    try { localStorage.setItem('chatMode', chatMode); } catch { /* private window */ }
+    mountChat(); setTimeout(() => map?.resize?.(), 0);
+  } }, chatMode === 'pinned' ? '⇤' : '📌');
+  const wrap = h('div', { class: 'chat-wrap' }, h('div', { class: 'chat-head' }, h('b', {}, t('chat')), toggle), chatEl);
+  const strip = h('div', { class: 'strip', title: t('chat') }, h('span', { class: 'strip-icon' }, '💬'), h('span', { class: 'unread hidden' }));
+  chatPane.className = chatMode;
+  fill(chatPane, strip, wrap);
+  const open = (on) => { chatPane.classList.toggle('open', on); if (on) { strip.querySelector('.unread').classList.add('hidden'); chatList.scrollTop = chatList.scrollHeight; } };
+  chatPane.onmouseenter = () => { if (chatMode === 'dynamic') open(true); };
+  chatPane.onmouseleave = () => { if (chatMode === 'dynamic' && !chatPane.contains(document.activeElement)) open(false); };
+  chatPane.onfocusin = () => { if (chatMode === 'dynamic') open(true); };
+  chatPane.onfocusout = () => setTimeout(() => { if (chatMode === 'dynamic' && !chatPane.contains(document.activeElement) && !chatPane.matches(':hover')) open(false); }, 50);
+}
+/** Dynamic mode: a new message opens the chat for a few seconds. */
+function peekChat() {
+  if (chatMode !== 'dynamic' || !chatPane || chatPane.classList.contains('open')) return;
+  chatPane.classList.add('open');
+  clearTimeout(chatPeek);
+  chatPeek = setTimeout(() => { if (!chatPane.matches(':hover') && !chatPane.contains(document.activeElement)) chatPane.classList.remove('open'); }, 4000);
 }
 function renderChatWho() {
   chatWho.replaceChildren(h('option', { value: '' }, t('noChar')), ...S.actors.filter((a) => a.perm === 'edit').map((a) => h('option', { value: a.id }, a.name)));
@@ -445,10 +500,21 @@ function renderChat() {
   chatList.replaceChildren(...S.chat.map(msgNode));
   if (stick) chatList.scrollTop = chatList.scrollHeight;
 }
+const avatarEl = (src) => (src ? h('img', { class: 'chat-avatar', src, alt: '' }) : h('span', { class: 'chat-avatar none' }));
+const pictureOf = (actorId) => { const a = actorId && actorById(actorId); return a ? a.data.token || a.data.portrait || null : null; };
 function msgNode(m) {
   const b = m.body, u = userById(m.userId), del = isGM() && h('button', { class: 'x', title: t('del'), onclick: guard(() => api('DELETE', '/chat/' + m.id)) }, '×');
+  const whisper = m.whisper && h('em', { class: 'whisper' }, ' → ' + t('gm'));
   if (b.t === 'info') return h('div', { class: 'msg info' }, b.text, del);
-  if (b.t === 'text') return h('div', { class: 'msg' }, h('b', { style: `color:${u?.color ?? '#eba5ff'}` }, m.userName), m.whisper && h('em', { class: 'whisper' }, ' → ' + t('gm')), ' ', inline(b.text, (c) => doRoll(c)), del);
+  if (b.t === 'narration') return h('div', { class: 'msg narration' }, whisper,
+    b.parts.map((p) => (p.narration ? h('p', { class: 'narr' }, p.text)
+      : h('div', { class: 'said' }, avatarEl(p.avatar ?? pictureOf(p.actorId)), h('b', {}, p.name), h('div', { class: 'body' }, inline(p.text, (c) => doRoll(c)))))), del);
+  if (b.t === 'text') {
+    const who = b.name ?? (m.actorId && actorById(m.actorId)?.name);
+    return h('div', { class: 'msg said' }, avatarEl(b.avatar ?? pictureOf(m.actorId)),
+      h('div', { class: 'msg-head' }, h('b', { style: `color:${u?.color ?? '#eba5ff'}` }, who || m.userName), who && h('span', { class: 'dim' }, ` (${m.userName})`), whisper),
+      h('div', { class: 'body' }, inline(b.text, (c) => doRoll(c))), del);
+  }
   return rollCard(m, b, del);
 }
 function rollCard(m, b, del) {
@@ -456,7 +522,7 @@ function rollCard(m, b, del) {
   const check = b.kind === 'stat';
   return h('div', { class: 'msg roll' },
     h('div', { class: 'roll-head' },
-      h('span', {}, h('b', {}, b.actorName), ' · ', b.label || b.title, m.whisper && h('em', { class: 'whisper' }, ' → ' + t('gm'))),
+      h('span', { class: 'msg-head' }, avatarEl(b.avatar ?? pictureOf(m.actorId)), h('b', {}, b.actorName), ' · ', b.label || b.title, m.whisper && h('em', { class: 'whisper' }, ' → ' + t('gm'))),
       del),
     h('div', { class: 'formula' }, `${b.count > 1 ? b.count + '× ' : ''}${b.formula}${b.rerolls ? ` · ↻${b.rerolls}` : ''}`),
     b.results.map((r) => h('div', { class: 'res ' + (r.outcome ?? '') },
@@ -669,7 +735,7 @@ function permsEditor(a) {
 
 // ------------------------------------------------------------------ rules
 function rulesPanel() {
-  return h('div', { class: 'pad' }, S.system.rules.map((r, i) => h('details', { open: i === 0 }, h('summary', {}, r.title), markdown(r.body, (c) => { S.tab = 'chat'; renderDock(); doRoll(c); }))));
+  return h('div', { class: 'pad' }, S.system.rules.map((r, i) => h('details', { open: i === 0 }, h('summary', {}, r.title), markdown(r.body, (c) => doRoll(c)))));
 }
 
 // ------------------------------------------------------------------ table (GM)
@@ -805,7 +871,7 @@ function journalPanel() {
 }
 function journalBody(j) {
   return h('div', { class: 'journal-body' }, j.image && h('img', { class: 'handout', src: j.image, alt: j.title }),
-    markdown(j.body, (c) => { S.modal = null; renderModal(); S.tab = 'chat'; renderDock(); doRoll(c); }));
+    markdown(j.body, (c) => { S.modal = null; renderModal(); doRoll(c); }));
 }
 function journalView(j) {
   return h('div', { class: 'pad' },
