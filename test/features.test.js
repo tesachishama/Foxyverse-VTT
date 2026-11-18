@@ -203,3 +203,13 @@ test('current HP/mana/favors follow their max: sheet edits, system edits, creati
   hpF.formula = old; await call('PUT', '/api/system', sys, gm.cookie);
   assert.equal((await call('GET', '/api/state', null, gm.cookie)).body.actors.find((a) => a.id === made.body.id).data.hp.cur, 8);
 });
+
+test('scenes: many GMs creating scenes at once all succeed, one scene stays active', async () => {
+  const a = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' });
+  const b = await call('POST', '/api/login', { name: 'GM', password: 'longpassword' }); // a second GM session
+  const made = await Promise.all(Array.from({ length: 24 }, (_, i) => call('POST', '/api/scenes', { name: `Rush ${i}`, width: 800, height: 600 }, i % 2 ? a.cookie : b.cookie)));
+  assert.deepEqual(made.map((r) => r.status), made.map(() => 200));
+  assert.equal(new Set(made.map((r) => r.body.id)).size, 24);
+  const scenes = (await call('GET', '/api/state', null, a.cookie)).body.scenes;
+  assert.equal(scenes.filter((s) => s.active).length, 1);
+});

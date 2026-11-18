@@ -7,6 +7,7 @@ import { randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypt
 import { db, UPLOAD_DIR, getSystem, setSystem, loadDefaultSystem } from './db.js';
 import { parseCommand, evaluate, evaluateStatic, FormulaError } from './engine.js';
 import { validateSystem, defaultActorData, sanitizeActorData, actorContext, pointBudget, executeRoll, applyRoll, castSpell, undoApply, resourceMaxes, followMax, fillResources } from './rules.js';
+import { logServerError } from './log.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -646,8 +647,9 @@ const server = createServer(async (req, res) => {
   res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; media-src 'self'; connect-src 'self'; frame-ancestors 'none'");
   const url = new URL(req.url, 'http://x');
-  const path = decodeURIComponent(url.pathname);
+  let path = url.pathname, user = null;
   try {
+    path = decodeURIComponent(url.pathname);
     if (req.method === 'GET' && path.startsWith('/uploads/')) {
       const name = path.slice(9);
       if (!/^[a-f0-9]{64}\.(png|jpg|webp|gif|mp3|ogg|wav|m4a|flac|webm)$/.test(name)) throw notFound();
@@ -655,7 +657,7 @@ const server = createServer(async (req, res) => {
     }
     if (path.startsWith('/api/')) {
       if (req.method !== 'GET' && req.headers.origin && new URL(req.headers.origin).host !== req.headers.host) throw forbidden('Cross-origin request blocked');
-      const user = userFromReq(req);
+      user = userFromReq(req);
       if (req.method === 'GET' && path === '/api/events') {
         if (!user) throw new HttpError(401, 'Sign in first');
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
@@ -688,7 +690,7 @@ const server = createServer(async (req, res) => {
       if (e.status === 413) { res.setHeader('Connection', 'close'); res.on('finish', () => req.socket.destroy()); } // stop an oversized upload after replying
       return json(res, e.status, { error: e.message });
     }
-    console.error(e);
+    logServerError(e, { method: req.method, path, user });
     return json(res, 500, { error: 'Server error' });
   }
 });
@@ -702,3 +704,4 @@ server.listen(PORT, HOST, () => {
 });
 const stop = () => { server.close(); db.close(); process.exit(0); };
 process.on('SIGTERM', stop); process.on('SIGINT', stop);
+process.on('unhandledRejection', (e) => logServerError(e, { method: 'async', path: '(unhandled rejection)' }));
