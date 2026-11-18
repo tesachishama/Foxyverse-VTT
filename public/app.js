@@ -1,7 +1,7 @@
 import { h, $, $$, api, request, setApiBase, eventsUrl, CLIENT_ID, upload, toast, debounce, t, setLang, getLang, inline, markdown, setKnownRollTypes } from './lib.js';
 import { createMap } from './map.js';
 import { createAudio } from './audio.js';
-import { inventoryView } from './inventory.js';
+import { inventoryView, icon } from './inventory.js';
 import { openTokenCropper } from './tokencrop.js';
 
 const S = {
@@ -407,11 +407,13 @@ function gmNav() {
   return [sel, h('a', { class: 'quiet', href: '/admin' }, t('gmHome'))];
 }
 
+// The user's own icons (design-reference/icons) on the tabs, as in the plugin.
+const TAB_ICON = { sheets: 'bio', journal: 'notes', rules: 'stats', comp: 'inventory', table: 'tab', system: 'settings', map: 'tab' };
 function renderDock() {
   const tabs = S.mapMode ? [['map', t('mapLibrary')]] : [['sheets', t('sheets')], ['journal', t('journal')], ['rules', t('rules')], ['comp', t('compendium')],
     ...(isGM() ? [['table', t('table')], ['sound', t('sound')], ['system', t('system')]] : [])];
   fill(dockEl,
-    h('nav', { class: 'tabs' }, tabs.map(([id, label]) => h('button', { class: S.tab === id ? 'on' : '', onclick: () => { S.tab = id; if (id === 'system') S.draft = structuredClone(S.system); if (id === 'comp') refreshComp(); renderDock(); } }, label))),
+    h('nav', { class: 'tabs' }, tabs.map(([id, label]) => h('button', { class: S.tab === id ? 'on' : '', title: label, onclick: () => { S.tab = id; if (id === 'system') S.draft = structuredClone(S.system); if (id === 'comp') refreshComp(); renderDock(); } }, TAB_ICON[id] && icon(TAB_ICON[id], 'ico tab-ico'), h('span', { class: 'tab-label' }, label)))),
     panelEl, footEl);
   renderPanel(); renderFoot();
 }
