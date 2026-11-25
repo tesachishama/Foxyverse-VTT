@@ -1,4 +1,4 @@
-import { h, $, $$, api, request, setApiBase, eventsUrl, CLIENT_ID, upload, toast, debounce, t, setLang, getLang, inline, markdown, setKnownRollTypes } from './lib.js';
+import { h, $, $$, api, request, setApiBase, eventsUrl, CLIENT_ID, upload, toast, debounce, t, setLang, getLang, inline, markdown, setKnownRollTypes, ask } from './lib.js';
 import { createMap } from './map.js';
 import { createAudio } from './audio.js';
 import { inventoryView, icon } from './inventory.js';
@@ -138,7 +138,7 @@ async function adminHome() {
         h('button', { title: t('playerLink'), onclick: () => copyText(`${location.origin}/${x.slug}`) }, t('copyLink')),
         h('a', { class: 'button primary', href: '/admin/' + x.slug }, t('openTable')),
         h('button', { class: 'x', title: t('del'), onclick: guard(async () => {
-          if (prompt(`${t('confirmTable')} ${x.slug}`) !== x.slug) return;
+          if ((await ask(`${t('confirmTable')} ${x.slug}`, { input: '' })) !== x.slug) return;
           await request('DELETE', `/admin/api/tables/${x.slug}`); reload();
         }) }, '×')))),
       h('div', { class: 'line' }, name, slug, newCamp, h('label', { class: 'check' }, listed, t('listed')), h('button', { class: 'primary', onclick: create }, '+ ' + t('newTable')))),
@@ -147,20 +147,20 @@ async function adminHome() {
         h('input', { type: 'text', class: 'grow', value: c.name, maxlength: 60, onchange: guard(async (e) => { await request('PATCH', `/admin/api/campaigns/${c.id}`, { name: e.target.value }); }) }),
         sysSel(c.systemId, guard(async (e) => { await request('PATCH', `/admin/api/campaigns/${c.id}`, { systemId: e.target.value ? Number(e.target.value) : null }); })),
         h('span', { class: 'dim' }, `${tables.filter((x) => x.campaignId === c.id).length} ${t('tables').toLowerCase()}`),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await request('DELETE', `/admin/api/campaigns/${c.id}`); reload(); }) }, '×')))),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await request('DELETE', `/admin/api/campaigns/${c.id}`); reload(); }) }, '×')))),
       h('div', { class: 'line' }, campName, h('button', { class: 'primary', onclick: addCamp }, '+ ' + t('newCampaign')))),
     h('section', { class: 'sec' }, h('h3', {}, t('systemsLib')), h('p', { class: 'hint' }, t('systemsHint')),
       !systems.length && h('p', { class: 'hint' }, t('empty')),
       h('ul', { class: 'list' }, systems.map((x) => h('li', { class: 'line card' },
         h('input', { type: 'text', class: 'grow', value: x.name, maxlength: 60, onchange: guard(async (e) => { await request('PATCH', `/admin/api/systems/${x.id}`, { name: e.target.value }); }) }),
         h('span', { class: 'dim' }, new Date(x.updated).toLocaleDateString()),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await request('DELETE', `/admin/api/systems/${x.id}`); reload(); }) }, '×'))))),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await request('DELETE', `/admin/api/systems/${x.id}`); reload(); }) }, '×'))))),
     h('section', { class: 'sec' }, h('h3', {}, t('mapLibrary')), h('p', { class: 'hint' }, t('mapHint')),
       h('ul', { class: 'list' }, scenes.map((m) => h('li', { class: 'line card' },
         h('a', { class: 'grow', href: '/admin?map=' + m.id }, h('b', {}, m.name), m.width > 0 && h('span', { class: 'dim' }, ` ${m.width}×${m.height}`)),
         copySel(m),
         h('a', { class: 'button', href: '/admin?map=' + m.id }, t('editMap')),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await request('DELETE', `/admin/api/library/scenes/${m.id}`); reload(); }) }, '×')))),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await request('DELETE', `/admin/api/library/scenes/${m.id}`); reload(); }) }, '×')))),
       h('div', { class: 'line' }, mapName, mapFile, h('button', { class: 'primary', onclick: newMap }, '+ ' + t('newMap'))))));
 }
 
@@ -305,7 +305,7 @@ const syncExplored = guard(async () => {
   const r = await api('GET', `/scenes/${sc.id}/explored${isGM() ? '?slot=' + slot : ''}`);
   if (exploredKey !== key) return; // something else was asked meanwhile
   const dims = { cell: r.cell, cols: r.cols, rows: r.rows };
-  explored = { sceneId: sc.id, dims, bits: bitsFromBase64(r.bits, dims), rev: 1 };
+  explored = { sceneId: sc.id, dims, bits: bitsFromBase64(r.bits, dims), color: bitsFromBase64(r.color, dims), rev: 1 };
   map?.redraw();
 });
 /** The vision changed: mark what is seen now (a moment later, not on every frame of a drag), and send it a bit later. */
@@ -313,16 +313,18 @@ function rememberSeen(scene, vis) {
   if (isGM() || !explored || explored.sceneId !== scene.id || !exploreOn(scene)) return;
   clearTimeout(markTimer);
   markTimer = setTimeout(() => {
-    if (!markSeen(explored.bits, explored.dims, vis.canSee)) return;
+    // seen at all, and seen in colour (what only darkvision showed stays black and white in the memory)
+    const seen = markSeen(explored.bits, explored.dims, vis.canSee), inColor = markSeen(explored.color, explored.dims, (x, y) => vis.canSee(x, y) && !vis.grey(x, y));
+    if (!seen && !inColor) return;
     explored.rev++; map.redraw();
     clearTimeout(sendTimer); sendTimer = setTimeout(sendExplored, 2000);
   }, 250);
 }
-const exploredBody = () => ({ cols: explored.dims.cols, rows: explored.dims.rows, bits: bitsToBase64(explored.bits) });
+const exploredBody = () => ({ cols: explored.dims.cols, rows: explored.dims.rows, bits: bitsToBase64(explored.bits), color: bitsToBase64(explored.color) });
 const sendExplored = guard(async () => {
   if (!explored || isGM()) return;
   const mine = explored, r = await api('POST', `/scenes/${mine.sceneId}/explored`, exploredBody());
-  if (explored === mine && r.bits) { orBits(mine.bits, bitsFromBase64(r.bits, mine.dims)); mine.rev++; map.redraw(); } // what this player saw on another device
+  if (explored === mine && r.bits) { orBits(mine.bits, bitsFromBase64(r.bits, mine.dims)); orBits(mine.color, bitsFromBase64(r.color, mine.dims)); mine.rev++; map.redraw(); } // what this player saw on another device
 });
 // closing the page: send what is still waiting
 addEventListener('pagehide', () => { if (sendTimer && explored && !isGM()) { clearTimeout(sendTimer); fetch(`/api/t/${ROUTE.slug}/scenes/${explored.sceneId}/explored`, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(exploredBody()) }).catch(() => {}); } });
@@ -920,7 +922,7 @@ function sheetView(a) {
   const gm = isGM() && section('GM', h('div', { class: 'line' },
     viewScene() && h('button', { onclick: guard(async () => { const c = map.viewCenter(); await api('POST', '/tokens', { sceneId: viewScene().id, actorId: a.id, name: a.name, x: Math.round(c.x), y: Math.round(c.y) }); toast(t('saved'), false); await loadState(); renderAll(); }) }, t('placeToken')),
     h('label', { class: 'check', title: t('npcHint') }, h('input', { type: 'checkbox', checked: a.shown, onchange: guard(async (e) => { Object.assign(a, await api('PATCH', '/actors/' + a.id, { shown: e.target.checked })); }) }), t('shownToPlayers')),
-    h('button', { class: 'danger', onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await api('DELETE', '/actors/' + a.id); }) }, t('del'))));
+    h('button', { class: 'danger', onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await api('DELETE', '/actors/' + a.id); }) }, t('del'))));
   const perms = isGM() && section(t('perms'), permsEditor(a));
   if (a.perm === 'view') return h('div', { class: 'sheet pad' }, // everything visible, nothing editable
     h('button', { class: 'quiet', onclick: () => { S.sheetId = null; renderPanel(); } }, '← ' + t('back')), h('p', { class: 'hint' }, t('viewOnly')),
@@ -981,7 +983,7 @@ const sceneField = (sc, key, label) => h('label', {}, label, h('input', { type: 
 function exploreSettings(sc) {
   const reset = h('select', { title: t('resetExplore'), onchange: guard(async (e) => {
     const v = e.target.value; e.target.value = '';
-    if (!v || !confirm(t('confirmResetExplore'))) return;
+    if (!v || !(await ask(t('confirmResetExplore')))) return;
     await api('DELETE', `/scenes/${sc.id}/explored${v === 'all' ? '' : '?slot=' + v}`);
     exploredKey = null; syncExplored(); toast(t('saved'), false);
   }) }, h('option', { value: '' }, t('resetExplore')), h('option', { value: 'all' }, t('everyone')), S.users.map((u) => h('option', { value: u.id }, u.name)));
@@ -995,8 +997,8 @@ function sceneSettings(sc) {
     h('div', { class: 'line' }, sceneField(sc, 'grid', t('grid')), sceneField(sc, 'ox', 'X'), sceneField(sc, 'oy', 'Y')),
     !S.mapMode && exploreSettings(sc),
     h('div', { class: 'line' },
-      h('button', { onclick: () => confirm(t('confirmDel')) && sceneEdit({ walls: [] }) }, t('clearWalls')),
-      h('button', { onclick: () => confirm(t('confirmDel')) && sceneEdit({ lights: [] }) }, t('clearLights')),
+      h('button', { onclick: guard(async () => (await ask(t('confirmDel'))) && sceneEdit({ walls: [] })) }, t('clearWalls')),
+      h('button', { onclick: guard(async () => (await ask(t('confirmDel'))) && sceneEdit({ lights: [] })) }, t('clearLights')),
       h('button', { onclick: () => sceneEdit({ reveal: [] }) }, t('clearReveal'))),
     h('label', {}, t('mapImage'), h('input', { type: 'file', accept: 'image/*', onchange: guard(async (e) => { const f = e.target.files[0]; if (!f) return; const [url, dim] = await Promise.all([upload(f), imageSize(f)]); sceneEdit({ image: url, width: dim.w, height: dim.h }); }) })),
   ];
@@ -1038,14 +1040,14 @@ function tablePanel() {
         h('input', { type: 'text', class: 'grow', value: u.name, maxlength: 40, onchange: guard(async (e) => upsert(S.users, await api('PATCH', `/slots/${u.id}`, { name: e.target.value }))) }),
         h('input', { type: 'color', value: u.color, onchange: guard(async (e) => upsert(S.users, await api('PATCH', `/slots/${u.id}`, { color: e.target.value }))) }),
         u.online && h('button', { onclick: guard(() => api('POST', `/slots/${u.id}/kick`)) }, t('kick')),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) await api('DELETE', `/slots/${u.id}`); }) }, '×'))),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if ((await ask(t('confirmDel')))) await api('DELETE', `/slots/${u.id}`); }) }, '×'))),
       h('div', { class: 'line' }, slotName, h('button', { class: 'primary', onclick: addSlot }, '+ ' + t('addPlayer')))),
     h('section', { class: 'sec' }, h('h3', {}, t('scenes')),
       h('ul', { class: 'list' }, S.scenes.map((x) => h('li', { class: 'line' },
         h('button', { class: 'row grow' + (x.id === S.viewId ? ' on' : ''), title: t('view'), onclick: () => { S.viewId = x.id; S.selected = new Set(); renderAll(); } }, h('b', {}, x.name)),
         x.active ? h('span', { class: 'badge success' }, t('active')) : h('button', { onclick: guard(() => api('POST', `/scenes/${x.id}/activate`)) }, t('activate')),
         h('button', { class: 'x', title: t('toLibrary'), onclick: guard(async () => { await request('POST', `/admin/api/scenes/${x.id}/copy`, { table: null }); toast(t('saved'), false); }) }, '⇪'),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) await api('DELETE', '/scenes/' + x.id); }) }, '×')))),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if ((await ask(t('confirmDel')))) await api('DELETE', '/scenes/' + x.id); }) }, '×')))),
       h('div', { class: 'line' }, nameIn, fileIn),
       h('div', { class: 'line' }, h('button', { class: 'primary', onclick: create }, '+ ' + t('newScene')), libraryPicker())),
     sc && h('section', { class: 'sec' }, h('h3', {}, sc.name), sceneSettings(sc),
@@ -1128,7 +1130,7 @@ function renderInspector() {
       row(t('hidden'), flag('hidden')), row(t('sight'), flag('sight'), t('sightHint')),
       row(t('color'), h('input', { type: 'color', value: tok.color, onchange: (e) => patch({ color: e.target.value }) })),
       row(t('tokenImage'), h('label', { class: 'filebtn' }, t('choose'), h('input', { type: 'file', accept: 'image/*', hidden: true, onchange: guard(async (e) => { const f = e.target.files[0]; if (f) patch({ image: await upload(f) }); }) })))),
-    h('button', { class: 'danger', onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await api('DELETE', '/tokens/' + tok.id); remove(S.tokens, tok.id); S.selected = new Set(); renderInspector(); map.redraw(); }) }, t('del')));
+    h('button', { class: 'danger', onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await api('DELETE', '/tokens/' + tok.id); remove(S.tokens, tok.id); S.selected = new Set(); renderInspector(); map.redraw(); }) }, t('del')));
 }
 
 // ------------------------------------------------------------------ journal & handouts
@@ -1152,7 +1154,7 @@ function journalView(j) {
     isGM() && h('div', { class: 'line' },
       h('button', { onclick: () => { S.journalEdit = true; renderPanel(); } }, t('edit')),
       h('button', { class: 'primary', onclick: guard(() => api('POST', `/journals/${j.id}/show`)) }, t('showPlayers')),
-      h('button', { class: 'danger', onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await api('DELETE', '/journals/' + j.id); S.journalId = null; }) }, t('del'))),
+      h('button', { class: 'danger', onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await api('DELETE', '/journals/' + j.id); S.journalId = null; }) }, t('del'))),
     journalBody(j));
 }
 function journalForm(j) {
@@ -1194,7 +1196,7 @@ function soundPanel() {
     !S.sounds.length && h('p', { class: 'hint' }, t('empty')),
     S.sounds.map((s) => h('div', { class: 'sound' + (isOn(s) ? ' on' : '') },
       h('div', { class: 'line' }, h('input', { type: 'text', class: 'grow', value: s.name, onchange: guard((e) => api('PATCH', '/sounds/' + s.id, { name: e.target.value })) }),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) await api('DELETE', '/sounds/' + s.id); }) }, '×')),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if ((await ask(t('confirmDel')))) await api('DELETE', '/sounds/' + s.id); }) }, '×')),
       h('div', { class: 'line' },
         h('button', { class: 'primary', onclick: guard(() => api('POST', `/sounds/${s.id}/play`)) }, '▶ ' + t('play')),
         h('button', { onclick: guard(() => api('POST', `/sounds/${s.id}/stop`)) }, t('stop')),
@@ -1282,7 +1284,7 @@ function tableCompendium() {
         e.auto && h('span', { class: 'badge', title: t('autoHint') }, 'auto'),
         e.source?.stale && h('button', { class: 'primary', title: t('staleCopy'), onclick: guard(async () => { upsert(S.compendium, await api('POST', `/compendium/${e.id}/refresh`)); renderPanel(); }) }, '↻ ' + t('updateCopy')),
         h('label', { class: 'check', title: t('visibleToPlayers') }, h('input', { type: 'checkbox', checked: e.visible, onchange: guard(async (ev) => { upsert(S.compendium, await api('PATCH', '/compendium/' + e.id, { visible: ev.target.checked })); }) }), '👁'),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) { await api('DELETE', '/compendium/' + e.id); remove(S.compendium, e.id); renderPanel(); } }) }, '×')),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if ((await ask(t('confirmDel')))) { await api('DELETE', '/compendium/' + e.id); remove(S.compendium, e.id); renderPanel(); } }) }, '×')),
       open && entryEditor(e, async (body) => upsert(S.compendium, await api('PATCH', '/compendium/' + e.id, body))));
   };
   const create = (kind, type) => guard(async () => {
@@ -1330,7 +1332,7 @@ function globalCompendium() {
       h('div', { class: 'line' },
         h('button', { class: 'row grow', onclick: () => { if (!outside) return; if (open) compOpen.delete(e.id); else compOpen.add(e.id); renderPanel(); } }, h('b', {}, e.name), tag(e)),
         addHere('/compendium/import', e),
-        outside && h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) { await request('DELETE', '/admin/api/compendium/' + e.id); await refreshComp(); } }) }, '×')),
+        outside && h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if ((await ask(t('confirmDel')))) { await request('DELETE', '/admin/api/compendium/' + e.id); await refreshComp(); } }) }, '×')),
       open && entryEditor(e, async (body) => { await request('PATCH', '/admin/api/compendium/' + e.id, { ...body, table: S.table.slug }); await refreshComp(); }));
   };
   const entries = found(g.entries.filter(keep)), npcs = found(g.npcs.filter(keep));
@@ -1373,8 +1375,8 @@ function systemLibrary() {
     h('option', { value: '' }, label), S.savedSystems.map((x) => h('option', { value: x.id }, x.name)));
   const reloadLib = async () => { S.savedSystems = (await request('GET', '/admin/api/systems')).systems; renderPanel(); };
   return h('section', { class: 'sec' }, h('h3', {}, t('systemsLib')), h('div', { class: 'line' },
-    h('button', { onclick: guard(async () => { const name = prompt(t('systemName'), S.system.name); if (!name) return; await request('POST', '/admin/api/systems', { name, table: S.table.slug }); await reloadLib(); toast(t('saved'), false); }) }, t('saveSystemAs')),
-    S.savedSystems.length > 0 && pick(t('updateSystem'), guard(async (id) => { if (!confirm(t('confirmOverwrite'))) return; await request('PATCH', `/admin/api/systems/${id}`, { table: S.table.slug }); await reloadLib(); toast(t('saved'), false); })),
+    h('button', { onclick: guard(async () => { const name = await ask(t('systemName'), { input: S.system.name }); if (!name) return; await request('POST', '/admin/api/systems', { name, table: S.table.slug }); await reloadLib(); toast(t('saved'), false); }) }, t('saveSystemAs')),
+    S.savedSystems.length > 0 && pick(t('updateSystem'), guard(async (id) => { if (!(await ask(t('confirmOverwrite')))) return; await request('PATCH', `/admin/api/systems/${id}`, { table: S.table.slug }); await reloadLib(); toast(t('saved'), false); })),
     S.savedSystems.length > 0 && pick(t('applySystem'), (id) => previewSystem(id))));
 }
 
@@ -1410,7 +1412,7 @@ function systemPanel() {
     h('button', { class: 'x', onclick: () => { delete draft.knowledgeTiers[k]; renderPanel(); } }, '×')));
   return h('div', { class: 'pad' }, systemLibrary(),
     h('div', { class: 'line' }, h('button', { class: 'primary', onclick: save }, t('save')),
-      h('button', { onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await api('POST', '/system/reset'); S.draft = null; await loadState(); renderAll(); }) }, t('reset')),
+      h('button', { onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await api('POST', '/system/reset'); S.draft = null; await loadState(); renderAll(); }) }, t('reset')),
       h('button', { onclick: () => { const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(draft, null, 2)], { type: 'application/json' })), download: `${draft.id || 'system'}.json` }); a.click(); } }, t('export')),
       h('label', { class: 'filebtn' }, t('import'), h('input', { type: 'file', accept: '.json,application/json', hidden: true, onchange: guard(async (e) => { S.draft = JSON.parse(await e.target.files[0].text()); renderPanel(); }) }))),
     sec(t('formulaTest'), tester),

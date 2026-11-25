@@ -442,13 +442,15 @@ tbl('POST', '/scenes/:id/door', 'player', ({ user, table, params, body }) => {
   walls[i][W.open] = body.open === undefined ? (walls[i][W.open] ? 0 : 1) : body.open ? 1 : 0;
   return updateScene(sc, { walls });
 });
-// ---- exploration memory ("dynamic fog"): what each player slot has seen of a scene, as a half-cell bitmap (public/vision.js).
+/// ---- exploration memory ("dynamic fog"): what each player slot has seen of a scene, as half-cell bitmaps (public/vision.js):
+// "bits" = seen at all, "color" = seen in colour (a half cell seen only through darkvision stays black and white in the memory).
 // Pages OR what they see into it; the server ORs again, so nothing seen is ever lost. The GM resets it, per player or for all.
 const exploreRow = (sceneId, slotId) => db.prepare('SELECT * FROM explored WHERE scene_id = ? AND slot_id = ?').get(sceneId, slotId);
 function exploredOf(sc, slotId) {
   const d = exploreDims(sc), row = exploreRow(sc.id, slotId);
   const fits = row && row.cols === d.cols && row.rows === d.rows; // the map changed size or grid since: start over
-  return { ...d, bits: fits ? Buffer.from(row.bits).toString('base64') : '' };
+  const b64 = (v) => Buffer.from(v).toString('base64');
+  return { ...d, bits: fits ? b64(row.bits) : '', color: fits ? b64(row.color ?? row.bits) : '' }; // memories from before colour: all in colour
 }
 tbl('GET', '/scenes/:id/explored', 'player', ({ user, table, params, url }) => {
   const sc = inTable('scenes', params.id, table.id); if (!sc) throw notFound();
@@ -464,13 +466,14 @@ tbl('POST', '/scenes/:id/explored', 'player', ({ user, table, params, body }) =>
   if (d.cols * d.rows > 4_000_000) throw bad('Map too large for the exploration memory');
   if (body.cols !== d.cols || body.rows !== d.rows) throw new HttpError(409, 'The map changed, reload');
   const incoming = Buffer.from(String(body.bits ?? ''), 'base64');
-  if (incoming.length !== size) throw bad('Bad exploration bitmap');
-  const row = exploreRow(sc.id, user.id), bits = Buffer.alloc(size);
-  if (row && row.cols === d.cols && row.rows === d.rows) Buffer.from(row.bits).copy(bits);
-  for (let i = 0; i < size; i++) bits[i] |= incoming[i];
-  db.prepare('INSERT INTO explored (scene_id, slot_id, cols, rows, bits, updated) VALUES (?,?,?,?,?,?) ON CONFLICT(scene_id, slot_id) DO UPDATE SET cols = excluded.cols, rows = excluded.rows, bits = excluded.bits, updated = excluded.updated')
-    .run(sc.id, user.id, d.cols, d.rows, bits, now());
-  return { ...d, bits: bits.toString('base64') };
+  const inColor = body.color === undefined ? incoming : Buffer.from(String(body.color), 'base64');
+  if (incoming.length !== size || inColor.length !== size) throw bad('Bad exploration bitmap');
+  const row = exploreRow(sc.id, user.id), bits = Buffer.alloc(size), color = Buffer.alloc(size);
+  if (row && row.cols === d.cols && row.rows === d.rows) { Buffer.from(row.bits).copy(bits); Buffer.from(row.color ?? row.bits).copy(color); }
+  for (let i = 0; i < size; i++) { bits[i] |= incoming[i] | inColor[i]; color[i] |= inColor[i]; }
+  db.prepare('INSERT INTO explored (scene_id, slot_id, cols, rows, bits, color, updated) VALUES (?,?,?,?,?,?,?) ON CONFLICT(scene_id, slot_id) DO UPDATE SET cols = excluded.cols, rows = excluded.rows, bits = excluded.bits, color = excluded.color, updated = excluded.updated')
+    .run(sc.id, user.id, d.cols, d.rows, bits, color, now());
+  return { ...d, bits: bits.toString('base64'), color: color.toString('base64') };
 });
 tbl('DELETE', '/scenes/:id/explored', 'gm', ({ table, params, url }) => {
   const sc = inTable('scenes', params.id, table.id); if (!sc) throw notFound();

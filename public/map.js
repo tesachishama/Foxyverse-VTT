@@ -91,16 +91,19 @@ export function createMap(canvas, hooks) {
   const discIn = (c, pts, x, y, r) => { c.save(); poly(c, pts); c.clip(); c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill(); c.restore(); };
   const fillZones = (layer, zones) => world(layer, (c) => { c.fillStyle = '#fff'; for (const z of zones) discIn(c, z.poly, z.x, z.y, z.r); });
   /** The explored half cells as a tiny picture (one pixel each), redrawn only when the memory changes. */
-  let exploredPic = { ex: null, rev: null, canvas: null };
-  function exploredCanvas(ex) {
-    if (exploredPic.ex === ex && exploredPic.rev === ex.rev) return exploredPic.canvas; // a new memory (reset, other scene) is a new object
+  // "seen": every explored half cell; "grey": the ones seen only through darkvision (never in colour)
+  const exploredPics = { seen: { ex: null, rev: null, canvas: null }, grey: { ex: null, rev: null, canvas: null } };
+  function exploredCanvas(ex, mode = 'seen') {
+    const pic = exploredPics[mode];
+    if (pic.ex === ex && pic.rev === ex.rev) return pic.canvas; // a new memory (reset, other scene) is a new object
     const c = document.createElement('canvas'); c.width = ex.dims.cols; c.height = ex.dims.rows;
-    const x = c.getContext('2d'), img = x.createImageData(c.width, c.height);
-    for (let i = 0; i < c.width * c.height; i++) if ((ex.bits[i >> 3] >> (i & 7)) & 1) img.data[i * 4 + 3] = 255;
+    const x = c.getContext('2d'), img = x.createImageData(c.width, c.height), bit = (b, i) => (b[i >> 3] >> (i & 7)) & 1;
+    for (let i = 0; i < c.width * c.height; i++) if (bit(ex.bits, i) && (mode === 'seen' || !bit(ex.color ?? ex.bits, i))) img.data[i * 4 + 3] = 255;
     x.putImageData(img, 0, 0);
-    exploredPic = { ex, rev: ex.rev, canvas: c };
+    exploredPics[mode] = { ex, rev: ex.rev, canvas: c };
     return c;
   }
+  const drawExplored = (layer, ex, mode) => world(layer, (c) => { c.imageSmoothingEnabled = true; c.drawImage(exploredCanvas(ex, mode), 0, 0, ex.dims.cols * ex.dims.cell, ex.dims.rows * ex.dims.cell); });
 
   /**
    * Fog of war (ROADMAP 2 §4): what the page shows is V ∩ L (the whole V in a lit scene), plus the darkvision viewers' V, which
@@ -131,11 +134,17 @@ export function createMap(canvas, hooks) {
       }
     }
     world(visX, (c) => { c.fillStyle = '#fff'; for (const r of scene.reveal || []) c.fillRect(r[0], r[1], r[2], r[3]); });
+    if (explored) { // remembered places seen only through darkvision stay black and white (outside what is seen right now)
+      clearL(pcX, pcC); drawExplored(pcX, explored, 'grey');
+      pcX.globalCompositeOperation = 'destination-out'; pcX.drawImage(visC, 0, 0); pcX.globalCompositeOperation = 'source-over';
+      clearL(greyX, greyC);
+      greyX.filter = 'grayscale(1)'; greyX.drawImage(canvas, 0, 0); greyX.filter = 'none';
+      greyX.globalCompositeOperation = 'destination-in'; greyX.drawImage(pcC, 0, 0); greyX.globalCompositeOperation = 'source-over';
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(greyC, 0, 0); ctx.restore();
+    }
     clearL(fogX, fogC); fogX.fillStyle = '#000'; fogX.fillRect(0, 0, fogC.width, fogC.height);
     fogX.globalCompositeOperation = 'destination-out';
-    if (explored) { // places seen before: dimmed, not black (smoothed, so the edges are soft)
-      world(fogX, (c) => { c.globalAlpha = 0.42; c.imageSmoothingEnabled = true; c.drawImage(exploredCanvas(explored), 0, 0, explored.dims.cols * explored.dims.cell, explored.dims.rows * explored.dims.cell); c.globalAlpha = 1; });
-    }
+    if (explored) { fogX.globalAlpha = 0.42; drawExplored(fogX, explored, 'seen'); fogX.globalAlpha = 1; } // places seen before: dimmed, not black (soft edges)
     fogX.drawImage(visC, 0, 0); fogX.globalCompositeOperation = 'source-over';
     ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = alpha; ctx.drawImage(fogC, 0, 0); ctx.restore();
   }
@@ -161,14 +170,17 @@ export function createMap(canvas, hooks) {
     for (let y = scene.oy % scene.grid; y <= h; y += scene.grid) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
     ctx.stroke();
 
+    const fogged = fogOn && !godView, own = (t) => fogged && st.viewerIds.has(t.id);
     for (const t of tokens) {
-      if (fogOn && !godView && !st.viewerIds.has(t.id) && !vis.canSee(t.x, t.y)) continue;
+      if (own(t)) continue; // drawn above the fog, below
+      if (fogged && !vis.canSee(t.x, t.y)) continue;
       drawToken(scene, t, selected.has(t.id));
     }
     ctx.restore();
 
     if (fogOn) drawFog(scene, vis, godView ? 0.5 : 1, !godView && st.explored?.sceneId === scene.id ? st.explored : null);
     ctx.save(); ctx.scale(cam.z, cam.z); ctx.translate(-cam.x, -cam.y);
+    for (const t of tokens) if (own(t)) drawToken(scene, t, selected.has(t.id)); // a player always sees their own tokens, even in the dark (not the map around them)
     drawDoors(scene, st, fogOn && !godView ? vis : null);
     if (st.gm) drawGuides(scene, st);
     ctx.restore();

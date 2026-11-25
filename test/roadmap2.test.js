@@ -172,3 +172,19 @@ test('4 exploration memory: per player slot and scene, ORed by the server, reset
   assert.equal((await send(pip, bits(0xff))).body.bits, '');
   await gm('PATCH', `/scenes/${sc.id}`, { fog: false, explore: true });
 });
+
+test('4 exploration memory remembers what was seen only through darkvision (it stays black and white)', async () => {
+  const sc = (await gm('POST', '/scenes', { name: 'Grey' })).body;
+  await gm('POST', `/scenes/${sc.id}/activate`);
+  try {
+    await gm('PATCH', `/scenes/${sc.id}`, { fog: true, explore: true });
+    const e = (await pip('GET', `/scenes/${sc.id}/explored`)).body, size = Math.ceil((e.cols * e.rows) / 8);
+    const b = (v) => Buffer.alloc(size, v).toString('base64');
+    const send = (bits, color) => pip('POST', `/scenes/${sc.id}/explored`, { cols: e.cols, rows: e.rows, bits, color });
+    const r1 = (await send(b(0b0011), b(0b0001))).body; // cell 0 in colour, cell 1 only through darkvision
+    assert.equal(Buffer.from(r1.bits, 'base64')[0], 0b0011); assert.equal(Buffer.from(r1.color, 'base64')[0], 0b0001);
+    const r2 = (await send(b(0b0010), b(0b0010))).body; // later seen in colour: it gets its colours back
+    assert.equal(Buffer.from(r2.color, 'base64')[0], 0b0011);
+    assert.equal((await send(b(0), 'AA')).status, 400); // wrong colour size
+  } finally { await gm('POST', `/scenes/${scene.id}/activate`); }
+});

@@ -46,7 +46,25 @@ export function toast(msg, bad = true) {
   document.body.append(el);
   setTimeout(() => el.remove(), 4000);
 }
-export const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+/**
+ * In-page replacement for confirm() / prompt() (some browsers and embedded views block native dialogs, and the buttons then did nothing).
+ * ask(message) -> Promise<boolean>; ask(message, { input: 'default' }) -> Promise<string | null>.
+ */
+export function ask(message, { input } = {}) {
+  return new Promise((resolve) => {
+    const field = input !== undefined && h('input', { type: 'text', value: input, class: 'grow' });
+    const done = (v) => { wrap.remove(); document.removeEventListener('keydown', key, true); resolve(v); };
+    const ok = () => done(field ? field.value : true), no = () => done(field ? null : false);
+    const key = (e) => { if (e.key === 'Escape') { e.stopPropagation(); no(); } else if (e.key === 'Enter') { e.preventDefault(); ok(); } };
+    const wrap = h('div', { class: 'modal ask', onclick: (e) => { if (e.target === e.currentTarget) no(); } },
+      h('div', { class: 'modal-card' }, h('p', {}, message), field,
+        h('div', { class: 'line' }, h('button', { class: 'primary', onclick: ok }, t('okBtn')), h('button', { onclick: no }, t('cancel')))));
+    document.body.append(wrap);
+    document.addEventListener('keydown', key, true);
+    (field || wrap.querySelector('button.primary')).focus();
+  });
+}
+export const debounce =(fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
 // ------------------------------------------------------------------ i18n
 const DICT = {
@@ -115,7 +133,7 @@ const DICT = {
     noPlayersTokens: 'Aucun jeton de joueur : le brouillard est total.',
     alias: 'Alias @', aliasAuto: 'depuis le nom', aliasHint: "Pour la narration : @alias dans le chat (sans espaces, unique dans la table, visible par le MJ seul). Vide : suit le nom.",
     search: 'Rechercher', newOne: 'Nouveau', fromCompendium: 'Depuis le compendium', noMatch: 'Aucun résultat.', compEmpty: 'Rien de cette catégorie dans le compendium.',
-    damage: 'Dégâts', tookDamage: 'a pris {n} dégâts',
+    okBtn: 'OK', damage: 'Dégâts', tookDamage: 'a pris {n} dégâts',
     paneToDynamic: 'Replier automatiquement', paneToPinned: 'Garder ouvert', panels: 'Onglets', popOut: 'Détacher en fenêtre', dockBack: 'Remettre dans les onglets',
     floating: 'en fenêtre', allFloating: 'Tous les onglets sont en fenêtres.',
     toolTWall: 'Mur tangible', toolAntiLight: 'Anti-lumière', wallKind: 'Type de mur dessiné', wallBoth: 'Mur + tangible', wallTitle: 'Mur',
@@ -192,7 +210,7 @@ const DICT = {
     noPlayersTokens: 'No player tokens: fog is total.',
     alias: '@ alias', aliasAuto: 'from the name', aliasHint: 'For narration: @alias in the chat (no spaces, unique in the table, seen by the GM only). Empty: follows the name.',
     search: 'Search', newOne: 'New', fromCompendium: 'From the compendium', noMatch: 'No match.', compEmpty: 'Nothing of this category in the compendium.',
-    damage: 'Damage', tookDamage: 'took {n} damage',
+    okBtn: 'OK', damage: 'Damage', tookDamage: 'took {n} damage',
     paneToDynamic: 'Fold away automatically', paneToPinned: 'Keep open', panels: 'Tabs', popOut: 'Pop out into a window', dockBack: 'Put back in the tabs',
     floating: 'in a window', allFloating: 'Every tab is in a window.',
     toolTWall: 'Tangible wall', toolAntiLight: 'Anti-light', wallKind: 'Kind of wall drawn', wallBoth: 'Wall + tangible', wallTitle: 'Wall',
