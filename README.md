@@ -3,7 +3,8 @@
 A self-hosted virtual tabletop for the **Foxyverse** ruleset. It runs as one small container, needs no database server and no npm
 install, and the rules themselves (stats, formulas, roll types, rules text) are **data you edit inside the app**.
 
-* Real-time shared map with tokens, walls, doors, lights, fog of war and darkness
+* Real-time shared map with tokens, walls (sight and / or movement), doors, lights and anti-lights, teleport cells, fog of war with exploration memory, darkness and darkvision
+* Tabs on the left and chat on the right, both foldable; any tab can float in its own window
 * Character sheets driven by your formulas, with the full 33-slot equipment system and silhouette
 * Dice chat with the Foxyverse roll language, nat 1 / nat max grading, favors and one-click damage/heal application
 * Journal and image handouts, synchronized soundboard, compendium of items / spells / talents / NPC templates
@@ -167,23 +168,31 @@ Mouse wheel zooms, right/middle-drag pans, two-finger pinch works on touch scree
 ### 3. Characters and tokens
 **Sheets** tab, *New character* (GM only). Click the round picture to set a **portrait** (the whole character) and frame its round **token** (drag and zoom; or send a ready-made token): the token is what the map, the chat and the NPC list show. Fill stats, level and equipment. In *Player rights* at the bottom of the sheet, give each player **Edit**, **View only** or **None** (the sheet is then invisible to them); then **Place token**.
 Double-click a token to open its sheet. Players move the tokens of the sheets they can edit. Tokens snap to the grid.
-Select a token (GM) to edit its name, size, linked character, **vision**, **light**, its **state**, whether it **shares its sight with all players**, colour, image, or hide it.
-A token whose sheet is at 0 HP or less turns **black and white** (80 % opacity) for everyone; the state can force *dead* or *alive*.
+Select a token (GM) to edit its name, size, linked character, **vision** (cells, 100 by default, 0 = no vision), **light**, its **state**, whether it **shares its sight with all players**, colour, image, or hide it.
+A token whose sheet is at 0 HP or less turns **black and white** (50 % opacity) for everyone and **sees nothing**; the state can force *dead* or *alive*.
+The sheet's **Darkvision** box (next to *Elemental*) lets its tokens see without light (see [Fog, vision and darkness](#fog-vision-and-darkness)). The GM also sets each sheet's **`@` alias** there (see below).
 
-### 4. Rolling
-The chat sits left of the map, outside the tabs: keep it open, or switch it to *dynamic* (a thin strip that opens on hover, when typing, or briefly when a message arrives). Shift+Enter makes a new line.
-Each message shows the speaker's token next to the name; the *As* selector chooses who speaks.
-**GM narration:** type `@` for a list of sheets (and `mj`): `@Gwen Hello` makes Gwen speak, `@mj The door creaks` narrates in italics, the speaker stays until the next `@`, and the whole text is one message.
-Type in the chat or click buttons on the sheet. `/int`, `/str +2` (a stat check: d20 roll-under with a modifier), `/pdmg 2d6+str`, `/pdmg 10 2d4|label`, `/gm /pdmg 1d8` (GM-only).
-The card shows each die, the total, the formula with your stats filled in, and the grade. The GM selects tokens on the map and presses **Apply** on a damage / heal / mana card;
-players can apply heals and mana to characters they can edit. An application can be repeated, and each one has its own `↶` undo. **Reroll** costs the rolling character one favor, GM included (a GM roll with no character is free).
+### 4. Layout and rolling
+Tabs and panels sit on the **left**, the map in the middle, the **chat on the right**. Tabs never scroll (two rows for the GM). Each side can stay open or be **dynamic**:
+a thin strip that opens on hover or when typing (the button at the bottom of the tabs, and at the top of the chat). While the chat is folded, each new message shows alone as a **bubble** for 5 seconds; hovering a bubble opens the whole chat.
+The `⧉` button on the active tab **pops it out** into a window you can drag (by its title) and resize (bottom-right corner); `⇲` puts it back. Windows come back where they were after a reload (remembered in this browser).
 
-**Talents** are pills with a tier (T0 +0, T1 +1, T2 +3, T3 +5, T4 +10) and a description that unfolds. A **ticked** talent is a passive bonus on every stat check (T2 takes 3 off the d20); ticked talents add up; damage and other rolls are untouched. A spell's description can be saved (locked) and unlocked.
+Shift+Enter makes a new line in the chat. Each message shows the speaker's token next to the name; the *As* selector chooses who speaks.
+**GM narration:** each sheet has an **`@` alias** (its name without spaces, e.g. `GwenDoline`; a number is added if two sheets would share it; only the GM sees and edits it; `mj` and `gm` are reserved).
+Type `@` for the list (typing part of a name finds it too): `@GwenDoline Hello` makes Gwen speak, `@mj The door creaks` narrates in italics, the speaker stays until the next `@`, and the whole text is one message.
+Type in the chat or click buttons on the sheet. `/int`, `/str +2` (a stat check: d20 roll-under with a modifier), `/pdmg 2d6+str`, `/pdmg 10 2d4|label`, `/gm /pdmg 1d8` (GM-only). Long rolls wrap onto several lines.
+The card shows each die, the total, the formula with your stats filled in, and the grade. Select tokens on the map and press **Apply** on a damage / heal / mana card: the GM on any token,
+a player on the tokens of sheets they can edit (the server refuses the others). The result reads *took 25 damage (20−5 + 15−5)*: armor comes off **each roll** separately.
+An application can be repeated, and each one has its own `↶` undo (players: on their own sheets). **Reroll** costs the rolling character one favor, GM included (a GM roll with no character is free).
+
+**Talents** are pills with a tier shown as it acts on the d20 (T0 -0, T1 -1, T2 -3, T3 -5, T4 -10) and a description that unfolds. A **ticked** talent applies to every stat check (T2 takes 3 off the d20, an easier roll-under); ticked talents add up; damage and other rolls are untouched. A spell's description can be saved (locked) and unlocked.
 
 ### 5. Equipment
 Each item says where it can be worn with a **slot expression**, and is placed with the slot picker or by clicking the silhouette. See [Equipment slots](#equipment-slots).
+The **+** of a section opens a small window: **New**, or pick an entry of that category **from the compendium** (with a search box).
+A **weapon** has a **Damage** line of roll buttons, e.g. `[pdmg 2d30 | physical][mdmg 2d30 | magical]` (the text after `|` is the label): closed, the weapon shows the buttons, which roll in the chat like any other.
 
-### 6. Walls, doors, lights and fog (GM)
+### 6. Walls, doors, lights, teleports and fog (GM)
 Turn on **Fog** (and **Darkness** for a dark map). Draw walls with the tools at the bottom left of the map (see [Map tools](#map-tools)). Players only see what their tokens can see.
 
 ### 7. Journal, sound, compendium
@@ -210,10 +219,12 @@ new tables of the campaign start with it, and choosing the campaign for an exist
 | Create / delete characters | yes | no |
 | See a character | all | the ones they have *Edit* or *View only* on |
 | Edit a character, roll and speak as it | all | *Edit* only |
-| Move tokens | all | tokens of characters they can edit |
+| Move tokens | all, through any wall | tokens of characters they can edit; not through tangible walls or closed doors |
+| Open / close doors | all | unlocked doors of the active scene |
 | Upload | images, maps, audio | images up to 5 MB |
 | Reroll a roll | costs a favor of the rolling character (free without one) | own rolls, costs a favor |
-| Apply damage to tokens | yes | no (heals / mana on self only) |
+| Apply / undo damage, heals, mana | any token | tokens of characters they can edit |
+| `@` aliases | see and edit | never see them |
 
 ### Rolls
 `/type [count] formula|label`. A type is a stat id or alias (`con str int per soc agi foc` and French names), a roll type (`pdmg mdmg tdmg heal theal mana roll`, aliases `dgtp dgtm dgtb soin`...) or a quick roll (`speed`).
@@ -253,26 +264,36 @@ On the silhouette: hover a slot for its name and item, click an equipped slot to
 ### Map tools
 | Tool | How it works |
 |---|---|
-| Select | click/shift-click tokens, drag to move, double-click for the sheet |
-| Wall | click points to chain walls; right-click or Esc finishes |
-| Rectangle / Circle | drag; rectangle is 4 walls, circle is a polygon sized to its radius |
+| Select | click/shift-click tokens, drag to move, double-click for the sheet; click a wall, door, light or TP cell to set it up in the inspector (right of the map); drag a light or TP cell to move it |
+| Wall | blocks sight and light. Click points to chain walls; right-click or Esc finishes |
+| Tangible wall | blocks players' movement (not sight); the GM walks through |
+| Rectangle / Circle | drag; rectangle is 4 walls, circle is a polygon sized to its radius (the kind of wall is chosen in the list next to the tools) |
 | Curve | click start, click end, move to bend (quadratic Bézier), click to confirm; Esc cancels |
-| Door | click to place; click an existing door to open or close it (open doors do not block sight) |
-| Edit | drag a wall corner; all walls attached to it follow |
-| Light | click to place a light of the chosen radius (cells); tokens can also emit light |
+| Door | click twice to place; a door icon sits in its middle: anyone clicks it to open or close (closed: blocks sight, light and movement; open: nothing). *Locked* in the inspector: only the GM |
+| Edit | drag a node: every wall attached to it follows; click a segment to add a node there; two nodes merge only when you let go on top of another |
+| Light | click to place a light (a small GM-only icon); with Select, drag it, and resize it with the handle on its circle (steps of half a cell); tokens can also carry light |
+| Anti-light | like a light, but removes light under its area. It beats every light, unless *Players' light wins* is ticked: then the lights carried by players' tokens still shine |
+| TP cell | click a cell to place a teleport cell; cells of the same **group** are linked (2 or more; group set in the inspector; a new cell joins the picked cell's group) |
 | Reveal | drag a rectangle to reveal it permanently |
-| Erase | click a wall, light or revealed area to delete it |
+| Erase | click a wall, light, TP cell or revealed area to delete it |
+
+Every wall has two independent properties, **blocks movement** and **blocks sight and light**; the tools are presets, the inspector changes them afterwards.
+**Teleport cells:** a token standing on a TP cell shows as a see-through **ghost** on every linked cell. The ghost gives the vision seen from there, and the player can **drag the ghost**: the token teleports to that cell and keeps moving (the server checks that it starts from a linked cell, and checks walls from there). Ghosts are never saved, they follow the token.
 
 **Snapping** (selector appears with the drawing tools): *Grid* (cell corners), *Half cell*, *Free*. Hold **Shift or Alt** to place freely for one click, ignoring both the grid and magnetism to existing corners.
 Wall ends are magnetic by default so corners close cleanly. **Undo** with the button or Ctrl+Z (60 steps, per scene).
 
 ### Fog, vision and darkness
-* **Lit scene:** a player sees whatever is in line of sight of their tokens (limited to `vision` cells if set; 0 means unlimited).
-* **Dark scene:** a player also needs light: a placed light, a token with `light`, or darkvision (`vision` cells). Light does not pass through walls either.
-* **Whose eyes:** tokens linked to a player's character, plus any token with **Shares its sight** ticked. A player with no token on the scene sees nothing.
-* **Player view** (GM, next to the Fog switch): shows exactly what players see, with a selector: *All players*, one player, or the *Selected token* (handy to test with a GM-owned character).
+* **Light (L):** every placed light and every token's `light`, stopped by walls that block light, minus anti-lights. A scene that is not dark is all light.
+* **Vision (V):** what the viewing tokens see, each within its `vision` radius (cells; **0 = no vision**, 100 by default) and stopped by walls that block sight. Lights do not extend vision, and vision does not light anything.
+* **What a player sees:** in a dark scene, **V ∩ L**; in a lit scene, V. A token with **darkvision** (sheet toggle) sees its whole V without light, but what lies outside L is shown in **black and white**.
+* **Whose eyes:** the player's tokens in *Edit* (alive). Tokens they can only *View* count too when the scene has **Shared vision** (box next to *Darkness*), or automatically while the player has no living token in *Edit* on the scene.
+  A token with **Shares its sight** gives its vision to everyone (the GM's override). Dead tokens see nothing. A player always sees their own tokens, even in the dark (not the map around them).
+* **Exploration memory** (*Table* tab, scene section, on by default): places a player has seen stay **dimmed** instead of going black again, without the tokens; places seen only through darkvision stay black and white.
+  It is kept on the server per player and per scene (it survives a reload and follows the player to another device). *Reset exploration…* clears it for one player or everyone.
+* **Player view** (GM, next to the Fog switch): shows exactly what players see, with a selector: *All players*, one player (with that player's exploration memory), or the *Selected token* (handy to test with a GM-owned character).
   If no token gives sight, a red notice explains why the map is black.
-* Fog is enforced in the browser: the full map image is delivered to every player (as in other virtual tabletops), so do not rely on it to hide secrets from a determined player.
+* Fog is enforced in the browser: the full map image is delivered to every player (as in other virtual tabletops), so do not rely on it to hide secrets from a determined player who reads the network traffic.
 
 ### Journal and handouts
 Markdown subset: `# heading`, `- list`, `**bold**`, `[str +2|label]` roll buttons, an optional image. Visible to the GM only, everyone, or chosen players.
@@ -304,8 +325,10 @@ The derived values `maxhp`, `maxmp`, `maxfav` and `act` are required. Names are 
 | A player's slot says *already playing* | someone holds it, or the page closed less than 60 s ago; the GM can press *Disconnect* in the Table tab |
 | Container exits, log says it cannot write to the data folder | bind mount owned by root: `sudo chown -R 1000:1000 <folder>` or use a named volume |
 | `denied` / `unauthorized` when pulling the image | the GitHub package is private: make it public or `docker login ghcr.io` |
-| Map is completely black in player view | no token gives sight: link a token to a player's character, tick *Shares its sight*, or choose *Selected token* |
-| Dark scene is black for players | add a light, give the token `light`, or give the player token `vision` (darkvision) |
+| Map is completely black in player view | no token gives sight: link a token to a player's character, tick *Shares its sight*, or choose *Selected token*; check the token's `vision` is not 0 and it is not dead |
+| Dark scene is black for players | add a light, give the token `light`, or tick *Darkvision* on its sheet |
+| A player sees through another character's token | they have *View only* on it and either the scene has *Shared vision*, or none of their own *Edit* tokens on the scene is alive |
+| A player cannot move their token somewhere | a tangible wall or a closed door is in the way (the GM can pass) |
 | No sound | click anywhere on the page (browser autoplay rule) or press *Enable sound*; check the mute switch |
 | Cannot find my data | see [Where your data lives](#where-your-data-lives) |
 
@@ -319,7 +342,9 @@ The derived values `maxhp`, `maxmp`, `maxfav` and `act` are required. Names are 
 
     server/engine.js    formula language       server/rules.js   system validation, rolls, equipment, damage
     server/index.js     HTTP, live updates, API   server/db.js   SQLite schema and migrations
-    public/             the client (vanilla JS, no build step); vision.js and slots.js are shared with the server
-    public/icons/       your icon set          system/           the default Foxyverse system
+    public/             the client (vanilla JS, no build step); the pure modules vision.js, walls.js, tp.js, slots.js,
+                        format.js and layout.js are shared with the server and the tests
+    public/icons/       your icon set (door.svg, light.svg, antilight.svg and tp.svg are placeholders: replace them, same names, square)
+    system/             the default Foxyverse system
 
 Credits: the slot grammar, dice rules and icons come from the Foxyverse Owlbear plugin by the same author.
