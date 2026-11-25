@@ -1,11 +1,12 @@
 // Line-of-sight geometry. Pure functions, no DOM: used by the map renderer and by the tests.
-// A wall is [x1, y1, x2, y2, isDoor, isOpen]. Distances in px unless stated; token vision/light are in grid cells.
+// Walls: see walls.js. Distances in px unless stated; token vision/light are in grid cells.
+import { blocksSight } from './walls.js';
 
-/** Segments that block sight: walls, closed doors, and the map border. */
+/** Segments that block sight and light: walls that do, closed doors, and the map border (tangible-only walls do not). */
 export function blockers(scene) {
   const w = scene.width || 2000, h = scene.height || 1400;
   const out = [[0, 0, w, 0], [w, 0, w, h], [w, h, 0, h], [0, h, 0, 0]];
-  for (const s of scene.walls || []) if (!(s[4] && s[5])) out.push(s);
+  for (const s of scene.walls || []) if (blocksSight(s)) out.push(s);
   return out;
 }
 
@@ -44,22 +45,28 @@ export function pointInPoly(x, y, poly) {
 
 /**
  * viewers: [{x, y, vision}]   vision in cells, 0 = unlimited (lit scenes) / none (dark scenes)
- * lights:  [{x, y, radius}]   radius in cells
- * Returns { sight, lit, canSee(x, y) }.
+ * lights:  [{x, y, radius, anti?, playersWin?, player?}]   radius in cells
+ *   anti: an anti-light, it removes light under its area (stopped by walls like a light). It always wins over lights,
+ *   except when it has playersWin and the light is carried by a player's token (player).
+ * Returns { sight, lit, anti, canSee(x, y), isLit(x, y) }.
  *  - Lit scene:  you see what is in line of sight (within `vision` cells if set).
  *  - Dark scene: you also need light (or darkvision = `vision` cells) on the spot.
  */
 export function computeVision(scene, viewers, lights) {
   const segs = blockers(scene), g = scene.grid || 70, dark = !!scene.dark;
   const sight = viewers.map((v) => ({ x: v.x, y: v.y, r: (v.vision || 0) * g, poly: visibilityPolygon(v.x, v.y, segs) }));
-  const lit = lights.filter((l) => l.radius > 0).map((l) => ({ x: l.x, y: l.y, r: l.radius * g, poly: visibilityPolygon(l.x, l.y, segs) }));
+  const zone = (l) => ({ x: l.x, y: l.y, r: l.radius * g, player: !!l.player, playersWin: !!l.playersWin, poly: visibilityPolygon(l.x, l.y, segs) });
+  const lit = lights.filter((l) => l.radius > 0 && !l.anti).map(zone);
+  const anti = lights.filter((l) => l.radius > 0 && l.anti).map(zone);
+  const covers = (z, x, y) => Math.hypot(x - z.x, y - z.y) <= z.r && pointInPoly(x, y, z.poly);
+  const isLit = (x, y) => lit.some((l) => covers(l, x, y) && !anti.some((a) => covers(a, x, y) && !(a.playersWin && l.player)));
   const canSee = (x, y) => sight.some((s) => {
     if (!pointInPoly(x, y, s.poly)) return false;
     const d = Math.hypot(x - s.x, y - s.y);
     if (!dark) return s.r === 0 || d <= s.r;
-    return (s.r > 0 && d <= s.r) || lit.some((l) => Math.hypot(x - l.x, y - l.y) <= l.r && pointInPoly(x, y, l.poly));
+    return (s.r > 0 && d <= s.r) || isLit(x, y);
   });
-  return { dark, sight, lit, canSee };
+  return { dark, sight, lit, anti, canSee, isLit };
 }
 
 /**

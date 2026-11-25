@@ -78,3 +78,53 @@ test('1.4 aliases: made from the name, unique in the table, GM-only, follow rena
   const n = await gm('POST', '/chat', { text: '@GwenDoline Hello\n@Renamed Hi' });
   assert.deepEqual(n.body.body.parts.map((p) => [p.actorId, p.name, p.text]), [[a.id, 'Gwen Doline', 'Hello'], [b.id, 'Renamed', 'Hi']]);
 });
+
+test('3 walls and lights are sanitised: two wall properties, door lock, light kind, radius in half cells', async () => {
+  const sc = (await gm('POST', '/scenes', { name: 'Walls' })).body;
+  const r = await gm('PATCH', `/scenes/${sc.id}`, {
+    walls: [[0, 0, 100, 0, 0, 0, 0, 1, 0], [0, 0, 0, 100, 1, 0, 'yes', 0, 0], [5, 5, 9, 9]],
+    lights: [{ x: 10, y: 10, radius: 2.3 }, { x: 20, y: 20, radius: 4, kind: 'anti', playersWin: 1 }, { x: 1, y: 1, radius: 1, kind: 'evil', playersWin: true }],
+  });
+  assert.deepEqual(r.body.walls, [[0, 0, 100, 0, 0, 0, 0, 1, 0], [0, 0, 0, 100, 1, 0, 1, 0, 0], [5, 5, 9, 9, 0, 0, 0, 0, 1]]);
+  assert.deepEqual(r.body.lights.map((l) => [l.radius, l.kind, l.playersWin]), [[2.5, 'light', false], [4, 'anti', true], [1, 'light', false]]);
+});
+
+test('3 doors: players open and close them on the active scene, a locked one only the GM; found by their ends', async () => {
+  const p = await sheet('Opener', { [pipSlot.id]: 'edit' });
+  const door = [500, 0, 500, 1000];
+  await gm('PATCH', `/scenes/${scene.id}`, { walls: [[...door, 1, 0, 0, 1, 1]] });
+  const open = await pip('POST', `/scenes/${scene.id}/door`, { at: door, open: true });
+  assert.equal(open.status, 200); assert.equal(open.body.walls[0][5], 1);
+  assert.equal((await pip('POST', `/scenes/${scene.id}/door`, { at: door })).body.walls[0][5], 0); // toggles
+  assert.equal((await pip('POST', `/scenes/${scene.id}/door`, { at: [1, 2, 3, 4] })).status, 400);
+  await gm('PATCH', `/scenes/${scene.id}`, { walls: [[...door, 1, 0, 1, 1, 1]] }); // locked
+  assert.equal((await pip('POST', `/scenes/${scene.id}/door`, { at: door, open: true })).status, 403);
+  assert.equal((await gm('POST', `/scenes/${scene.id}/door`, { at: door, open: true })).body.walls[0][5], 1);
+  const other = (await gm('POST', '/scenes', { name: 'Elsewhere' })).body; // not the active scene: players do not reach it
+  await gm('PATCH', `/scenes/${other.id}`, { walls: [[...door, 1, 0, 0, 1, 1]] });
+  assert.equal((await pip('POST', `/scenes/${other.id}/door`, { at: door })).status, 404);
+  void p;
+});
+
+test('3 tangible walls and closed doors stop players\' tokens (server-side); the GM always passes', async () => {
+  const p = await sheet('Walker', { [pipSlot.id]: 'edit' });
+  const tok = (await gm('POST', '/tokens', { sceneId: scene.id, actorId: p.id, x: 105, y: 105 })).body;
+  const move = (who, x, y) => who('PATCH', `/tokens/${tok.id}`, { x, y });
+  await gm('PATCH', `/scenes/${scene.id}`, { walls: [[300, 0, 300, 1000, 0, 0, 0, 1, 0], [600, 0, 600, 1000, 0, 0, 0, 0, 1], [800, 0, 800, 1000, 1, 0, 0, 1, 1]] });
+  assert.equal((await move(pip, 250, 105)).status, 200);
+  assert.equal((await move(pip, 350, 105)).status, 409);  // tangible wall at x 300
+  assert.equal((await gm('GET', '/state')).body.tokens.find((t) => t.id === tok.id).x, 250); // not moved
+  assert.equal((await move(gm, 350, 105)).status, 200);   // the GM goes through
+  assert.equal((await move(pip, 700, 105)).status, 200);  // a sight-only wall does not stop movement
+  assert.equal((await move(pip, 850, 105)).status, 409);  // closed door
+  await pip('POST', `/scenes/${scene.id}/door`, { at: [800, 0, 800, 1000], open: true });
+  assert.equal((await move(pip, 850, 105)).status, 200);  // open door
+});
+
+test('3 tokens say whether they are a player\'s (their light can beat an anti-light)', async () => {
+  const npc = await sheet('Npc');
+  const tok = (await gm('POST', '/tokens', { sceneId: scene.id, actorId: npc.id, light: 3 })).body;
+  assert.equal(tok.pc, false);
+  await gm('PUT', `/actors/${npc.id}/perms`, { perms: { [quillSlot.id]: 'edit' } });
+  assert.equal((await gm('GET', '/state')).body.tokens.find((t) => t.id === tok.id).pc, true);
+});

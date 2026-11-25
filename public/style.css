@@ -320,3 +320,5 @@ input.search { width: 100%; margin: 0 0 8px; }
 .bubble { pointer-events: auto; background: var(--plum); border: 2px solid var(--lilac); border-radius: 16px; padding: 4px; box-shadow: 0 4px 16px rgba(0, 0, 0, .5); animation: bubble-in .18s ease; }
 .bubble .msg { border: 0; } .bubble .msg .x { display: none; }
 @keyframes bubble-in { from { opacity: 0; transform: translateY(8px); } }
+/* the inspector sits on the right of the map, under the scene bar, so it never hides what it edits near the tools */
+.inspector { left: auto; right: 10px; top: 64px; }

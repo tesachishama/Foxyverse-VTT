@@ -31,7 +31,7 @@ export const eventsUrl = () => `${apiBase}/events?c=${CLIENT_ID}`;
 export async function request(method, url, body) {
   const res = await fetch(url, { method, headers: { 'X-Client': CLIENT_ID, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status, data });
   return data;
 }
 export const api = (method, path, body) => request(method, apiBase + path, body);
@@ -118,6 +118,10 @@ const DICT = {
     damage: 'Dégâts', tookDamage: 'a pris {n} dégâts',
     paneToDynamic: 'Replier automatiquement', paneToPinned: 'Garder ouvert', panels: 'Onglets', popOut: 'Détacher en fenêtre', dockBack: 'Remettre dans les onglets',
     floating: 'en fenêtre', allFloating: 'Tous les onglets sont en fenêtres.',
+    toolTWall: 'Mur tangible', toolAntiLight: 'Anti-lumière', wallKind: 'Type de mur dessiné', wallBoth: 'Mur + tangible', wallTitle: 'Mur',
+    isDoor: 'Porte', doorOpen: 'Ouverte', doorLocked: 'Verrouillée', doorLockedHint: 'Seul le MJ peut l’ouvrir ou la fermer.',
+    blocksMove: 'Bloque le mouvement', blocksMoveHint: 'Les joueurs ne peuvent pas déplacer leur token au travers (le MJ si).', blocksSight: 'Bloque la vue et la lumière',
+    playersWin: 'La lumière des joueurs l’emporte', playersWinHint: 'Les lumières portées par les tokens des joueurs ne sont pas éteintes par cette zone.',
   },
   en: {
     name: 'Name', logout: 'Switch player',
@@ -187,6 +191,10 @@ const DICT = {
     damage: 'Damage', tookDamage: 'took {n} damage',
     paneToDynamic: 'Fold away automatically', paneToPinned: 'Keep open', panels: 'Tabs', popOut: 'Pop out into a window', dockBack: 'Put back in the tabs',
     floating: 'in a window', allFloating: 'Every tab is in a window.',
+    toolTWall: 'Tangible wall', toolAntiLight: 'Anti-light', wallKind: 'Kind of wall drawn', wallBoth: 'Wall + tangible', wallTitle: 'Wall',
+    isDoor: 'Door', doorOpen: 'Open', doorLocked: 'Locked', doorLockedHint: 'Only the GM can open or close it.',
+    blocksMove: 'Blocks movement', blocksMoveHint: 'Players cannot move their token through it (the GM can).', blocksSight: 'Blocks sight and light',
+    playersWin: "Players' light wins", playersWinHint: "Lights carried by players' tokens are not put out by this area.",
   },
 };
 let lang = localStorage.getItem('lang') || (navigator.language || 'fr').slice(0, 2);

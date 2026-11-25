@@ -5,12 +5,14 @@ import { inventoryView, icon } from './inventory.js';
 import { openTokenCropper } from './tokencrop.js';
 import { signed, tierLabel, damageText, matchesSearch } from './format.js';
 import { isTokenDead } from './vision.js';
+import { radiusStep } from './walls.js';
 import { tabColumns, clampRect, readJSON, writeJSON, createBubbles } from './layout.js';
 
 const S = {
   me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], table: null, allTables: [], mapMode: false,
   tab: 'sheets', sheetId: null, selected: new Set(), rollMod: '', draft: null,
   sounds: [], playing: [], journals: [], compendium: [], npcs: [], compView: 'table', compGlobal: null, compFilter: { tables: null, campaigns: null }, campaigns: [], savedSystems: [], timeOffset: 0, viewId: null, tool: { name: 'select', radius: 6, snap: 'grid' }, playerView: false, viewAs: 'players', undo: [],
+  picked: null, // the GM's picked map item: { kind: 'wall', index } or { kind: 'light', id }
   journalId: null, journalEdit: false, modal: null, audioBlocked: false, openItems: new Set(),
   actorId: Number(localStorage.getItem('speakAs')) || null,
 };
@@ -287,7 +289,7 @@ let editsPending = 0;
 function replaceScene(r) {
   if (isGM()) upsert(S.scenes, r);
   if (r.active || S.scene?.id === r.id) S.scene = r;
-  map.redraw(); renderHud();
+  map.redraw(); renderHud(); if (S.picked) renderInspector();
 }
 /** Optimistic scene edit: consecutive wall clicks must see each other, so apply locally first and queue the saves in order. */
 function sceneEdit(patch, { undoable = true } = {}) {
@@ -304,6 +306,18 @@ function sceneEdit(patch, { undoable = true } = {}) {
     .catch((e) => { editsPending = Math.max(0, editsPending - 1); toast(e.message); });
   return editQueue;
 }
+
+/** A door icon was clicked: the GM toggles it on the map (locked or not); a player asks the server, which refuses locked doors. */
+const toggleDoor = guard(async (w) => {
+  const sc = viewScene(); if (!sc) return;
+  if (isGM()) {
+    const i = sc.walls.indexOf(w); if (i < 0) return;
+    const walls = sc.walls.map((s) => s.slice()); walls[i][5] = walls[i][5] ? 0 : 1;
+    return sceneEdit({ walls }, { undoable: false });
+  }
+  if (w[6]) return toast(t('doorLocked'), false);
+  replaceScene(await api('POST', `/scenes/${sc.id}/door`, { at: w.slice(0, 4) }));
+});
 
 function undoSceneEdit() {
   const last = S.undo[S.undo.length - 1];
@@ -334,18 +348,22 @@ function buildShell() {
     state: () => {
       const sc = viewScene(), tokens = viewTokens(), eyes = viewerTokens(tokens);
       return {
-        scene: sc, tokens, selected: S.selected, tool: S.tool, gm: isGM(), playerView: S.playerView,
+        scene: sc, tokens, selected: S.selected, tool: S.tool, gm: isGM(), playerView: S.playerView, picked: S.picked,
         // viewerIds: tokens always drawn for this page (its own, dead ones included); viewers: the eyes (alive only)
         viewers: eyes.map((x) => ({ x: x.x, y: x.y, vision: x.vision })), viewerIds: new Set(viewerTokens(tokens, { withDead: true }).map((x) => x.id)),
-        lights: [...(sc?.lights ?? []), ...tokens.filter((x) => x.light > 0 && !x.hidden).map((x) => ({ x: x.x, y: x.y, radius: x.light }))],
+        // GM lights and anti-lights, plus the lights tokens carry (a player's token light can beat an anti-light that allows it)
+        lights: [...(sc?.lights ?? []).map((l) => ({ x: l.x, y: l.y, radius: l.radius, anti: l.kind === 'anti', playersWin: !!l.playersWin })),
+          ...tokens.filter((x) => x.light > 0 && !x.hidden).map((x) => ({ x: x.x, y: x.y, radius: x.light, player: !!x.pc }))],
       };
     },
     canMove: (tok) => isGM() || (!!tok.actorId && actorById(tok.actorId)?.perm === 'edit'),
     onFog: (total) => fogNote.classList.toggle('hidden', !total),
     isDead: tokenDead,
     hpRatio: (tok) => { const a = tok.actorId && actorById(tok.actorId); const max = a?.computed.derived.maxhp; return max ? a.data.hp.cur / max : null; },
-    onSelect: (set) => { S.selected = set; renderInspector(); renderChat(); },
-    onMove: (tok, x, y) => { api('PATCH', '/tokens/' + tok.id, { x, y }).catch(() => {}); },
+    onSelect: (set) => { S.selected = set; if (set.size) S.picked = null; renderInspector(); renderChat(); },
+    onMove: (tok, x, y) => { api('PATCH', '/tokens/' + tok.id, { x, y }).catch((e) => { if (e.data?.token) { Object.assign(tok, e.data.token); map.redraw(); } }); }, // a wall: back to where the server has it
+    onDoor: toggleDoor,
+    onPick: (item) => { S.picked = item; if (item) S.selected = new Set(); renderInspector(); map.redraw(); },
     onOpen: (tok) => { if (tok.actorId && actorById(tok.actorId)) { S.sheetId = tok.actorId; openTab('sheets'); } },
     onSceneEdit: sceneEdit,
   });
@@ -358,19 +376,29 @@ function buildShell() {
 function renderAll() { renderDock(); renderChat(); renderChatWho(); renderInspector(); renderHud(); map?.redraw(); }
 
 const TOOL_HINT = {
-  fr: { wall: 'Clic : poser un point · clic droit ou Échap : finir · Maj ou Alt : placement libre', rect: 'Glisser : rectangle de murs · Maj : sans aimant', circle: 'Glisser du centre vers le bord : cercle de murs',
-    curve: 'Clic : départ · clic : arrivée · bouger pour courber · clic : valider · Échap : annuler', door: 'Clic : poser une porte · clic sur une porte : ouvrir / fermer', edit: 'Glisser un sommet pour déplacer les murs qui y sont reliés',
-    light: 'Clic : poser une lumière', reveal: 'Glisser : révéler une zone en permanence', erase: 'Clic : supprimer mur, lumière ou zone' },
-  en: { wall: 'Click to add points · right-click or Esc to finish · Shift or Alt: free placement', rect: 'Drag: rectangle of walls · Shift: no snapping', circle: 'Drag from the centre to the edge: circle of walls',
-    curve: 'Click: start · click: end · move to bend · click: confirm · Esc: cancel', door: 'Click to place a door · click a door to open / close it', edit: 'Drag a corner to move the walls attached to it',
-    light: 'Click to place a light', reveal: 'Drag to permanently reveal an area', erase: 'Click to delete a wall, light or area' },
+  fr: { wall: 'Mur (bloque la vue et la lumière). Clic : poser un point · clic droit ou Échap : finir · Maj ou Alt : placement libre',
+    twall: 'Mur tangible (bloque le mouvement des joueurs, pas la vue). Clic : poser un point · clic droit ou Échap : finir',
+    rect: 'Glisser : rectangle de murs · Maj : sans aimant', circle: 'Glisser du centre vers le bord : cercle de murs',
+    curve: 'Clic : départ · clic : arrivée · bouger pour courber · clic : valider · Échap : annuler', door: 'Clic : poser une porte (deux clics) · clic sur une porte : ouvrir / fermer',
+    edit: 'Glisser un nœud pour déplacer les murs qui y sont reliés · clic sur un segment : ajouter un nœud · deux nœuds fusionnent au relâchement',
+    light: 'Clic : poser une lumière · ensuite, en Sélection : la déplacer, régler le rayon avec la poignée', antilight: "Clic : poser une anti-lumière (retire la lumière sous sa zone)",
+    reveal: 'Glisser : révéler une zone en permanence', erase: 'Clic : supprimer mur, lumière ou zone',
+    select: 'Clic sur un mur, une porte ou une lumière pour la régler · glisser une lumière pour la déplacer' },
+  en: { wall: 'Wall (blocks sight and light). Click to add points · right-click or Esc to finish · Shift or Alt: free placement',
+    twall: "Tangible wall (blocks players' movement, not sight). Click to add points · right-click or Esc to finish",
+    rect: 'Drag: rectangle of walls · Shift: no snapping', circle: 'Drag from the centre to the edge: circle of walls',
+    curve: 'Click: start · click: end · move to bend · click: confirm · Esc: cancel', door: 'Click to place a door (two clicks) · click a door to open / close it',
+    edit: 'Drag a node to move the walls attached to it · click a segment: add a node · two nodes merge when you let go',
+    light: 'Click to place a light · then, with Select: drag it, set its radius with the handle', antilight: 'Click to place an anti-light (removes light under its area)',
+    reveal: 'Drag to permanently reveal an area', erase: 'Click to delete a wall, light or area',
+    select: 'Click a wall, door or light to set it up · drag a light to move it' },
 };
 function renderHud() {
   hudEl.replaceChildren(h('button', { title: 'Fit', onclick: () => map.fit() }, '⤢'));
   topEl.replaceChildren();
   if (!isGM()) return;
   const sc = viewScene();
-  const sel = h('select', { title: t('scenes'), onchange: (e) => { S.viewId = Number(e.target.value); S.selected = new Set(); renderAll(); } },
+  const sel = h('select', { title: t('scenes'), onchange: (e) => { S.viewId = Number(e.target.value); S.selected = new Set(); S.picked = null; renderAll(); } },
     S.scenes.map((s) => h('option', { value: s.id }, s.name + (s.active ? ' ●' : ''))));
   sel.value = S.viewId ?? '';
   const flag = (label, checked, on) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked, onchange: (e) => on(e.target.checked) }), label);
@@ -385,19 +413,24 @@ function renderHud() {
     sc?.fog && !S.mapMode && flag(t('playerView'), S.playerView, (v) => { S.playerView = v; renderHud(); map.redraw(); }),
     sc?.fog && S.playerView && viewAs);
   if (!sc) return;
-  const tools = [['select', 'toolSelect'], ['wall', 'toolWall'], ['rect', 'toolRect'], ['circle', 'toolCircle'], ['curve', 'toolCurve'], ['door', 'toolDoor'], ['edit', 'toolEdit'], ['light', 'toolLight'], ['reveal', 'toolReveal'], ['erase', 'toolErase']];
+  const tools = [['select', 'toolSelect'], ['wall', 'toolWall'], ['twall', 'toolTWall'], ['rect', 'toolRect'], ['circle', 'toolCircle'], ['curve', 'toolCurve'], ['door', 'toolDoor'], ['edit', 'toolEdit'],
+    ['light', 'toolLight'], ['antilight', 'toolAntiLight'], ['reveal', 'toolReveal'], ['erase', 'toolErase']];
   const snapSel = h('select', { title: t('snap'), onchange: (e) => { S.tool.snap = e.target.value; } },
     h('option', { value: 'grid' }, t('snapGrid')), h('option', { value: 'half' }, t('snapHalf')), h('option', { value: 'off' }, t('snapOff')));
   snapSel.value = S.tool.snap;
+  // rectangle, circle and curve draw the kind of wall chosen here (each wall can be changed afterwards in the inspector)
+  const kindSel = h('select', { title: t('wallKind'), onchange: (e) => { S.tool.wallKind = e.target.value; } },
+    h('option', { value: 'wall' }, t('toolWall')), h('option', { value: 'tangible' }, t('toolTWall')), h('option', { value: 'both' }, t('wallBoth')));
+  kindSel.value = S.tool.wallKind ?? 'wall';
   const canUndo = S.undo.some((u) => u.sceneId === sc.id);
   add(hudEl, h('div', { class: 'tools' },
     tools.map(([id, key]) => h('button', { class: S.tool.name === id ? 'on' : '', onclick: () => { S.tool.name = id; map.cancel(); renderHud(); } }, t(key))),
     S.tool.name !== 'select' && snapSel,
-    S.tool.name === 'light' && h('label', {}, t('radius'), h('input', { type: 'number', class: 'n', min: 1, max: 100, value: S.tool.radius, oninput: (e) => { S.tool.radius = Number(e.target.value) || 6; } })),
+    ['rect', 'circle', 'curve'].includes(S.tool.name) && kindSel,
+    ['light', 'antilight'].includes(S.tool.name) && h('label', {}, t('radius'), h('input', { type: 'number', class: 'n', min: 0.5, max: 100, step: 0.5, value: S.tool.radius, oninput: (e) => { S.tool.radius = Number(e.target.value) || 6; } })),
     h('button', { title: 'Ctrl+Z', disabled: !canUndo, onclick: undoSceneEdit }, t('undo'))),
     TOOL_HINT[getLang()]?.[S.tool.name] && h('div', { class: 'hint tool-hint' }, TOOL_HINT[getLang()][S.tool.name]));
 }
-
 function renderFoot() {
   fill(footEl,
     h('button', { class: 'quiet' + (audio.isMuted() ? ' on' : ''), title: t('mute'), onclick: () => { audio.setMuted(!audio.isMuted()); renderFoot(); } }, audio.isMuted() ? t('mute') : '♪'),
@@ -991,7 +1024,33 @@ function mapPanel() {
 }
 
 // ------------------------------------------------------------------ token inspector (GM)
+/** GM: the picked wall / door or light, with its properties (presets only set the starting values). */
+function itemInspector(sc) {
+  const p = S.picked, row = (label, control, title) => [h('span', { class: 'k', title }, label), control];
+  const close = () => { S.picked = null; renderInspector(); map.redraw(); };
+  const head = (title) => h('div', { class: 'insp-head' }, h('b', { class: 'grow' }, title), h('button', { class: 'x', title: t('close'), onclick: close }, '×'));
+  if (p.kind === 'wall') {
+    const w = sc.walls[p.index]; if (!w) return null;
+    const set = (k, v) => { const walls = sc.walls.map((s) => s.slice()); walls[p.index][k] = v ? 1 : 0; sceneEdit({ walls }); renderInspector(); };
+    const box = (k) => h('input', { type: 'checkbox', checked: !!w[k], onchange: (e) => set(k, e.target.checked) });
+    return [head(w[4] ? t('toolDoor') : t('wallTitle')),
+      h('div', { class: 'insp-grid' },
+        row(t('isDoor'), box(4)),
+        w[4] ? [row(t('doorOpen'), box(5)), row(t('doorLocked'), box(6), t('doorLockedHint'))]
+          : [row(t('blocksMove'), box(7), t('blocksMoveHint')), row(t('blocksSight'), box(8))]),
+      h('button', { class: 'danger', onclick: () => { sceneEdit({ walls: sc.walls.filter((_, i) => i !== p.index) }); close(); } }, t('del'))];
+  }
+  const l = (sc.lights ?? []).find((x) => x.id === p.id); if (!l) return null;
+  const set = (patch) => { sceneEdit({ lights: sc.lights.map((x) => (x.id === l.id ? { ...x, ...patch } : x)) }); renderInspector(); };
+  return [head(l.kind === 'anti' ? t('toolAntiLight') : t('toolLight')),
+    h('div', { class: 'insp-grid' },
+      row(t('radius'), h('input', { type: 'number', class: 'n', min: 0, max: 100, step: 0.5, value: l.radius, onchange: (e) => set({ radius: radiusStep(e.target.value) }) })),
+      l.kind === 'anti' && row(t('playersWin'), h('input', { type: 'checkbox', checked: !!l.playersWin, onchange: (e) => set({ playersWin: e.target.checked }) }), t('playersWinHint'))),
+    h('button', { class: 'danger', onclick: () => { sceneEdit({ lights: sc.lights.filter((x) => x.id !== l.id) }); close(); } }, t('del'))];
+}
 function renderInspector() {
+  const sc = viewScene(), item = isGM() && S.picked && sc ? itemInspector(sc) : null;
+  if (item) { inspectorEl.classList.remove('hidden'); return fill(inspectorEl, item); }
   const tok = isGM() && S.selected.size === 1 ? S.tokens.find((x) => x.id === [...S.selected][0]) : null;
   inspectorEl.classList.toggle('hidden', !tok);
   if (!tok) return inspectorEl.replaceChildren();

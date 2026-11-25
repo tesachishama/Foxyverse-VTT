@@ -50,7 +50,7 @@ test('v1 data moves into the table "test" with its rules; v1 accounts are droppe
     const tables = (await srv.call('GET', '/admin/api/tables')).body.tables;
     assert.deepEqual(tables.map((t) => [t.slug, t.players]), [['test', 0]]); // no slots: the GM creates them again
     const st = (await srv.call('GET', '/admin/api/t/test/state')).body;
-    assert.equal(st.scene.name, 'Old map'); assert.deepEqual(st.scene.walls, [[0, 0, 10, 0, 0, 0]]);
+    assert.equal(st.scene.name, 'Old map'); assert.deepEqual(st.scene.walls, [[0, 0, 10, 0, 0, 0, 0, 0, 1]]); // old walls: block sight and light, not movement
     assert.equal(st.tokens.length, 1); assert.equal(st.tokens[0].actorId, 1);
     const old = st.actors.find((a) => a.id === 1);
     assert.equal(old.name, 'Old hero'); assert.deepEqual(old.perms, {});

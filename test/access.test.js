@@ -117,7 +117,7 @@ test('map library: maps outside any table, copied into tables (and back), tokens
   const T = await srv.table('libcopy');
   const copy = await call('POST', `/admin/api/scenes/${lib.body.id}/copy`, { table: 'libcopy' });
   assert.equal(copy.body.active, true); // first scene of the table
-  assert.deepEqual(copy.body.walls, [[0, 0, 100, 0, 0, 0]]); assert.equal(copy.body.grid, 50);
+  assert.deepEqual(copy.body.walls, [[0, 0, 100, 0, 0, 0, 0, 0, 1]]); assert.equal(copy.body.grid, 50);
   assert.notEqual(copy.body.id, lib.body.id);
   await T.gm('POST', '/tokens', { sceneId: copy.body.id, name: 'Orc' });
   await T.gm('PATCH', `/scenes/${copy.body.id}`, { name: 'Dungeon (played)' });

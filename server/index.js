@@ -15,6 +15,7 @@ import { validateSystem, defaultActorData, sanitizeActorData, actorContext, poin
 import { logServerError } from './log.js';
 import { diffSystems } from './sysdiff.js';
 import { parseNarration, uniqueAlias, aliasFrom, NARRATOR } from './narration.js';
+import { normWall, moveBlocked, radiusStep, W } from '../public/walls.js';
 
 const PORT = process.env.PORT === '0' ? 0 : Number(process.env.PORT) || 3000; // 0: any free port (tests)
 const HOST = process.env.HOST || '0.0.0.0';
@@ -40,7 +41,7 @@ const tokenInTable = (id, tableId) => db.prepare('SELECT t.* FROM tokens t JOIN 
 const tableBySlug = (slug) => db.prepare('SELECT * FROM game_tables WHERE slug = ?').get(String(slug ?? ''));
 const tableView = (t) => ({ slug: t.slug, name: t.name, listed: !!t.listed });
 const sceneView = (s) => ({ id: s.id, name: s.name, image: s.image, width: s.width, height: s.height, grid: s.grid, ox: s.ox, oy: s.oy, active: !!s.active,
-  fog: !!s.fog, dark: !!s.dark, walls: jparse(s.walls, []), lights: jparse(s.lights, []), reveal: jparse(s.reveal, []) });
+  fog: !!s.fog, dark: !!s.dark, walls: jparse(s.walls, []).map(normWall), lights: jparse(s.lights, []).map((l) => ({ kind: 'light', playersWin: false, ...l })), reveal: jparse(s.reveal, []) });
 /** Shown dead (black and white, 50 %, no vision) for everyone: forced by the GM, or automatically when the linked sheet is at 0 HP or less. */
 function tokenDead(t) {
   if (t.life === 'dead') return true;
@@ -49,7 +50,9 @@ function tokenDead(t) {
   return !!a && Number(jparse(a.data, {}).hp?.cur ?? 1) <= 0;
 }
 const tokenView = (t) => ({ id: t.id, sceneId: t.scene_id, name: t.name, x: t.x, y: t.y, size: t.size, image: t.image, color: t.color, actorId: t.actor_id, hidden: !!t.hidden, vision: t.vision, light: t.light, sight: !!t.sight,
-  life: t.life ?? 'auto', dead: tokenDead(t) });
+  life: t.life ?? 'auto', dead: tokenDead(t), pc: isPlayerCharacter(t) });
+/** A player's token: some player has the edit right on its sheet (its light can beat an anti-light, see public/walls.js). */
+const isPlayerCharacter = (t) => !!t.actor_id && !!db.prepare("SELECT 1 FROM actor_perms WHERE actor_id = ? AND level = 'edit'").get(t.actor_id);
 const soundView = (s) => ({ id: s.id, name: s.name, url: s.url, loop: !!s.loop, volume: s.volume });
 const journalView = (j) => ({ id: j.id, title: j.title, body: j.body, image: j.image, visibility: jparse(j.visibility, 'gm'), updated: j.updated });
 const canSeeJournal = (u, j) => { const v = jparse(j.visibility, 'gm'); return u.role === 'gm' || v === 'all' || (Array.isArray(v) && v.includes(u.id)); };
@@ -380,8 +383,13 @@ tbl('DELETE', '/slots/:id', 'gm', ({ table, params }) => {
 
 // ---- scenes (in a table, or in the GM's map library when table_id is NULL)
 const fin = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 10) / 10 : 0);
-const cleanWalls = (a) => (Array.isArray(a) ? a.slice(0, 4000).filter(Array.isArray).map((w) => [fin(w[0]), fin(w[1]), fin(w[2]), fin(w[3]), w[4] ? 1 : 0, w[5] ? 1 : 0]) : []);
-const cleanLights = (a) => (Array.isArray(a) ? a.slice(0, 300).map((l) => ({ id: String(l?.id || randomBytes(3).toString('hex')).slice(0, 12), x: fin(l?.x), y: fin(l?.y), radius: Math.min(100, Math.max(0, fin(l?.radius))) })) : []);
+// walls: [x1, y1, x2, y2, door, open, locked, move, sight] (see public/walls.js); older 6-value walls keep blocking sight only
+const cleanWalls = (a) => (Array.isArray(a) ? a.slice(0, 4000).filter(Array.isArray).map((w) => normWall([fin(w[0]), fin(w[1]), fin(w[2]), fin(w[3]), w[4], w[5], w[6], w[7], w[8]])) : []);
+// lights are small GM tokens: a light, or an anti-light (removes light; "playersWin": the lights of players' tokens still win)
+const cleanLights = (a) => (Array.isArray(a) ? a.slice(0, 300).map((l) => {
+  const anti = l?.kind === 'anti';
+  return { id: String(l?.id || randomBytes(3).toString('hex')).slice(0, 12), x: fin(l?.x), y: fin(l?.y), radius: radiusStep(l?.radius), kind: anti ? 'anti' : 'light', playersWin: anti && !!l?.playersWin };
+}) : []);
 const cleanReveal = (a) => (Array.isArray(a) ? a.slice(0, 500).filter(Array.isArray).map((r) => [fin(r[0]), fin(r[1]), Math.abs(fin(r[2])), Math.abs(fin(r[3]))]) : []);
 const sceneFields = (b, cur = {}) => ({
   fog: b.fog !== undefined ? (b.fog ? 1 : 0) : cur.fog ?? 0, dark: b.dark !== undefined ? (b.dark ? 1 : 0) : cur.dark ?? 0,
@@ -415,6 +423,20 @@ tbl('POST', '/scenes/:id/activate', 'gm', ({ table, params }) => {
   db.prepare('UPDATE scenes SET active = 0 WHERE table_id = ?').run(table.id); db.prepare('UPDATE scenes SET active = 1 WHERE id = ?').run(sc.id);
   broadcast(table.id, { type: 'refresh' });
   return { ok: true };
+});
+// Doors: anyone at the table opens or closes them (on the active scene); a locked door only by the GM.
+// The door is found by its ends (x1, y1, x2, y2), so a stale list on the page cannot toggle the wrong wall.
+tbl('POST', '/scenes/:id/door', 'player', ({ user, table, params, body }) => {
+  const sc = inTable('scenes', params.id, table.id); if (!sc) throw notFound();
+  const gm = user.role === 'gm';
+  if (!gm && !sc.active) throw notFound();
+  const walls = jparse(sc.walls, []).map(normWall);
+  const at = Array.isArray(body.at) ? body.at.map(fin) : [];
+  const i = walls.findIndex((w) => w[W.door] && at.length === 4 && w.slice(0, 4).every((v, k) => Math.abs(v - at[k]) < 0.05));
+  if (i < 0) throw bad('No door there');
+  if (walls[i][W.locked] && !gm) throw forbidden('This door is locked');
+  walls[i][W.open] = body.open === undefined ? (walls[i][W.open] ? 0 : 1) : body.open ? 1 : 0;
+  return updateScene(sc, { walls });
 });
 tbl('DELETE', '/scenes/:id', 'gm', ({ table, params }) => {
   const sc = inTable('scenes', params.id, table.id); if (!sc) throw notFound();
@@ -455,6 +477,10 @@ tbl('PATCH', '/tokens/:id', 'player', ({ user, table, by, params, body }) => {
   const gm = user.role === 'gm';
   if (!gm && !(actor && canEditActor(user, actor) && !cur.hidden)) throw forbidden(); // players move the tokens of sheets they can edit
   const n = { x: num(body.x, cur.x), y: num(body.y, cur.y), image: body.image !== undefined ? imgUrl(body.image) : cur.image };
+  // players cannot walk through tangible walls or closed doors (the GM always can); checked on the straight line from where the token is
+  if (!gm && moveBlocked(jparse(sceneOf(cur.scene_id)?.walls, []).map(normWall), cur.x, cur.y, n.x, n.y)) {
+    throw Object.assign(new HttpError(409, 'A wall is in the way'), { data: { token: tokenView(cur) } }); // the page snaps back to it
+  }
   if (gm) {
     n.name = body.name !== undefined ? String(body.name).slice(0, 60) : cur.name;
     n.size = body.size !== undefined ? Math.min(10, Math.max(0.25, num(body.size, 1))) : cur.size;
@@ -545,6 +571,7 @@ tbl('PUT', '/actors/:id/perms', 'gm', ({ table, by, params, body }) => {
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   broadcast(table.id, { type: 'refresh' }, (u) => u.role !== 'gm'); // what each player can see changed
   pushActor(row, by);
+  for (const t of db.prepare('SELECT * FROM tokens WHERE actor_id = ?').all(row.id)) pushToken(t, null); // "player's token" may have changed
   return actorView(row, GM);
 });
 tbl('DELETE', '/actors/:id', 'gm', ({ table, params }) => {
@@ -1021,7 +1048,7 @@ const server = createServer(async (req, res) => {
     if (res.headersSent) return res.end();
     if (e instanceof HttpError) {
       if (e.status === 413) { res.setHeader('Connection', 'close'); res.on('finish', () => req.socket.destroy()); } // stop an oversized upload after replying
-      return json(res, e.status, { error: e.message });
+      return json(res, e.status, { ...(e.data ?? {}), error: e.message });
     }
     logServerError(e, { method: req.method, path, user });
     return json(res, 500, { error: 'Server error' });

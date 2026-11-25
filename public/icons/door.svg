@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"><!-- placeholder: replace with the final icon (same name, square) -->
+<rect x="4" y="4" width="92" height="92" rx="18" fill="#4b002c" stroke="#ffdbff" stroke-width="6"/>
+<rect x="30" y="18" width="40" height="66" rx="4" fill="none" stroke="#ffdbff" stroke-width="7"/>
+<circle cx="60" cy="54" r="5" fill="#ffdbff"/>
+</svg>
