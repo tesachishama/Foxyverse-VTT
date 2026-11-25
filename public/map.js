@@ -1,5 +1,6 @@
 // Canvas battle map. World units are map pixels; the camera is {x, y} (world point at the top-left) plus zoom.
 import { computeVision, inReveal, distToSeg } from './vision.js';
+import { cellCenter } from './tp.js';
 import { W as WALL, makeWall, blocksSight, blocksMove, moveBlocked, doorCenter, splitWall, nodesAt, moveNodes, mergeOnRelease, radiusStep } from './walls.js';
 const ICON = 0.5; // door, light and TP icons: half a cell
 
@@ -181,6 +182,8 @@ export function createMap(canvas, hooks) {
     if (fogOn) drawFog(scene, vis, godView ? 0.5 : 1, !godView && st.explored?.sceneId === scene.id ? st.explored : null);
     ctx.save(); ctx.scale(cam.z, cam.z); ctx.translate(-cam.x, -cam.y);
     for (const t of tokens) if (own(t)) drawToken(scene, t, selected.has(t.id)); // a player always sees their own tokens, even in the dark (not the map around them)
+    // ghosts of tokens standing on TP cells, on every linked cell (seen like tokens: own ones always)
+    for (const g of st.ghosts || []) if (!fogged || own(g.token) || vis.canSee(g.x, g.y)) drawToken(scene, { ...g.token, x: g.x, y: g.y }, false, true);
     drawDoors(scene, st, fogOn && !godView ? vis : null);
     if (st.gm) drawGuides(scene, st);
     ctx.restore();
@@ -208,10 +211,10 @@ export function createMap(canvas, hooks) {
     });
   }
 
-  function drawToken(scene, t, selected) {
+  function drawToken(scene, t, selected, ghost = false) {
     const d = t.size * scene.grid * 0.92, r = d / 2;
     const dead = !!hooks.isDead?.(t);
-    ctx.save(); ctx.globalAlpha = (t.hidden ? 0.5 : 1) * (dead ? DEAD_ALPHA : 1);
+    ctx.save(); ctx.globalAlpha = (t.hidden ? 0.5 : 1) * (dead ? DEAD_ALPHA : 1) * (ghost ? 0.45 : 1); // a ghost (TP): see-through
     if (dead) ctx.filter = 'grayscale(1)'; // a dead character: black and white, 50 % opacity (and no vision, see app.js)
     ctx.beginPath(); ctx.arc(t.x, t.y, r, 0, Math.PI * 2); ctx.fillStyle = t.color; ctx.fill();
     const ti = image(t.image, redraw);
@@ -219,7 +222,7 @@ export function createMap(canvas, hooks) {
     else { ctx.fillStyle = '#2a0019'; ctx.font = `600 ${r}px Georgia, serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText((t.name[0] || '?').toUpperCase(), t.x, t.y + r * 0.05); }
     ctx.filter = 'none';
     ctx.lineWidth = (selected ? 4 : 2) / cam.z; ctx.strokeStyle = selected ? '#ff9a4d' : '#ffdbff';
-    if (t.hidden) ctx.setLineDash([6 / cam.z, 4 / cam.z]);
+    if (t.hidden || ghost) ctx.setLineDash([6 / cam.z, 4 / cam.z]);
     ctx.beginPath(); ctx.arc(t.x, t.y, r, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
     const ratio = hooks.hpRatio(t);
     if (ratio != null) {
@@ -252,6 +255,16 @@ export function createMap(canvas, hooks) {
       if (sight && move) { ctx.lineWidth = 1.2 * z; ctx.strokeStyle = '#9fe3b4'; ctx.beginPath(); ctx.moveTo(w[0], w[1]); ctx.lineTo(w[2], w[3]); ctx.stroke(); }
       if (editing || picked) { ctx.fillStyle = '#ffdbff'; for (const [px, py] of [[w[0], w[1]], [w[2], w[3]]]) { ctx.beginPath(); ctx.arc(px, py, 3 * z, 0, Math.PI * 2); ctx.fill(); } }
     });
+    // TP cells (GM only): icon, and a dashed line to the other cells of the same group
+    const tps = scene.tps || [], ts = ICON * scene.grid, tpImg = image('/icons/tp.svg', redraw);
+    ctx.strokeStyle = 'rgba(159,227,180,0.55)'; ctx.lineWidth = 1.5 * z; ctx.setLineDash([4 * z, 6 * z]);
+    tps.forEach((a, i) => { for (const b of tps.slice(i + 1)) if (b.group === a.group) { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); } });
+    ctx.setLineDash([]);
+    for (const c of tps) {
+      if (tpImg) ctx.drawImage(tpImg, c.x - ts / 2, c.y - ts / 2, ts, ts); else { ctx.fillStyle = '#9fe3b4'; ctx.fillRect(c.x - ts / 2, c.y - ts / 2, ts, ts); }
+      ctx.font = `600 ${11 * z}px system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillStyle = '#9fe3b4'; ctx.fillText(c.group, c.x + ts / 2 + 2 * z, c.y - ts / 2);
+      if (st.picked?.kind === 'tp' && st.picked.id === c.id) { ctx.strokeStyle = '#ff9a4d'; ctx.lineWidth = 3 * z; ctx.strokeRect(c.x - ts / 2, c.y - ts / 2, ts, ts); }
+    }
     // lights: small icons (GM only); the picked one shows its radius and a handle to resize it
     for (const l of scene.lights || []) {
       const anti = l.kind === 'anti', s = ICON * scene.grid, img = image(anti ? '/icons/antilight.svg' : '/icons/light.svg', redraw);
@@ -305,6 +318,7 @@ export function createMap(canvas, hooks) {
     const pl = picked?.kind === 'light' && (scene.lights || []).find((l) => l.id === picked.id);
     if (pl && Math.hypot(w.x - (pl.x + pl.radius * g), w.y - pl.y) < 12 / cam.z) return { kind: 'radius', light: pl };
     for (const l of [...(scene.lights || [])].reverse()) if (Math.abs(w.x - l.x) <= half && Math.abs(w.y - l.y) <= half) return { kind: 'light', light: l };
+    for (const c of [...(scene.tps || [])].reverse()) if (Math.abs(w.x - c.x) <= half && Math.abs(w.y - c.y) <= half) return { kind: 'tp', cell: c };
     const wi = (scene.walls || []).findIndex((s) => distToSeg(w.x, w.y, s) < near);
     return wi >= 0 ? { kind: 'wall', index: wi } : null;
   }
@@ -354,7 +368,16 @@ export function createMap(canvas, hooks) {
       edit({ lights: [...(scene.lights || []), { id, x: Math.round(w.x), y: Math.round(w.y), radius: radiusStep(tool.radius), kind: tool.name === 'antilight' ? 'anti' : 'light', playersWin: false }] });
       return hooks.onPick?.({ kind: 'light', id });
     }
+    if (tool.name === 'tp') { // a TP cell on the clicked grid cell; it joins the picked cell's group, else a new group
+      const c = cellCenter(scene, w.x, w.y), id = Math.random().toString(36).slice(2, 10);
+      if ((scene.tps || []).some((x) => x.x === c.x && x.y === c.y)) return;
+      const picked = st.picked?.kind === 'tp' && (scene.tps || []).find((x) => x.id === st.picked.id);
+      edit({ tps: [...(scene.tps || []), { id, x: c.x, y: c.y, group: picked ? picked.group : hooks.newTpGroup?.() ?? '1' }] });
+      return hooks.onPick?.({ kind: 'tp', id });
+    }
     if (tool.name === 'erase') {
+      const ti = (scene.tps || []).findIndex((c) => Math.abs(c.x - w.x) < (ICON * scene.grid) / 2 && Math.abs(c.y - w.y) < (ICON * scene.grid) / 2);
+      if (ti >= 0) return edit({ tps: scene.tps.filter((_, i) => i !== ti) });
       const li = (scene.lights || []).findIndex((l) => Math.hypot(l.x - w.x, l.y - w.y) < Math.max(near * 1.5, (ICON * scene.grid) / 2));
       if (li >= 0) return edit({ lights: scene.lights.filter((_, i) => i !== li) });
       const wi = (scene.walls || []).findIndex((s) => distToSeg(w.x, w.y, s) < near);
@@ -386,6 +409,20 @@ export function createMap(canvas, hooks) {
     const w = toWorld(p.x, p.y), item = st.scene && hitItem(st.scene, w, st.gm, st.picked);
     if (item?.kind === 'door') { hooks.onDoor?.(st.scene.walls[item.index]); if (st.gm) hooks.onPick?.({ kind: 'wall', index: item.index }); return redraw(); }
     if (item?.kind === 'radius') { drag = { kind: 'radius', id: item.light.id, lights: st.scene.lights.map((l) => ({ ...l })), orig: st.scene.lights }; return; }
+    if (item?.kind === 'tp') {
+      hooks.onPick?.({ kind: 'tp', id: item.cell.id });
+      drag = { kind: 'tp', id: item.cell.id, tps: st.scene.tps.map((c) => ({ ...c })), orig: st.scene.tps, moved: false };
+      return redraw();
+    }
+    // a ghost (TP): picking it up teleports the real token there, and the move goes on from that side
+    const ghost = !hitToken(p.x, p.y) && [...(st.ghosts || [])].reverse().find((g) => Math.hypot(w.x - g.x, w.y - g.y) <= (g.token.size * st.scene.grid * 0.92) / 2);
+    if (ghost && hooks.canMove(ghost.token)) {
+      const t = ghost.token, home = { x: t.x, y: t.y }; hooks.onSelect(new Set([t.id]));
+      t.x = ghost.x; t.y = ghost.y;
+      drag = { kind: 'token', t, dx: 0, dy: 0, ok: { x: t.x, y: t.y }, sent: { x: t.x, y: t.y }, free: st.gm, via: ghost.to.id, home, moved: false };
+      drag.dx = t.x - w.x; drag.dy = t.y - w.y;
+      return redraw();
+    }
     if (item?.kind === 'light') {
       hooks.onPick?.({ kind: 'light', id: item.light.id });
       drag = { kind: 'light', id: item.light.id, dx: item.light.x - w.x, dy: item.light.y - w.y, lights: st.scene.lights.map((l) => ({ ...l })), orig: st.scene.lights, moved: false };
@@ -426,6 +463,9 @@ export function createMap(canvas, hooks) {
       const sc = st.scene;
       drag.walls = moveNodes(drag.walls, drag.refs, cursor.x, cursor.y); drag.moved = true;
       sc.walls = drag.walls; sc._rev = (sc._rev || 0) + 1;
+    } else if (drag.kind === 'tp') { // TP cells move from cell centre to cell centre
+      const sc = st.scene, c = drag.tps.find((x) => x.id === drag.id), w = toWorld(p.x, p.y), to = cellCenter(sc, w.x, w.y);
+      if (c && (c.x !== to.x || c.y !== to.y)) { c.x = to.x; c.y = to.y; drag.moved = true; sc.tps = drag.tps; sc._rev = (sc._rev || 0) + 1; }
     } else if (drag.kind === 'light' || drag.kind === 'radius') {
       const sc = st.scene, w = toWorld(p.x, p.y), l = drag.lights.find((x) => x.id === drag.id); if (!l) return;
       if (drag.kind === 'light') { l.x = Math.round(w.x + drag.dx); l.y = Math.round(w.y + drag.dy); }
@@ -436,10 +476,11 @@ export function createMap(canvas, hooks) {
     } else if (drag.kind === 'token') {
       // players' tokens stop at tangible walls and closed doors (the server checks it too); the GM goes anywhere
       const w = toWorld(p.x, p.y), to = { x: w.x + drag.dx, y: w.y + drag.dy };
+      if (Math.hypot(to.x - drag.ok.x, to.y - drag.ok.y) > 2) drag.moved = true;
       if (drag.free || !moveBlocked(st.scene?.walls, drag.ok.x, drag.ok.y, to.x, to.y)) drag.ok = to;
       drag.t.x = drag.ok.x; drag.t.y = drag.ok.y;
       if (performance.now() - lastSend > 90 && (drag.free || !moveBlocked(st.scene?.walls, drag.sent.x, drag.sent.y, drag.ok.x, drag.ok.y))) {
-        lastSend = performance.now(); drag.sent = { ...drag.ok }; hooks.onMove(drag.t, drag.t.x, drag.t.y, false);
+        lastSend = performance.now(); drag.sent = { ...drag.ok }; hooks.onMove(drag.t, drag.t.x, drag.t.y, false, drag.via); drag.via = null; // the jump is sent with the first move
       }
     }
     redraw();
@@ -447,11 +488,12 @@ export function createMap(canvas, hooks) {
   const end = (e) => {
     pointers.delete(e.pointerId);
     if (drag?.kind === 'pinch') { if (pointers.size < 2) drag = null; return; }
+    if (drag?.kind === 'token' && drag.home && !drag.moved) { drag.t.x = drag.home.x; drag.t.y = drag.home.y; drag = null; return redraw(); } // a click on a ghost only selects
     if (drag?.kind === 'token') {
       const { scene } = hooks.state(), t = drag.t;
       let s = scene ? snapToken(scene, t, t.x, t.y) : t;
       if (!drag.free && scene && moveBlocked(scene.walls, drag.sent.x, drag.sent.y, s.x, s.y)) s = moveBlocked(scene.walls, drag.sent.x, drag.sent.y, drag.ok.x, drag.ok.y) ? drag.sent : drag.ok;
-      t.x = s.x; t.y = s.y; hooks.onMove(t, s.x, s.y, true);
+      t.x = s.x; t.y = s.y; hooks.onMove(t, s.x, s.y, true, drag.via);
     }
     if (drag?.kind === 'rect') {
       const r = draft?.rect, { scene } = hooks.state();
@@ -472,6 +514,7 @@ export function createMap(canvas, hooks) {
       scene.walls = drag.orig;
       if (drag.moved || walls.length !== drag.orig.length) edit({ walls });
     }
+    if (drag?.kind === 'tp' && drag.moved) { const { scene } = hooks.state(); const tps = drag.tps; scene.tps = drag.orig; edit({ tps }); }
     if ((drag?.kind === 'light' || drag?.kind === 'radius') && drag.moved) { const { scene } = hooks.state(); const lights = drag.lights; scene.lights = drag.orig; edit({ lights }); }
     if (drag?.kind === 'pan' && drag.right && !drag.moved) draft = null; // right-click ends a wall chain / cancels a curve
     drag = null; redraw();

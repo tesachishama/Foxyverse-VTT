@@ -17,6 +17,7 @@ import { diffSystems } from './sysdiff.js';
 import { parseNarration, uniqueAlias, aliasFrom, NARRATOR } from './narration.js';
 import { normWall, moveBlocked, radiusStep, W } from '../public/walls.js';
 import { exploreDims } from '../public/vision.js';
+import { ghostStart } from '../public/tp.js';
 
 const PORT = process.env.PORT === '0' ? 0 : Number(process.env.PORT) || 3000; // 0: any free port (tests)
 const HOST = process.env.HOST || '0.0.0.0';
@@ -42,7 +43,7 @@ const tokenInTable = (id, tableId) => db.prepare('SELECT t.* FROM tokens t JOIN 
 const tableBySlug = (slug) => db.prepare('SELECT * FROM game_tables WHERE slug = ?').get(String(slug ?? ''));
 const tableView = (t) => ({ slug: t.slug, name: t.name, listed: !!t.listed });
 const sceneView = (s) => ({ id: s.id, name: s.name, image: s.image, width: s.width, height: s.height, grid: s.grid, ox: s.ox, oy: s.oy, active: !!s.active,
-  fog: !!s.fog, dark: !!s.dark, sharedVision: !!s.shared, explore: !!s.explore, walls: jparse(s.walls, []).map(normWall), lights: jparse(s.lights, []).map((l) => ({ kind: 'light', playersWin: false, ...l })), reveal: jparse(s.reveal, []) });
+  fog: !!s.fog, dark: !!s.dark, sharedVision: !!s.shared, explore: !!s.explore, tps: jparse(s.tps, []), walls: jparse(s.walls, []).map(normWall), lights: jparse(s.lights, []).map((l) => ({ kind: 'light', playersWin: false, ...l })), reveal: jparse(s.reveal, []) });
 /** Shown dead (black and white, 50 %, no vision) for everyone: forced by the GM, or automatically when the linked sheet is at 0 HP or less. */
 function tokenDead(t) {
   if (t.life === 'dead') return true;
@@ -393,6 +394,8 @@ const cleanLights = (a) => (Array.isArray(a) ? a.slice(0, 300).map((l) => {
   const anti = l?.kind === 'anti';
   return { id: String(l?.id || randomBytes(3).toString('hex')).slice(0, 12), x: fin(l?.x), y: fin(l?.y), radius: radiusStep(l?.radius), kind: anti ? 'anti' : 'light', playersWin: anti && !!l?.playersWin };
 }) : []);
+// teleport cells: the centre of a grid cell and a group (cells of a group are linked); see public/tp.js
+const cleanTps = (a) => (Array.isArray(a) ? a.slice(0, 200).map((c) => ({ id: String(c?.id || randomBytes(3).toString('hex')).slice(0, 12), x: fin(c?.x), y: fin(c?.y), group: String(c?.group ?? '').trim().slice(0, 12) || '1' })) : []);
 const cleanReveal = (a) => (Array.isArray(a) ? a.slice(0, 500).filter(Array.isArray).map((r) => [fin(r[0]), fin(r[1]), Math.abs(fin(r[2])), Math.abs(fin(r[3]))]) : []);
 const sceneFields = (b, cur = {}) => ({
   fog: b.fog !== undefined ? (b.fog ? 1 : 0) : cur.fog ?? 0, dark: b.dark !== undefined ? (b.dark ? 1 : 0) : cur.dark ?? 0,
@@ -400,6 +403,7 @@ const sceneFields = (b, cur = {}) => ({
   walls: b.walls !== undefined ? JSON.stringify(cleanWalls(b.walls)) : cur.walls ?? '[]',
   lights: b.lights !== undefined ? JSON.stringify(cleanLights(b.lights)) : cur.lights ?? '[]',
   reveal: b.reveal !== undefined ? JSON.stringify(cleanReveal(b.reveal)) : cur.reveal ?? '[]',
+  tps: b.tps !== undefined ? JSON.stringify(cleanTps(b.tps)) : cur.tps ?? '[]',
   name: String(b.name ?? cur.name ?? 'Scene').slice(0, 80) || 'Scene',
   image: b.image !== undefined ? imgUrl(b.image) : cur.image ?? null,
   width: Math.max(0, Math.trunc(num(b.width, cur.width ?? 0))), height: Math.max(0, Math.trunc(num(b.height, cur.height ?? 0))),
@@ -408,14 +412,14 @@ const sceneFields = (b, cur = {}) => ({
 });
 function insertScene(tableId, f) {
   const first = tableId != null && !db.prepare('SELECT 1 FROM scenes WHERE table_id = ?').get(tableId);
-  const r = db.prepare('INSERT INTO scenes (table_id, name, image, width, height, grid, ox, oy, active, created, fog, dark, walls, lights, reveal, shared, explore) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-    .run(tableId, f.name, f.image, f.width, f.height, f.grid, f.ox, f.oy, first ? 1 : 0, now(), f.fog, f.dark, f.walls, f.lights, f.reveal, f.shared, f.explore);
+  const r = db.prepare('INSERT INTO scenes (table_id, name, image, width, height, grid, ox, oy, active, created, fog, dark, walls, lights, reveal, shared, explore, tps) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(tableId, f.name, f.image, f.width, f.height, f.grid, f.ox, f.oy, first ? 1 : 0, now(), f.fog, f.dark, f.walls, f.lights, f.reveal, f.shared, f.explore, f.tps);
   if (first) broadcast(tableId, { type: 'refresh' });
   return getRow('scenes', r.lastInsertRowid);
 }
 function updateScene(cur, body) {
   const f = sceneFields(body, cur);
-  db.prepare('UPDATE scenes SET name=?, image=?, width=?, height=?, grid=?, ox=?, oy=?, fog=?, dark=?, walls=?, lights=?, reveal=?, shared=?, explore=? WHERE id=?').run(f.name, f.image, f.width, f.height, f.grid, f.ox, f.oy, f.fog, f.dark, f.walls, f.lights, f.reveal, f.shared, f.explore, cur.id);
+  db.prepare('UPDATE scenes SET name=?, image=?, width=?, height=?, grid=?, ox=?, oy=?, fog=?, dark=?, walls=?, lights=?, reveal=?, shared=?, explore=?, tps=? WHERE id=?').run(f.name, f.image, f.width, f.height, f.grid, f.ox, f.oy, f.fog, f.dark, f.walls, f.lights, f.reveal, f.shared, f.explore, f.tps, cur.id);
   const row = getRow('scenes', cur.id);
   if (row.table_id != null) broadcast(row.table_id, { type: 'scene', op: 'upsert', data: sceneView(row) }, (u) => u.role === 'gm' || !!row.active);
   return sceneView(row);
@@ -522,8 +526,15 @@ tbl('PATCH', '/tokens/:id', 'player', ({ user, table, by, params, body }) => {
   const gm = user.role === 'gm';
   if (!gm && !(actor && canEditActor(user, actor) && !cur.hidden)) throw forbidden(); // players move the tokens of sheets they can edit
   const n = { x: num(body.x, cur.x), y: num(body.y, cur.y), image: body.image !== undefined ? imgUrl(body.image) : cur.image };
+  // A move may start from a ghost ("via" a TP cell linked to the one the token stands on): the token teleports there first.
+  const sc = sceneOf(cur.scene_id), from = { x: cur.x, y: cur.y };
+  if (body.via !== undefined && body.via !== null) {
+    const start = ghostStart(jparse(sc?.tps, []), sc?.grid || 70, cur, String(body.via));
+    if (!start) throw Object.assign(new HttpError(409, 'This token is not on a linked teleport cell'), { data: { token: tokenView(cur) } });
+    Object.assign(from, start);
+  }
   // players cannot walk through tangible walls or closed doors (the GM always can); checked on the straight line from where the token is
-  if (!gm && moveBlocked(jparse(sceneOf(cur.scene_id)?.walls, []).map(normWall), cur.x, cur.y, n.x, n.y)) {
+  if (!gm && moveBlocked(jparse(sc?.walls, []).map(normWall), from.x, from.y, n.x, n.y)) {
     throw Object.assign(new HttpError(409, 'A wall is in the way'), { data: { token: tokenView(cur) } }); // the page snaps back to it
   }
   if (gm) {

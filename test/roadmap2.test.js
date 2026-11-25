@@ -188,3 +188,23 @@ test('4 exploration memory remembers what was seen only through darkvision (it s
     assert.equal((await send(b(0), 'AA')).status, 400); // wrong colour size
   } finally { await gm('POST', `/scenes/${scene.id}/activate`); }
 });
+
+test('5 TP cells are stored and sanitised; a player moves on from a ghost only from a linked cell, walls checked from there', async () => {
+  const p = await sheet('Jumper', { [pipSlot.id]: 'edit' });
+  const r = await gm('PATCH', `/scenes/${scene.id}`, {
+    walls: [[560, 0, 560, 1000, 0, 0, 0, 1, 0]], // a tangible wall between the two cells
+    tps: [{ id: 'a', x: 105, y: 105, group: 'x' }, { id: 'b', x: 805, y: 105, group: 'x' }, { id: 'c', x: 805, y: 805, group: 'y' }, { x: 'bad', y: 1 }],
+  });
+  assert.deepEqual(r.body.tps.slice(0, 3).map((c) => [c.id, c.x, c.y, c.group]), [['a', 105, 105, 'x'], ['b', 805, 105, 'x'], ['c', 805, 805, 'y']]);
+  assert.equal(r.body.tps[3].x, 0); assert.equal(r.body.tps[3].group, '1');
+  const tok = (await gm('POST', '/tokens', { sceneId: scene.id, actorId: p.id, x: 105, y: 105 })).body;
+  const move = (body) => pip('PATCH', `/tokens/${tok.id}`, body);
+  assert.equal((await move({ x: 875, y: 105 })).status, 409);            // walking: the wall is in the way
+  assert.equal((await move({ x: 875, y: 105, via: 'c' })).status, 409);  // not linked to the cell it stands on
+  const jump = await move({ x: 875, y: 105, via: 'b' });                  // from the ghost on b: teleports, then one cell further
+  assert.equal(jump.status, 200); assert.equal(jump.body.x, 875);
+  assert.equal((await move({ x: 875, y: 175, via: 'a' })).status, 409);  // no longer on a TP cell
+  await move({ x: 805, y: 105 });                                          // back on b
+  assert.equal((await move({ x: 105, y: 175, via: 'a' })).status, 200);  // links go both ways
+  await gm('PATCH', `/scenes/${scene.id}`, { walls: [], tps: [] });
+});

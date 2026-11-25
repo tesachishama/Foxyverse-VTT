@@ -132,6 +132,7 @@ addColumn('scenes', 'explore', 'INTEGER NOT NULL DEFAULT 1');
 db.exec(`CREATE TABLE IF NOT EXISTS explored (
   scene_id INTEGER NOT NULL REFERENCES scenes(id) ON DELETE CASCADE, slot_id INTEGER NOT NULL REFERENCES slots(id) ON DELETE CASCADE,
   cols INTEGER NOT NULL, rows INTEGER NOT NULL, bits BLOB NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (scene_id, slot_id))`);
+addColumn('scenes', 'tps', "TEXT NOT NULL DEFAULT '[]'"); // teleport cells [{ id, x, y, group }] (public/tp.js)
 addColumn('explored', 'color', 'BLOB'); // the half cells seen in colour (the others were seen only through darkvision: they stay black and white)
 // A token vision of 0 used to mean "unlimited"; now 0 is "no vision". Existing tokens at 0 become 100 cells (once).
 if (!db.prepare("SELECT 1 FROM settings WHERE key = 'vision100'").get()) {

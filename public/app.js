@@ -6,6 +6,7 @@ import { openTokenCropper } from './tokencrop.js';
 import { signed, tierLabel, damageText, matchesSearch } from './format.js';
 import { isTokenDead, pickViewers, markSeen, orBits, bitsToBase64, bitsFromBase64 } from './vision.js';
 import { radiusStep } from './walls.js';
+import { ghostsOf, newGroup, tpGroups } from './tp.js';
 import { tabColumns, clampRect, readJSON, writeJSON, createBubbles } from './layout.js';
 
 const S = {
@@ -339,7 +340,7 @@ function sceneEdit(patch, { undoable = true } = {}) {
   const sc = viewScene(); if (!sc) return Promise.resolve();
   if (undoable) {
     const prev = {};
-    for (const k of ['walls', 'lights', 'reveal']) if (k in patch) prev[k] = structuredClone(sc[k] ?? []);
+    for (const k of ['walls', 'lights', 'reveal', 'tps']) if (k in patch) prev[k] = structuredClone(sc[k] ?? []);
     if (Object.keys(prev).length) { S.undo.push({ sceneId: sc.id, prev }); if (S.undo.length > 60) S.undo.shift(); }
   }
   Object.assign(sc, patch); sc._rev = (sc._rev || 0) + 1; map.redraw(); editsPending++;
@@ -390,10 +391,13 @@ function buildShell() {
   map = createMap(canvas, {
     state: () => {
       const sc = viewScene(), tokens = viewTokens(), { eyes, own } = viewersOf(tokens);
+      const ghosts = sc ? ghostsOf(tokens.filter((x) => !x.hidden || isGM()), sc.tps, sc.grid) : []; // tokens on TP cells, copied on the linked cells
+      const eye = (x, at = x) => ({ x: at.x, y: at.y, vision: x.vision, darkvision: tokenDarkvision(x) });
       return {
         scene: sc, tokens, selected: S.selected, tool: S.tool, gm: isGM(), playerView: S.playerView, picked: S.picked,
         // viewerIds: tokens always drawn for this page (its own, dead ones included); viewers: the eyes (alive only)
-        viewers: eyes.map((x) => ({ x: x.x, y: x.y, vision: x.vision, darkvision: tokenDarkvision(x) })), viewerIds: new Set(own.map((x) => x.id)), explored,
+        // a ghost sees what its token would see from there
+        viewers: [...eyes.map((x) => eye(x)), ...ghosts.filter((g) => eyes.includes(g.token)).map((g) => eye(g.token, g))], viewerIds: new Set(own.map((x) => x.id)), explored, ghosts,
         // GM lights and anti-lights, plus the lights tokens carry (a player's token light can beat an anti-light that allows it)
         lights: [...(sc?.lights ?? []).map((l) => ({ x: l.x, y: l.y, radius: l.radius, anti: l.kind === 'anti', playersWin: !!l.playersWin })),
           ...tokens.filter((x) => x.light > 0 && !x.hidden).map((x) => ({ x: x.x, y: x.y, radius: x.light, player: !!x.pc }))],
@@ -404,7 +408,8 @@ function buildShell() {
     isDead: tokenDead,
     hpRatio: (tok) => { const a = tok.actorId && actorById(tok.actorId); const max = a?.computed.derived.maxhp; return max ? a.data.hp.cur / max : null; },
     onSelect: (set) => { S.selected = set; if (set.size) S.picked = null; renderInspector(); renderChat(); },
-    onMove: (tok, x, y) => { api('PATCH', '/tokens/' + tok.id, { x, y }).catch((e) => { if (e.data?.token) { Object.assign(tok, e.data.token); map.redraw(); } }); }, // a wall: back to where the server has it
+    newTpGroup: () => newGroup(viewScene()?.tps),
+    onMove: (tok, x, y, final, via) => { api('PATCH', '/tokens/' + tok.id, via ? { x, y, via } : { x, y }).catch((e) => { if (e.data?.token) { Object.assign(tok, e.data.token); map.redraw(); } }); }, // a wall: back to where the server has it
     onDoor: toggleDoor,
     onVision: rememberSeen,
     onPick: (item) => { S.picked = item; if (item) S.selected = new Set(); renderInspector(); map.redraw(); },
@@ -426,7 +431,8 @@ const TOOL_HINT = {
     curve: 'Clic : départ · clic : arrivée · bouger pour courber · clic : valider · Échap : annuler', door: 'Clic : poser une porte (deux clics) · clic sur une porte : ouvrir / fermer',
     edit: 'Glisser un nœud pour déplacer les murs qui y sont reliés · clic sur un segment : ajouter un nœud · deux nœuds fusionnent au relâchement',
     light: 'Clic : poser une lumière · ensuite, en Sélection : la déplacer, régler le rayon avec la poignée', antilight: "Clic : poser une anti-lumière (retire la lumière sous sa zone)",
-    reveal: 'Glisser : révéler une zone en permanence', erase: 'Clic : supprimer mur, lumière ou zone',
+    tp: 'Clic : poser une case de TP (elle rejoint le groupe de la case sélectionnée, sinon un nouveau groupe) · en Sélection : la glisser, changer son groupe',
+    reveal: 'Glisser : révéler une zone en permanence', erase: 'Clic : supprimer mur, lumière, case de TP ou zone',
     select: 'Clic sur un mur, une porte ou une lumière pour la régler · glisser une lumière pour la déplacer' },
   en: { wall: 'Wall (blocks sight and light). Click to add points · right-click or Esc to finish · Shift or Alt: free placement',
     twall: "Tangible wall (blocks players' movement, not sight). Click to add points · right-click or Esc to finish",
@@ -434,7 +440,8 @@ const TOOL_HINT = {
     curve: 'Click: start · click: end · move to bend · click: confirm · Esc: cancel', door: 'Click to place a door (two clicks) · click a door to open / close it',
     edit: 'Drag a node to move the walls attached to it · click a segment: add a node · two nodes merge when you let go',
     light: 'Click to place a light · then, with Select: drag it, set its radius with the handle', antilight: 'Click to place an anti-light (removes light under its area)',
-    reveal: 'Drag to permanently reveal an area', erase: 'Click to delete a wall, light or area',
+    tp: "Click: place a TP cell (it joins the picked cell's group, else a new group) · with Select: drag it, change its group",
+    reveal: 'Drag to permanently reveal an area', erase: 'Click to delete a wall, light, TP cell or area',
     select: 'Click a wall, door or light to set it up · drag a light to move it' },
 };
 function renderHud() {
@@ -459,7 +466,7 @@ function renderHud() {
     sc?.fog && S.playerView && viewAs);
   if (!sc) return;
   const tools = [['select', 'toolSelect'], ['wall', 'toolWall'], ['twall', 'toolTWall'], ['rect', 'toolRect'], ['circle', 'toolCircle'], ['curve', 'toolCurve'], ['door', 'toolDoor'], ['edit', 'toolEdit'],
-    ['light', 'toolLight'], ['antilight', 'toolAntiLight'], ['reveal', 'toolReveal'], ['erase', 'toolErase']];
+    ['light', 'toolLight'], ['antilight', 'toolAntiLight'], ['tp', 'toolTp'], ['reveal', 'toolReveal'], ['erase', 'toolErase']];
   const snapSel = h('select', { title: t('snap'), onchange: (e) => { S.tool.snap = e.target.value; } },
     h('option', { value: 'grid' }, t('snapGrid')), h('option', { value: 'half' }, t('snapHalf')), h('option', { value: 'off' }, t('snapOff')));
   snapSel.value = S.tool.snap;
@@ -1098,6 +1105,15 @@ function itemInspector(sc) {
         w[4] ? [row(t('doorOpen'), box(5)), row(t('doorLocked'), box(6), t('doorLockedHint'))]
           : [row(t('blocksMove'), box(7), t('blocksMoveHint')), row(t('blocksSight'), box(8))]),
       h('button', { class: 'danger', onclick: () => { sceneEdit({ walls: sc.walls.filter((_, i) => i !== p.index) }); close(); } }, t('del'))];
+  }
+  if (p.kind === 'tp') {
+    const c = (sc.tps ?? []).find((x) => x.id === p.id); if (!c) return null;
+    const set = (group) => { sceneEdit({ tps: sc.tps.map((x) => (x.id === c.id ? { ...x, group } : x)) }); renderInspector(); map.redraw(); };
+    const sel = h('select', { onchange: (e) => set(e.target.value === '+' ? newGroup(sc.tps) : e.target.value) },
+      tpGroups(sc.tps).map(([g, cells]) => h('option', { value: g }, `${t('tpGroup')} ${g} (${cells.length})`)), h('option', { value: '+' }, t('tpNewGroup')));
+    sel.value = c.group;
+    return [head(t('toolTp')), h('p', { class: 'hint' }, t('tpHint')), h('div', { class: 'insp-grid' }, row(t('tpLinked'), sel)),
+      h('button', { class: 'danger', onclick: () => { sceneEdit({ tps: sc.tps.filter((x) => x.id !== c.id) }); close(); } }, t('del'))];
   }
   const l = (sc.lights ?? []).find((x) => x.id === p.id); if (!l) return null;
   const set = (patch) => { sceneEdit({ lights: sc.lights.map((x) => (x.id === l.id ? { ...x, ...patch } : x)) }); renderInspector(); };
