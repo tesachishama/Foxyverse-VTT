@@ -17,13 +17,13 @@ test('3 a wall has two properties: movement, and sight + light; presets; old wal
 test('3 tangible walls stop movement, not sight; closed doors stop both, open doors nothing', () => {
   const tangible = makeWall(500, 0, 500, 1000, 'tangible');
   assert.ok(moveBlocked([tangible], 100, 500, 900, 500)); assert.ok(!moveBlocked([tangible], 100, 500, 400, 500));
-  assert.ok(computeVision(room([tangible]), [{ x: 100, y: 500, vision: 0 }], []).canSee(900, 500)); // sight goes through
+  assert.ok(computeVision(room([tangible]), [{ x: 100, y: 500, vision: 100 }], []).canSee(900, 500)); // sight goes through
   const sightOnly = makeWall(500, 0, 500, 1000, 'wall');
   assert.ok(!moveBlocked([sightOnly], 100, 500, 900, 500));
   const door = makeWall(500, 0, 500, 1000, 'wall', true);
-  assert.ok(moveBlocked([door], 100, 500, 900, 500)); assert.ok(!computeVision(room([door]), [{ x: 100, y: 500, vision: 0 }], []).canSee(900, 500));
+  assert.ok(moveBlocked([door], 100, 500, 900, 500)); assert.ok(!computeVision(room([door]), [{ x: 100, y: 500, vision: 100 }], []).canSee(900, 500));
   door[W.open] = 1;
-  assert.ok(!moveBlocked([door], 100, 500, 900, 500)); assert.ok(computeVision(room([door]), [{ x: 100, y: 500, vision: 0 }], []).canSee(900, 500));
+  assert.ok(!moveBlocked([door], 100, 500, 900, 500)); assert.ok(computeVision(room([door]), [{ x: 100, y: 500, vision: 100 }], []).canSee(900, 500));
   assert.ok(moveBlocked([tangible], 500, 500, 600, 500)); // touching the wall counts
 });
 
@@ -48,7 +48,7 @@ test('3 editor: nodes merge only on release, never while dragging over another n
 
 test('3 lights: radius in half-cell steps; an anti-light removes light, except player lights when it says so', () => {
   assert.equal(radiusStep(2.26), 2.5); assert.equal(radiusStep(2.2), 2); assert.equal(radiusStep(-3), 0); assert.equal(radiusStep(999), 100);
-  const dark = room([], { dark: 1 }), eye = [{ x: 100, y: 500, vision: 0 }];
+  const dark = room([], { dark: 1 }), eye = [{ x: 100, y: 500, vision: 100 }];
   const torch = { x: 300, y: 500, radius: 3 }, pcTorch = { ...torch, player: true };
   const anti = { x: 400, y: 500, radius: 1, anti: true };
   assert.ok(computeVision(dark, eye, [torch]).canSee(400, 500));

@@ -18,7 +18,9 @@ function image(url, redraw) {
 
 /**
  * hooks:
- *  state() -> { scene, tokens, selected:Set, tool:{name, radius, snap}, gm, playerView, viewers:[{x,y,vision}], lights:[{x,y,radius}] }
+ *  state() -> { scene, tokens, selected:Set, tool:{name, radius, snap}, gm, playerView, viewers:[{x,y,vision,darkvision}], lights:[{x,y,radius}],
+ *             explored: { sceneId, dims, bits, rev } | null (what this player has seen before, drawn dimmed) }
+ *  onVision(scene, vis): the vision was recomputed
  *  (state also carries viewerIds:Set of token ids whose eyes are used)
  *  canMove(token), hpRatio(token) -> 0..1|null, isDead(token) -> boolean, onFog(totalDarkness:boolean)
  *  onSelect(Set), onMove(token, x, y, final), onOpen(token), onSceneEdit(patch)
@@ -28,7 +30,7 @@ function image(url, redraw) {
 export function createMap(canvas, hooks) {
   const ctx = canvas.getContext('2d');
   const layer = () => { const c = document.createElement('canvas'); return [c, c.getContext('2d')]; };
-  const [fogC, fogX] = layer(), [visC, visX] = layer(), [litC, litX] = layer(), [pcC, pcX] = layer();
+  const [fogC, fogX] = layer(), [visC, visX] = layer(), [litC, litX] = layer(), [pcC, pcX] = layer(), [greyC, greyX] = layer();
   const cam = { x: 0, y: 0, z: 1 };
   let W = 0, H = 0, dpr = 1, drag = null, lastSend = 0, sceneId = null, fitted = false, draft = null, cursor = null;
   const pointers = new Map();
@@ -41,7 +43,7 @@ export function createMap(canvas, hooks) {
   function resize() {
     const r = canvas.getBoundingClientRect(); dpr = window.devicePixelRatio || 1;
     W = r.width; H = r.height; canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
-    for (const c of [fogC, visC, litC, pcC]) { c.width = canvas.width; c.height = canvas.height; }
+    for (const c of [fogC, visC, litC, pcC, greyC]) { c.width = canvas.width; c.height = canvas.height; }
     redraw();
   }
   new ResizeObserver(resize).observe(canvas);
@@ -76,40 +78,67 @@ export function createMap(canvas, hooks) {
 
   // ---------------------------------------------------------------- vision & fog
   function vision(scene, st) {
-    const key = JSON.stringify([scene.dark, scene._rev, scene.walls, st.viewers.map((v) => [v.x, v.y, v.vision]), st.lights.map((l) => [l.x, l.y, l.radius, l.anti, l.playersWin, l.player])]);
-    if (visCache.scene !== scene || visCache.key !== key) visCache = { scene, key, vis: computeVision(scene, st.viewers, st.lights) };
+    const key = JSON.stringify([scene.dark, scene._rev, scene.walls, st.viewers.map((v) => [v.x, v.y, v.vision, v.darkvision]), st.lights.map((l) => [l.x, l.y, l.radius, l.anti, l.playersWin, l.player])]);
+    if (visCache.scene !== scene || visCache.key !== key) {
+      visCache = { scene, key, vis: computeVision(scene, st.viewers, st.lights) };
+      hooks.onVision?.(scene, visCache.vis); // e.g. remember what a player has seen (exploration memory)
+    }
     return visCache.vis;
   }
   const poly = (c, pts) => { c.beginPath(); pts.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y))); c.closePath(); };
   const world = (c, fn) => { c.setTransform(dpr * cam.z, 0, 0, dpr * cam.z, -cam.x * dpr * cam.z, -cam.y * dpr * cam.z); fn(c); c.setTransform(1, 0, 0, 1, 0, 0); };
-  const clearL = (c, l) => { c.setTransform(1, 0, 0, 1, 0, 0); c.globalCompositeOperation = 'source-over'; c.clearRect(0, 0, l.width, l.height); };
+  const clearL = (c, l) => { c.setTransform(1, 0, 0, 1, 0, 0); c.globalCompositeOperation = 'source-over'; c.filter = 'none'; c.clearRect(0, 0, l.width, l.height); };
   const discIn = (c, pts, x, y, r) => { c.save(); poly(c, pts); c.clip(); c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill(); c.restore(); };
+  const fillZones = (layer, zones) => world(layer, (c) => { c.fillStyle = '#fff'; for (const z of zones) discIn(c, z.poly, z.x, z.y, z.r); });
+  /** The explored half cells as a tiny picture (one pixel each), redrawn only when the memory changes. */
+  let exploredPic = { ex: null, rev: null, canvas: null };
+  function exploredCanvas(ex) {
+    if (exploredPic.ex === ex && exploredPic.rev === ex.rev) return exploredPic.canvas; // a new memory (reset, other scene) is a new object
+    const c = document.createElement('canvas'); c.width = ex.dims.cols; c.height = ex.dims.rows;
+    const x = c.getContext('2d'), img = x.createImageData(c.width, c.height);
+    for (let i = 0; i < c.width * c.height; i++) if ((ex.bits[i >> 3] >> (i & 7)) & 1) img.data[i * 4 + 3] = 255;
+    x.putImageData(img, 0, 0);
+    exploredPic = { ex, rev: ex.rev, canvas: c };
+    return c;
+  }
 
-  function drawFog(scene, vis, alpha) {
+  /**
+   * Fog of war (ROADMAP 2 §4): what the page shows is V ∩ L (the whole V in a lit scene), plus the darkvision viewers' V, which
+   * is black and white where there is no light. Explored places stay dimmed (without tokens); never seen ones stay black.
+   */
+  function drawFog(scene, vis, alpha, explored) {
     clearL(visX, visC); clearL(litX, litC);
-    world(visX, (c) => {
-      c.fillStyle = '#fff';
-      for (const s of vis.sight) { if (!vis.dark && s.r > 0) discIn(c, s.poly, s.x, s.y, s.r); else { poly(c, s.poly); c.fill(); } }
-    });
-    if (vis.dark) { // keep only the lit part of what the viewers can see
-      // lights minus anti-lights; the lights of players' tokens go on their own layer, only beaten by anti-lights without "players win"
+    fillZones(visX, vis.sight.filter((s) => !s.dv || !vis.dark)); // what normal eyes see (and everyone in a lit scene)
+    if (vis.dark) {
+      // L: lights minus anti-lights; the lights of players' tokens go on their own layer, only beaten by anti-lights without "players win"
       clearL(pcX, pcC);
-      world(litX, (c) => { c.fillStyle = '#fff'; for (const l of vis.lit) if (!l.player) discIn(c, l.poly, l.x, l.y, l.r); });
-      world(pcX, (c) => { c.fillStyle = '#fff'; for (const l of vis.lit) if (l.player) discIn(c, l.poly, l.x, l.y, l.r); });
+      fillZones(litX, vis.lit.filter((l) => !l.player)); fillZones(pcX, vis.lit.filter((l) => l.player));
       litX.globalCompositeOperation = 'destination-out'; pcX.globalCompositeOperation = 'destination-out';
-      world(litX, (c) => { c.fillStyle = '#fff'; for (const a of vis.anti) discIn(c, a.poly, a.x, a.y, a.r); });
-      world(pcX, (c) => { c.fillStyle = '#fff'; for (const a of vis.anti) if (!a.playersWin) discIn(c, a.poly, a.x, a.y, a.r); });
+      fillZones(litX, vis.anti); fillZones(pcX, vis.anti.filter((a) => !a.playersWin));
       litX.globalCompositeOperation = 'source-over'; pcX.globalCompositeOperation = 'source-over';
       litX.drawImage(pcC, 0, 0);
-      world(litX, (c) => { c.fillStyle = '#fff'; for (const s of vis.sight) if (s.r > 0) discIn(c, s.poly, s.x, s.y, s.r); }); // darkvision
-      visX.globalCompositeOperation = 'destination-in'; visX.drawImage(litC, 0, 0); visX.globalCompositeOperation = 'source-over';
+      visX.globalCompositeOperation = 'destination-in'; visX.drawImage(litC, 0, 0); visX.globalCompositeOperation = 'source-over'; // V ∩ L
+      const dv = vis.sight.filter((s) => s.dv);
+      if (dv.length) {
+        // darkvision: its whole V; the part outside L is shown in black and white
+        clearL(pcX, pcC); fillZones(pcX, dv);
+        visX.drawImage(pcC, 0, 0);
+        pcX.globalCompositeOperation = 'destination-out'; pcX.drawImage(litC, 0, 0); pcX.globalCompositeOperation = 'source-over';
+        clearL(greyX, greyC);
+        greyX.filter = 'grayscale(1)'; greyX.drawImage(canvas, 0, 0); greyX.filter = 'none';
+        greyX.globalCompositeOperation = 'destination-in'; greyX.drawImage(pcC, 0, 0); greyX.globalCompositeOperation = 'source-over';
+        ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(greyC, 0, 0); ctx.restore();
+      }
     }
     world(visX, (c) => { c.fillStyle = '#fff'; for (const r of scene.reveal || []) c.fillRect(r[0], r[1], r[2], r[3]); });
     clearL(fogX, fogC); fogX.fillStyle = '#000'; fogX.fillRect(0, 0, fogC.width, fogC.height);
-    fogX.globalCompositeOperation = 'destination-out'; fogX.drawImage(visC, 0, 0); fogX.globalCompositeOperation = 'source-over';
+    fogX.globalCompositeOperation = 'destination-out';
+    if (explored) { // places seen before: dimmed, not black (smoothed, so the edges are soft)
+      world(fogX, (c) => { c.globalAlpha = 0.42; c.imageSmoothingEnabled = true; c.drawImage(exploredCanvas(explored), 0, 0, explored.dims.cols * explored.dims.cell, explored.dims.rows * explored.dims.cell); c.globalAlpha = 1; });
+    }
+    fogX.drawImage(visC, 0, 0); fogX.globalCompositeOperation = 'source-over';
     ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = alpha; ctx.drawImage(fogC, 0, 0); ctx.restore();
   }
-
   // ---------------------------------------------------------------- drawing
   function draw() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -138,7 +167,7 @@ export function createMap(canvas, hooks) {
     }
     ctx.restore();
 
-    if (fogOn) drawFog(scene, vis, godView ? 0.5 : 1);
+    if (fogOn) drawFog(scene, vis, godView ? 0.5 : 1, !godView && st.explored?.sceneId === scene.id ? st.explored : null);
     ctx.save(); ctx.scale(cam.z, cam.z); ctx.translate(-cam.x, -cam.y);
     drawDoors(scene, st, fogOn && !godView ? vis : null);
     if (st.gm) drawGuides(scene, st);

@@ -1,7 +1,8 @@
 // A database written by v1 (everything global, accounts with passwords) opens as a first table "test".
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { startServer } from './helpers.js';
@@ -52,6 +53,7 @@ test('v1 data moves into the table "test" with its rules; v1 accounts are droppe
     const st = (await srv.call('GET', '/admin/api/t/test/state')).body;
     assert.equal(st.scene.name, 'Old map'); assert.deepEqual(st.scene.walls, [[0, 0, 10, 0, 0, 0, 0, 0, 1]]); // old walls: block sight and light, not movement
     assert.equal(st.tokens.length, 1); assert.equal(st.tokens[0].actorId, 1);
+    assert.equal(st.tokens[0].vision, 100); // vision 0 meant "unlimited": it becomes 100 cells (0 now means no vision)
     const old = st.actors.find((a) => a.id === 1);
     assert.equal(old.name, 'Old hero'); assert.deepEqual(old.perms, {});
     assert.equal(old.computed.derived.maxhp, 21); // con 7 * 3: the table kept the edited v1 rules
@@ -74,4 +76,19 @@ test('a brand new database starts with no table at all', async () => {
     assert.deepEqual((await srv.call('GET', '/admin/api/tables')).body.tables, []);
     assert.doesNotMatch(srv.logs(), /Migrated/);
   } finally { await srv.stop(); }
+});
+
+test('the vision migration runs once: a token the GM later sets to 0 (no vision) stays at 0 after a restart', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'foxy-keep-'));
+  try {
+    const one = await startServer({ DATA_DIR: dir });
+    await one.call('POST', '/admin/api/tables', { slug: 'keep' });
+    const sc = (await one.call('POST', '/admin/api/t/keep/scenes', { name: 'S' })).body;
+    const tok = (await one.call('POST', '/admin/api/t/keep/tokens', { sceneId: sc.id, vision: 0 })).body;
+    assert.equal(tok.vision, 0);
+    await one.stop();
+    const two = await startServer({ DATA_DIR: dir });
+    assert.equal((await two.call('GET', '/admin/api/t/keep/state')).body.tokens[0].vision, 0);
+    await two.stop();
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 });

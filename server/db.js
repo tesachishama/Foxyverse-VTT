@@ -54,7 +54,7 @@ addColumn('scenes', 'dark', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('scenes', 'walls', "TEXT NOT NULL DEFAULT '[]'");
 addColumn('scenes', 'lights', "TEXT NOT NULL DEFAULT '[]'");
 addColumn('scenes', 'reveal', "TEXT NOT NULL DEFAULT '[]'");
-addColumn('tokens', 'vision', 'REAL NOT NULL DEFAULT 0');
+addColumn('tokens', 'vision', 'REAL NOT NULL DEFAULT 100'); // cells; 0 = no vision (see the "vision100" migration below)
 addColumn('tokens', 'light', 'REAL NOT NULL DEFAULT 0');
 addColumn('tokens', 'sight', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('tokens', 'life', "TEXT NOT NULL DEFAULT 'auto'"); // auto (from the sheet's HP) | dead | alive: the GM can force the look
@@ -124,6 +124,17 @@ addColumn('actors', 'alias_auto', 'INTEGER NOT NULL DEFAULT 1');
 for (const a of db.prepare('SELECT id, table_id, name FROM actors WHERE alias IS NULL ORDER BY id').all()) {
   const taken = db.prepare('SELECT alias FROM actors WHERE table_id IS ? AND alias IS NOT NULL').all(a.table_id).map((r) => r.alias);
   db.prepare('UPDATE actors SET alias = ? WHERE id = ?').run(uniqueAlias(a.name, taken), a.id);
+}
+
+// ---- ROADMAP 2 §4: vision. Scene options "shared vision" and exploration memory; what each player slot has explored per scene.
+addColumn('scenes', 'shared', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('scenes', 'explore', 'INTEGER NOT NULL DEFAULT 1');
+db.exec(`CREATE TABLE IF NOT EXISTS explored (
+  scene_id INTEGER NOT NULL REFERENCES scenes(id) ON DELETE CASCADE, slot_id INTEGER NOT NULL REFERENCES slots(id) ON DELETE CASCADE,
+  cols INTEGER NOT NULL, rows INTEGER NOT NULL, bits BLOB NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (scene_id, slot_id))`);
+// A token vision of 0 used to mean "unlimited"; now 0 is "no vision". Existing tokens at 0 become 100 cells (once).
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'vision100'").get()) {
+  db.exec("UPDATE tokens SET vision = 100 WHERE vision = 0; INSERT INTO settings (key, value) VALUES ('vision100', '1');");
 }
 
 const systems = new Map(); // table id -> parsed system (cache)

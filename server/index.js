@@ -16,6 +16,7 @@ import { logServerError } from './log.js';
 import { diffSystems } from './sysdiff.js';
 import { parseNarration, uniqueAlias, aliasFrom, NARRATOR } from './narration.js';
 import { normWall, moveBlocked, radiusStep, W } from '../public/walls.js';
+import { exploreDims } from '../public/vision.js';
 
 const PORT = process.env.PORT === '0' ? 0 : Number(process.env.PORT) || 3000; // 0: any free port (tests)
 const HOST = process.env.HOST || '0.0.0.0';
@@ -41,7 +42,7 @@ const tokenInTable = (id, tableId) => db.prepare('SELECT t.* FROM tokens t JOIN 
 const tableBySlug = (slug) => db.prepare('SELECT * FROM game_tables WHERE slug = ?').get(String(slug ?? ''));
 const tableView = (t) => ({ slug: t.slug, name: t.name, listed: !!t.listed });
 const sceneView = (s) => ({ id: s.id, name: s.name, image: s.image, width: s.width, height: s.height, grid: s.grid, ox: s.ox, oy: s.oy, active: !!s.active,
-  fog: !!s.fog, dark: !!s.dark, walls: jparse(s.walls, []).map(normWall), lights: jparse(s.lights, []).map((l) => ({ kind: 'light', playersWin: false, ...l })), reveal: jparse(s.reveal, []) });
+  fog: !!s.fog, dark: !!s.dark, sharedVision: !!s.shared, explore: !!s.explore, walls: jparse(s.walls, []).map(normWall), lights: jparse(s.lights, []).map((l) => ({ kind: 'light', playersWin: false, ...l })), reveal: jparse(s.reveal, []) });
 /** Shown dead (black and white, 50 %, no vision) for everyone: forced by the GM, or automatically when the linked sheet is at 0 HP or less. */
 function tokenDead(t) {
   if (t.life === 'dead') return true;
@@ -49,8 +50,10 @@ function tokenDead(t) {
   const a = getRow('actors', t.actor_id);
   return !!a && Number(jparse(a.data, {}).hp?.cur ?? 1) <= 0;
 }
+/** Darkvision comes from the linked sheet (a toggle next to "elemental"). */
+const tokenDarkvision = (t) => !!t.actor_id && jparse(getRow('actors', t.actor_id)?.data, {}).darkvision === true;
 const tokenView = (t) => ({ id: t.id, sceneId: t.scene_id, name: t.name, x: t.x, y: t.y, size: t.size, image: t.image, color: t.color, actorId: t.actor_id, hidden: !!t.hidden, vision: t.vision, light: t.light, sight: !!t.sight,
-  life: t.life ?? 'auto', dead: tokenDead(t), pc: isPlayerCharacter(t) });
+  life: t.life ?? 'auto', dead: tokenDead(t), pc: isPlayerCharacter(t), darkvision: tokenDarkvision(t) });
 /** A player's token: some player has the edit right on its sheet (its light can beat an anti-light, see public/walls.js). */
 const isPlayerCharacter = (t) => !!t.actor_id && !!db.prepare("SELECT 1 FROM actor_perms WHERE actor_id = ? AND level = 'edit'").get(t.actor_id);
 const soundView = (s) => ({ id: s.id, name: s.name, url: s.url, loop: !!s.loop, volume: s.volume });
@@ -141,12 +144,12 @@ const hangUp = (c, ev) => { clients.delete(c); send(c, ev); c.res.end(); };
 function dropPlayer(slotId, reason = 'kicked') {
   for (const c of [...clients]) if (c.user.role === 'player' && c.user.id === slotId) hangUp(c, { type: reason });
 }
-const deadShown = new Map(); // token id -> last "dead" sent, so a sheet change only re-sends the tokens whose look changed
+const lookShown = new Map(); // token id -> last look sent (dead, darkvision), so a sheet change only re-sends the tokens whose look changed
 const pushActor = (row, by) => {
   broadcast(row.table_id, (u) => (canSeeActor(u, row) ? { type: 'actor', op: 'upsert', data: actorView(row, u), by } : null));
   for (const t of db.prepare('SELECT * FROM tokens WHERE actor_id = ?').all(row.id)) {
-    const dead = tokenDead(t);
-    if (deadShown.get(t.id) !== dead) { deadShown.set(t.id, dead); pushToken(t, null); } // no echo id: every page, the sender's included, updates the look
+    const look = `${tokenDead(t)}|${tokenDarkvision(t)}`;
+    if (lookShown.get(t.id) !== look) { lookShown.set(t.id, look); pushToken(t, null); } // no echo id: every page, the sender's included, updates the look
   }
 };
 const sceneOf = (id) => getRow('scenes', id);
@@ -393,6 +396,7 @@ const cleanLights = (a) => (Array.isArray(a) ? a.slice(0, 300).map((l) => {
 const cleanReveal = (a) => (Array.isArray(a) ? a.slice(0, 500).filter(Array.isArray).map((r) => [fin(r[0]), fin(r[1]), Math.abs(fin(r[2])), Math.abs(fin(r[3]))]) : []);
 const sceneFields = (b, cur = {}) => ({
   fog: b.fog !== undefined ? (b.fog ? 1 : 0) : cur.fog ?? 0, dark: b.dark !== undefined ? (b.dark ? 1 : 0) : cur.dark ?? 0,
+  shared: b.sharedVision !== undefined ? (b.sharedVision ? 1 : 0) : cur.shared ?? 0, explore: b.explore !== undefined ? (b.explore ? 1 : 0) : cur.explore ?? 1,
   walls: b.walls !== undefined ? JSON.stringify(cleanWalls(b.walls)) : cur.walls ?? '[]',
   lights: b.lights !== undefined ? JSON.stringify(cleanLights(b.lights)) : cur.lights ?? '[]',
   reveal: b.reveal !== undefined ? JSON.stringify(cleanReveal(b.reveal)) : cur.reveal ?? '[]',
@@ -404,14 +408,14 @@ const sceneFields = (b, cur = {}) => ({
 });
 function insertScene(tableId, f) {
   const first = tableId != null && !db.prepare('SELECT 1 FROM scenes WHERE table_id = ?').get(tableId);
-  const r = db.prepare('INSERT INTO scenes (table_id, name, image, width, height, grid, ox, oy, active, created, fog, dark, walls, lights, reveal) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-    .run(tableId, f.name, f.image, f.width, f.height, f.grid, f.ox, f.oy, first ? 1 : 0, now(), f.fog, f.dark, f.walls, f.lights, f.reveal);
+  const r = db.prepare('INSERT INTO scenes (table_id, name, image, width, height, grid, ox, oy, active, created, fog, dark, walls, lights, reveal, shared, explore) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(tableId, f.name, f.image, f.width, f.height, f.grid, f.ox, f.oy, first ? 1 : 0, now(), f.fog, f.dark, f.walls, f.lights, f.reveal, f.shared, f.explore);
   if (first) broadcast(tableId, { type: 'refresh' });
   return getRow('scenes', r.lastInsertRowid);
 }
 function updateScene(cur, body) {
   const f = sceneFields(body, cur);
-  db.prepare('UPDATE scenes SET name=?, image=?, width=?, height=?, grid=?, ox=?, oy=?, fog=?, dark=?, walls=?, lights=?, reveal=? WHERE id=?').run(f.name, f.image, f.width, f.height, f.grid, f.ox, f.oy, f.fog, f.dark, f.walls, f.lights, f.reveal, cur.id);
+  db.prepare('UPDATE scenes SET name=?, image=?, width=?, height=?, grid=?, ox=?, oy=?, fog=?, dark=?, walls=?, lights=?, reveal=?, shared=?, explore=? WHERE id=?').run(f.name, f.image, f.width, f.height, f.grid, f.ox, f.oy, f.fog, f.dark, f.walls, f.lights, f.reveal, f.shared, f.explore, cur.id);
   const row = getRow('scenes', cur.id);
   if (row.table_id != null) broadcast(row.table_id, { type: 'scene', op: 'upsert', data: sceneView(row) }, (u) => u.role === 'gm' || !!row.active);
   return sceneView(row);
@@ -437,6 +441,44 @@ tbl('POST', '/scenes/:id/door', 'player', ({ user, table, params, body }) => {
   if (walls[i][W.locked] && !gm) throw forbidden('This door is locked');
   walls[i][W.open] = body.open === undefined ? (walls[i][W.open] ? 0 : 1) : body.open ? 1 : 0;
   return updateScene(sc, { walls });
+});
+// ---- exploration memory ("dynamic fog"): what each player slot has seen of a scene, as a half-cell bitmap (public/vision.js).
+// Pages OR what they see into it; the server ORs again, so nothing seen is ever lost. The GM resets it, per player or for all.
+const exploreRow = (sceneId, slotId) => db.prepare('SELECT * FROM explored WHERE scene_id = ? AND slot_id = ?').get(sceneId, slotId);
+function exploredOf(sc, slotId) {
+  const d = exploreDims(sc), row = exploreRow(sc.id, slotId);
+  const fits = row && row.cols === d.cols && row.rows === d.rows; // the map changed size or grid since: start over
+  return { ...d, bits: fits ? Buffer.from(row.bits).toString('base64') : '' };
+}
+tbl('GET', '/scenes/:id/explored', 'player', ({ user, table, params, url }) => {
+  const sc = inTable('scenes', params.id, table.id); if (!sc) throw notFound();
+  if (user.role === 'gm') return exploredOf(sc, slotIn(table, url.searchParams.get('slot')).id); // the GM looking as a player
+  if (!sc.active) throw notFound();
+  return exploredOf(sc, user.id);
+});
+tbl('POST', '/scenes/:id/explored', 'player', ({ user, table, params, body }) => {
+  if (user.role === 'gm') throw bad('Only players explore');
+  const sc = inTable('scenes', params.id, table.id); if (!sc || !sc.active) throw notFound();
+  if (!sc.explore) return exploredOf(sc, user.id); // memory off on this scene: nothing is kept
+  const d = exploreDims(sc), size = Math.ceil((d.cols * d.rows) / 8);
+  if (d.cols * d.rows > 4_000_000) throw bad('Map too large for the exploration memory');
+  if (body.cols !== d.cols || body.rows !== d.rows) throw new HttpError(409, 'The map changed, reload');
+  const incoming = Buffer.from(String(body.bits ?? ''), 'base64');
+  if (incoming.length !== size) throw bad('Bad exploration bitmap');
+  const row = exploreRow(sc.id, user.id), bits = Buffer.alloc(size);
+  if (row && row.cols === d.cols && row.rows === d.rows) Buffer.from(row.bits).copy(bits);
+  for (let i = 0; i < size; i++) bits[i] |= incoming[i];
+  db.prepare('INSERT INTO explored (scene_id, slot_id, cols, rows, bits, updated) VALUES (?,?,?,?,?,?) ON CONFLICT(scene_id, slot_id) DO UPDATE SET cols = excluded.cols, rows = excluded.rows, bits = excluded.bits, updated = excluded.updated')
+    .run(sc.id, user.id, d.cols, d.rows, bits, now());
+  return { ...d, bits: bits.toString('base64') };
+});
+tbl('DELETE', '/scenes/:id/explored', 'gm', ({ table, params, url }) => {
+  const sc = inTable('scenes', params.id, table.id); if (!sc) throw notFound();
+  const slot = url.searchParams.get('slot') ? slotIn(table, url.searchParams.get('slot')) : null;
+  if (slot) db.prepare('DELETE FROM explored WHERE scene_id = ? AND slot_id = ?').run(sc.id, slot.id);
+  else db.prepare('DELETE FROM explored WHERE scene_id = ?').run(sc.id);
+  broadcast(table.id, { type: 'explored', sceneId: sc.id }, (u) => u.role === 'player' && (!slot || u.id === slot.id)); // their pages forget too
+  return { ok: true };
 });
 tbl('DELETE', '/scenes/:id', 'gm', ({ table, params }) => {
   const sc = inTable('scenes', params.id, table.id); if (!sc) throw notFound();
@@ -466,7 +508,7 @@ tbl('POST', '/tokens', 'gm', ({ table, by, body }) => {
   const r = db.prepare('INSERT INTO tokens (scene_id, name, x, y, size, image, color, actor_id, hidden, vision, light, sight) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(
     scene.id, String(body.name ?? actor?.name ?? 'Token').slice(0, 60), num(body.x, scene.width / 2), num(body.y, scene.height / 2),
     Math.min(10, Math.max(0.25, num(body.size, 1))), imgUrl(body.image) ?? portrait, color(body.color), actor?.id ?? null, body.hidden ? 1 : 0,
-    Math.min(100, Math.max(0, num(body.vision, 0))), Math.min(100, Math.max(0, num(body.light, 0))), body.sight ? 1 : 0);
+    Math.min(100, Math.max(0, num(body.vision, 100))), Math.min(100, Math.max(0, num(body.light, 0))), body.sight ? 1 : 0); // vision in cells: 0 = none, 100 by default
   const row = getRow('tokens', r.lastInsertRowid);
   pushToken(row, by);
   return tokenView(row);

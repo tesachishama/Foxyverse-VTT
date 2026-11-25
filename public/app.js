@@ -4,7 +4,7 @@ import { createAudio } from './audio.js';
 import { inventoryView, icon } from './inventory.js';
 import { openTokenCropper } from './tokencrop.js';
 import { signed, tierLabel, damageText, matchesSearch } from './format.js';
-import { isTokenDead } from './vision.js';
+import { isTokenDead, pickViewers, markSeen, orBits, bitsToBase64, bitsFromBase64 } from './vision.js';
 import { radiusStep } from './walls.js';
 import { tabColumns, clampRect, readJSON, writeJSON, createBubbles } from './layout.js';
 
@@ -234,6 +234,7 @@ function onEvent(ev) {
     if (shown('journal') && !S.journalEdit) renderPanel('journal'); return;
   }
   if (type === 'show') { S.modal = ev.id; renderModal(); return; }
+  if (type === 'explored') { if (explored?.sceneId === ev.sceneId) { explored = null; exploredKey = null; syncExplored(); } return; } // the GM reset it
   if (type === 'comp') {
     if (op === 'delete') remove(S.compendium, data.id); else upsert(S.compendium, data);
     if (shown('comp') && !compEditing()) renderPanel('comp'); return;
@@ -269,27 +270,67 @@ function onEvent(ev) {
 // The GM can look at (and prepare) any scene; players only ever see the active one.
 const viewScene = () => (isGM() ? S.scenes.find((s) => s.id === S.viewId) ?? S.scene : S.scene);
 const viewTokens = () => { const sc = viewScene(); return sc ? S.tokens.filter((t) => t.sceneId === sc.id) : []; };
-const isPlayerToken = (tok) => {
-  if (tok.sight) return true; // a token the GM shares with everyone (ally, torch bearer...)
-  const a = tok.actorId && actorById(tok.actorId);
-  if (!a) return false;
-  return isGM() ? Object.values(a.perms ?? {}).includes('edit') : a.perm === 'edit'; // a player's tokens: sheets they can edit
-};
 /** Forced by the GM, else the sheet's HP when this page has it, else what the server says. */
 const tokenDead = (tok) => { const a = tok.actorId && actorById(tok.actorId); return isTokenDead(tok, a ? a.data.hp.cur : null); };
-/** Whose eyes the fog uses: a player's own tokens; for the GM's "player view", all players, one player, or the selected token. Dead tokens see nothing. */
-function viewerTokens(tokens, { withDead = false } = {}) {
-  const alive = withDead ? tokens : tokens.filter((x) => !tokenDead(x));
-  if (!isGM()) return alive.filter(isPlayerToken);
-  if (S.viewAs === 'selected' && S.selected.size) return alive.filter((x) => S.selected.has(x.id));
-  if (typeof S.viewAs === 'number') return alive.filter((x) => x.sight || actorById(x.actorId)?.perms?.[S.viewAs] === 'edit');
-  return alive.filter(isPlayerToken);
+/** Darkvision: the sheet's toggle when this page has the sheet, else what the server says. */
+const tokenDarkvision = (tok) => { const a = tok.actorId && actorById(tok.actorId); return a ? !!a.data.darkvision : !!tok.darkvision; };
+/** This page's right on a token's sheet: 'edit' | 'view' | 'none'. The GM's player view takes every player's, or one player's. */
+function permFor(tok) {
+  const a = tok.actorId && actorById(tok.actorId);
+  if (!a) return 'none';
+  if (!isGM()) return a.perm ?? 'none';
+  const levels = typeof S.viewAs === 'number' ? [a.perms?.[S.viewAs]] : Object.values(a.perms ?? {});
+  return levels.includes('edit') ? 'edit' : levels.includes('view') ? 'view' : 'none';
 }
+/**
+ * Whose eyes the fog uses (public/vision.js pickViewers): tokens in edit; view-only ones with the scene's "shared vision" or when the
+ * player has no living token in edit; tokens that "share their sight". Dead tokens see nothing. The GM can also look through the selection.
+ */
+function viewersOf(tokens) {
+  if (isGM() && S.viewAs === 'selected' && S.selected.size) { const sel = tokens.filter((x) => S.selected.has(x.id)); return { eyes: sel.filter((x) => !tokenDead(x)), own: sel }; }
+  return pickViewers(tokens, permFor, tokenDead, viewScene()?.sharedVision);
+}
+
+// ---- exploration memory ("dynamic fog"): what this player has seen of the scene, kept by the server per player and scene
+let explored = null, exploredKey = null, markTimer = null, sendTimer = null;
+const exploreOn = (sc) => !!sc?.fog && !!sc?.explore;
+/** Load the memory to show: the player's own, or for the GM's "view as <player>", that player's. Only when something changed. */
+const syncExplored = guard(async () => {
+  const sc = viewScene();
+  const slot = S.mapMode ? null : isGM() ? (S.playerView && typeof S.viewAs === 'number' ? S.viewAs : null) : S.me?.id;
+  const key = sc && exploreOn(sc) && slot != null ? `${sc.id}|${slot}` : null;
+  if (key === exploredKey) return;
+  exploredKey = key;
+  if (!key) { explored = null; return map?.redraw(); }
+  const r = await api('GET', `/scenes/${sc.id}/explored${isGM() ? '?slot=' + slot : ''}`);
+  if (exploredKey !== key) return; // something else was asked meanwhile
+  const dims = { cell: r.cell, cols: r.cols, rows: r.rows };
+  explored = { sceneId: sc.id, dims, bits: bitsFromBase64(r.bits, dims), rev: 1 };
+  map?.redraw();
+});
+/** The vision changed: mark what is seen now (a moment later, not on every frame of a drag), and send it a bit later. */
+function rememberSeen(scene, vis) {
+  if (isGM() || !explored || explored.sceneId !== scene.id || !exploreOn(scene)) return;
+  clearTimeout(markTimer);
+  markTimer = setTimeout(() => {
+    if (!markSeen(explored.bits, explored.dims, vis.canSee)) return;
+    explored.rev++; map.redraw();
+    clearTimeout(sendTimer); sendTimer = setTimeout(sendExplored, 2000);
+  }, 250);
+}
+const exploredBody = () => ({ cols: explored.dims.cols, rows: explored.dims.rows, bits: bitsToBase64(explored.bits) });
+const sendExplored = guard(async () => {
+  if (!explored || isGM()) return;
+  const mine = explored, r = await api('POST', `/scenes/${mine.sceneId}/explored`, exploredBody());
+  if (explored === mine && r.bits) { orBits(mine.bits, bitsFromBase64(r.bits, mine.dims)); mine.rev++; map.redraw(); } // what this player saw on another device
+});
+// closing the page: send what is still waiting
+addEventListener('pagehide', () => { if (sendTimer && explored && !isGM()) { clearTimeout(sendTimer); fetch(`/api/t/${ROUTE.slug}/scenes/${explored.sceneId}/explored`, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(exploredBody()) }).catch(() => {}); } });
 let editsPending = 0;
 function replaceScene(r) {
   if (isGM()) upsert(S.scenes, r);
   if (r.active || S.scene?.id === r.id) S.scene = r;
-  map.redraw(); renderHud(); if (S.picked) renderInspector();
+  map.redraw(); renderHud(); if (S.picked) renderInspector(); syncExplored();
 }
 /** Optimistic scene edit: consecutive wall clicks must see each other, so apply locally first and queue the saves in order. */
 function sceneEdit(patch, { undoable = true } = {}) {
@@ -346,11 +387,11 @@ function buildShell() {
   document.addEventListener('click', () => { if (S.audioBlocked) { S.audioBlocked = false; audio.unlock(); renderFoot(); } });
   map = createMap(canvas, {
     state: () => {
-      const sc = viewScene(), tokens = viewTokens(), eyes = viewerTokens(tokens);
+      const sc = viewScene(), tokens = viewTokens(), { eyes, own } = viewersOf(tokens);
       return {
         scene: sc, tokens, selected: S.selected, tool: S.tool, gm: isGM(), playerView: S.playerView, picked: S.picked,
         // viewerIds: tokens always drawn for this page (its own, dead ones included); viewers: the eyes (alive only)
-        viewers: eyes.map((x) => ({ x: x.x, y: x.y, vision: x.vision })), viewerIds: new Set(viewerTokens(tokens, { withDead: true }).map((x) => x.id)),
+        viewers: eyes.map((x) => ({ x: x.x, y: x.y, vision: x.vision, darkvision: tokenDarkvision(x) })), viewerIds: new Set(own.map((x) => x.id)), explored,
         // GM lights and anti-lights, plus the lights tokens carry (a player's token light can beat an anti-light that allows it)
         lights: [...(sc?.lights ?? []).map((l) => ({ x: l.x, y: l.y, radius: l.radius, anti: l.kind === 'anti', playersWin: !!l.playersWin })),
           ...tokens.filter((x) => x.light > 0 && !x.hidden).map((x) => ({ x: x.x, y: x.y, radius: x.light, player: !!x.pc }))],
@@ -363,6 +404,7 @@ function buildShell() {
     onSelect: (set) => { S.selected = set; if (set.size) S.picked = null; renderInspector(); renderChat(); },
     onMove: (tok, x, y) => { api('PATCH', '/tokens/' + tok.id, { x, y }).catch((e) => { if (e.data?.token) { Object.assign(tok, e.data.token); map.redraw(); } }); }, // a wall: back to where the server has it
     onDoor: toggleDoor,
+    onVision: rememberSeen,
     onPick: (item) => { S.picked = item; if (item) S.selected = new Set(); renderInspector(); map.redraw(); },
     onOpen: (tok) => { if (tok.actorId && actorById(tok.actorId)) { S.sheetId = tok.actorId; openTab('sheets'); } },
     onSceneEdit: sceneEdit,
@@ -373,7 +415,7 @@ function buildShell() {
   renderAll();
   audio.sync(S.playing, S.sounds);
 }
-function renderAll() { renderDock(); renderChat(); renderChatWho(); renderInspector(); renderHud(); map?.redraw(); }
+function renderAll() { renderDock(); renderChat(); renderChatWho(); renderInspector(); renderHud(); map?.redraw(); syncExplored(); }
 
 const TOOL_HINT = {
   fr: { wall: 'Mur (bloque la vue et la lumière). Clic : poser un point · clic droit ou Échap : finir · Maj ou Alt : placement libre',
@@ -402,7 +444,7 @@ function renderHud() {
     S.scenes.map((s) => h('option', { value: s.id }, s.name + (s.active ? ' ●' : ''))));
   sel.value = S.viewId ?? '';
   const flag = (label, checked, on) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked, onchange: (e) => on(e.target.checked) }), label);
-  const viewAs = h('select', { title: t('viewAs'), onchange: (e) => { const v = e.target.value; S.viewAs = /^\d+$/.test(v) ? Number(v) : v; map.redraw(); } },
+  const viewAs = h('select', { title: t('viewAs'), onchange: (e) => { const v = e.target.value; S.viewAs = /^\d+$/.test(v) ? Number(v) : v; map.redraw(); syncExplored(); } },
     h('option', { value: 'players' }, t('viewPlayers')), h('option', { value: 'selected' }, t('viewSelected')),
     S.users.filter((u) => u.role === 'player').map((u) => h('option', { value: u.id }, u.name)));
   viewAs.value = String(S.viewAs);
@@ -410,7 +452,8 @@ function renderHud() {
     sc && !sc.active && !S.mapMode && h('button', { class: 'primary', onclick: guard(() => api('POST', `/scenes/${sc.id}/activate`)) }, t('activate')),
     sc && flag(t('fog'), sc.fog, (v) => { sceneEdit({ fog: v }, { undoable: false }); renderHud(); }),
     sc && flag(t('dark'), sc.dark, (v) => sceneEdit({ dark: v }, { undoable: false })),
-    sc?.fog && !S.mapMode && flag(t('playerView'), S.playerView, (v) => { S.playerView = v; renderHud(); map.redraw(); }),
+    sc && h('span', { title: t('sharedVisionHint') }, flag(t('sharedVision'), sc.sharedVision, (v) => sceneEdit({ sharedVision: v }, { undoable: false }))),
+    sc?.fog && !S.mapMode && flag(t('playerView'), S.playerView, (v) => { S.playerView = v; renderHud(); map.redraw(); syncExplored(); }),
     sc?.fog && S.playerView && viewAs);
   if (!sc) return;
   const tools = [['select', 'toolSelect'], ['wall', 'toolWall'], ['twall', 'toolTWall'], ['rect', 'toolRect'], ['circle', 'toolCircle'], ['curve', 'toolCurve'], ['door', 'toolDoor'], ['edit', 'toolEdit'],
@@ -813,6 +856,7 @@ function sheetView(a) {
       h('label', {}, t('cls'), field(a, d.bio, 'class')), h('label', {}, t('element'), field(a, d.bio, 'element')),
       h('label', {}, t('level'), field(a, d.bio, 'level', 'int', { min: 1, class: 'n' })),
       h('label', { class: 'check' }, field(a, d, 'elemental', 'bool'), t('elemental')),
+      h('label', { class: 'check', title: t('darkvisionHint') }, field(a, d, 'darkvision', 'bool'), t('darkvision')),
       isGM() && h('label', { title: t('aliasHint') }, t('alias'), h('input', { type: 'text', class: 'code', value: a.alias ?? '', maxlength: 40, placeholder: t('aliasAuto'),
         onchange: guard(async (e) => { if (pending.has(a.id)) await saveNow(a); const r = await api('PATCH', '/actors/' + a.id, { alias: e.target.value }); a.alias = r.alias; e.target.value = r.alias; }) }))));
 
@@ -933,10 +977,23 @@ function imageSize(file) {
   return new Promise((res, rej) => { const u = URL.createObjectURL(file), i = new Image(); i.onload = () => { res({ w: i.naturalWidth, h: i.naturalHeight }); URL.revokeObjectURL(u); }; i.onerror = rej; i.src = u; });
 }
 const sceneField = (sc, key, label) => h('label', {}, label, h('input', { type: 'number', class: 'n', value: sc[key], onchange: (e) => sceneEdit({ [key]: Number(e.target.value) }) }));
+/** Exploration memory of a table scene: on / off, and the GM's reset (one player or everyone). */
+function exploreSettings(sc) {
+  const reset = h('select', { title: t('resetExplore'), onchange: guard(async (e) => {
+    const v = e.target.value; e.target.value = '';
+    if (!v || !confirm(t('confirmResetExplore'))) return;
+    await api('DELETE', `/scenes/${sc.id}/explored${v === 'all' ? '' : '?slot=' + v}`);
+    exploredKey = null; syncExplored(); toast(t('saved'), false);
+  }) }, h('option', { value: '' }, t('resetExplore')), h('option', { value: 'all' }, t('everyone')), S.users.map((u) => h('option', { value: u.id }, u.name)));
+  return h('div', { class: 'line' },
+    h('label', { class: 'check', title: t('exploreHint') }, h('input', { type: 'checkbox', checked: sc.explore, onchange: (e) => { sceneEdit({ explore: e.target.checked }, { undoable: false }); } }), t('exploreMemory')),
+    reset);
+}
 /** Grid, offset, image and clean-up of the scene being viewed (a table scene or a library map). */
 function sceneSettings(sc) {
   return [
     h('div', { class: 'line' }, sceneField(sc, 'grid', t('grid')), sceneField(sc, 'ox', 'X'), sceneField(sc, 'oy', 'Y')),
+    !S.mapMode && exploreSettings(sc),
     h('div', { class: 'line' },
       h('button', { onclick: () => confirm(t('confirmDel')) && sceneEdit({ walls: [] }) }, t('clearWalls')),
       h('button', { onclick: () => confirm(t('confirmDel')) && sceneEdit({ lights: [] }) }, t('clearLights')),

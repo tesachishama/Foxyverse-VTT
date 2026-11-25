@@ -128,3 +128,47 @@ test('3 tokens say whether they are a player\'s (their light can beat an anti-li
   await gm('PUT', `/actors/${npc.id}/perms`, { perms: { [quillSlot.id]: 'edit' } });
   assert.equal((await gm('GET', '/state')).body.tokens.find((t) => t.id === tok.id).pc, true);
 });
+
+test('4 vision: new tokens see 100 cells, 0 means none; darkvision comes from the sheet; scene options shared vision and memory', async () => {
+  const a = await sheet('Seer', { [pipSlot.id]: 'edit' });
+  const tok = (await gm('POST', '/tokens', { sceneId: scene.id, actorId: a.id })).body;
+  assert.equal(tok.vision, 100); assert.equal(tok.darkvision, false);
+  assert.equal((await gm('PATCH', `/tokens/${tok.id}`, { vision: 0 })).body.vision, 0);
+  const d = a.data; d.darkvision = true;
+  assert.equal((await pip('PATCH', `/actors/${a.id}`, { data: d })).body.data.darkvision, true);
+  assert.equal((await pip('GET', '/state')).body.tokens.find((t) => t.id === tok.id).darkvision, true);
+  d.darkvision = 'yes';
+  assert.equal((await pip('PATCH', `/actors/${a.id}`, { data: d })).body.data.darkvision, false); // only a real true
+  const sc = (await gm('POST', '/scenes', { name: 'Options' })).body;
+  assert.equal(sc.sharedVision, false); assert.equal(sc.explore, true);
+  const up = (await gm('PATCH', `/scenes/${sc.id}`, { sharedVision: 1, explore: false })).body;
+  assert.equal(up.sharedVision, true); assert.equal(up.explore, false);
+});
+
+test('4 exploration memory: per player slot and scene, ORed by the server, reset by the GM per player or for all', async () => {
+  await gm('PATCH', `/scenes/${scene.id}`, { fog: true, explore: true });
+  const sc = (await gm('GET', '/state')).body.scene;
+  const empty = (await pip('GET', `/scenes/${sc.id}/explored`)).body;
+  const size = Math.ceil((empty.cols * empty.rows) / 8);
+  assert.equal(empty.cell, sc.grid / 2); assert.equal(empty.bits, '');
+  const bits = (fill) => Buffer.alloc(size, fill).toString('base64');
+  const send = (who, b) => who('POST', `/scenes/${sc.id}/explored`, { cols: empty.cols, rows: empty.rows, bits: b });
+  await send(pip, bits(0b0001));
+  const merged = (await send(pip, bits(0b0100))).body; // OR: nothing seen is lost
+  assert.equal(Buffer.from(merged.bits, 'base64')[0], 0b0101);
+  assert.equal((await pip('GET', `/scenes/${sc.id}/explored`)).body.bits, merged.bits); // back after a reload, from any device
+  assert.equal((await quill('GET', `/scenes/${sc.id}/explored`)).body.bits, ''); // each player their own
+  await send(quill, bits(0b1000));
+  assert.equal((await gm('GET', `/scenes/${sc.id}/explored?slot=${pipSlot.id}`)).body.bits, merged.bits); // the GM can look as a player
+  assert.equal((await send(pip, 'AAAA')).status, 400); // wrong size
+  assert.equal((await pip('POST', `/scenes/${sc.id}/explored`, { cols: 1, rows: 1, bits: 'AA==' })).status, 409); // map changed
+  assert.equal((await pip('DELETE', `/scenes/${sc.id}/explored`)).status, 404); // GM only
+  await gm('DELETE', `/scenes/${sc.id}/explored?slot=${pipSlot.id}`);
+  assert.equal((await pip('GET', `/scenes/${sc.id}/explored`)).body.bits, '');
+  assert.notEqual((await quill('GET', `/scenes/${sc.id}/explored`)).body.bits, '');
+  await gm('DELETE', `/scenes/${sc.id}/explored`);
+  assert.equal((await quill('GET', `/scenes/${sc.id}/explored`)).body.bits, '');
+  await gm('PATCH', `/scenes/${sc.id}`, { explore: false }); // memory off: nothing kept
+  assert.equal((await send(pip, bits(0xff))).body.bits, '');
+  await gm('PATCH', `/scenes/${sc.id}`, { fog: false, explore: true });
+});

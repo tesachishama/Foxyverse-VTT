@@ -67,7 +67,7 @@ test('player portrait propagates to linked tokens; a player with the edit right 
   const after = (await pip('GET', '/state')).body.tokens.find((t) => t.id === tok.body.id);
   assert.equal(after.image, png.body.url);
   const own = await pip('PATCH', `/tokens/${tok.body.id}`, { image: null, name: 'hacked', vision: 99 });
-  assert.equal(own.body.image, null); assert.equal(own.body.name, 'Hero'); assert.equal(own.body.vision, 0); // only x, y, image are player-editable
+  assert.equal(own.body.image, null); assert.equal(own.body.name, 'Hero'); assert.equal(own.body.vision, 100); // only x, y, image are player-editable (vision: 100 cells by default)
 });
 
 test('a sheet has a full portrait and a separate round token; the token is what the map uses', async () => {
