@@ -3,7 +3,7 @@ import { createMap } from './map.js';
 import { createAudio } from './audio.js';
 import { inventoryView, icon } from './inventory.js';
 import { openTokenCropper } from './tokencrop.js';
-import { signed, tierLabel, damageDetail, matchesSearch } from './format.js';
+import { signed, tierLabel, damageText, matchesSearch } from './format.js';
 import { isTokenDead } from './vision.js';
 import { tabColumns, clampRect, readJSON, writeJSON, createBubbles } from './layout.js';
 
@@ -674,8 +674,8 @@ const applyRoll = (m) => guard(async () => {
 function appliedText(a) {
   if (a.note) return a.note;
   if (a.kind === 'damage') {
-    const detail = damageDetail(a.rolls); // each roll and the armor taken off it
-    return `−${a.dealt} ${t('hp')}${detail ? ` [${detail}]` : ''}${a.tempLost ? ` (${a.tempLost} ${t('temp').toLowerCase()})` : ''}${a.mpLost ? `, −${a.mpLost} ${t('mp')}` : ''}${a.ko ? ' · KO' : ''}`;
+    // "took 25 damage (20−5 + 15−5)": the total, then each roll and the armor taken off it
+    return `${damageText(a, (n) => t('tookDamage').replace('{n}', n))}${a.tempLost ? ` (${a.tempLost} ${t('temp').toLowerCase()})` : ''}${a.mpLost ? `, −${a.mpLost} ${t('mp')}` : ''}${a.ko ? ' · KO' : ''}`;
   }
   if (a.kind === 'heal') return `+${a.healed} ${t('hp')}`;
   if (a.kind === 'theal') return `+ ${t('temp')} → ${a.temp}`;
