@@ -116,6 +116,8 @@ const DICT = {
     alias: 'Alias @', aliasAuto: 'depuis le nom', aliasHint: "Pour la narration : @alias dans le chat (sans espaces, unique dans la table, visible par le MJ seul). Vide : suit le nom.",
     search: 'Rechercher', newOne: 'Nouveau', fromCompendium: 'Depuis le compendium', noMatch: 'Aucun résultat.', compEmpty: 'Rien de cette catégorie dans le compendium.',
     damage: 'Dégâts',
+    paneToDynamic: 'Replier automatiquement', paneToPinned: 'Garder ouvert', panels: 'Onglets', popOut: 'Détacher en fenêtre', dockBack: 'Remettre dans les onglets',
+    floating: 'en fenêtre', allFloating: 'Tous les onglets sont en fenêtres.',
   },
   en: {
     name: 'Name', logout: 'Switch player',
@@ -183,6 +185,8 @@ const DICT = {
     alias: '@ alias', aliasAuto: 'from the name', aliasHint: 'For narration: @alias in the chat (no spaces, unique in the table, seen by the GM only). Empty: follows the name.',
     search: 'Search', newOne: 'New', fromCompendium: 'From the compendium', noMatch: 'No match.', compEmpty: 'Nothing of this category in the compendium.',
     damage: 'Damage',
+    paneToDynamic: 'Fold away automatically', paneToPinned: 'Keep open', panels: 'Tabs', popOut: 'Pop out into a window', dockBack: 'Put back in the tabs',
+    floating: 'in a window', allFloating: 'Every tab is in a window.',
   },
 };
 let lang = localStorage.getItem('lang') || (navigator.language || 'fr').slice(0, 2);

@@ -5,6 +5,7 @@ import { inventoryView, icon } from './inventory.js';
 import { openTokenCropper } from './tokencrop.js';
 import { signed, tierLabel, damageDetail, matchesSearch } from './format.js';
 import { isTokenDead } from './vision.js';
+import { tabColumns, clampRect, readJSON, writeJSON, createBubbles } from './layout.js';
 
 const S = {
   me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], table: null, allTables: [], mapMode: false,
@@ -24,7 +25,7 @@ const add = (el, ...kids) => { el.append(...clean(kids)); return el; };
 const upsert = (list, item) => { const i = list.findIndex((x) => x.id === item.id); if (i >= 0) list[i] = item; else list.push(item); };
 const remove = (list, id) => { const i = list.findIndex((x) => x.id === id); if (i >= 0) list.splice(i, 1); };
 const guard = (fn) => async (...a) => { try { return await fn(...a); } catch (e) { toast(e.message); } };
-let map, dockEl, panelEl, chatEl, chatPane, chatList, chatInput, chatWho, inspectorEl, hudEl, topEl, footEl, fogNote, audio, editQueue = Promise.resolve();
+let map, dockEl, dockPane, bubblesEl, panelEl, chatEl, chatPane, chatList, chatInput, chatWho, inspectorEl, hudEl, topEl, footEl, fogNote, audio, editQueue = Promise.resolve();
 
 // ------------------------------------------------------------------ boot & pages
 // URLs: "/" tables, "/<table>" pick a player then play, "/admin" GM home, "/admin/<table>" GM at a table, "/admin?map=<id>" map library editor.
@@ -204,13 +205,13 @@ function onEvent(ev) {
   if (type === 'left') { es?.close(); return location.reload(); } // "switch player" in another tab of this browser
   if (type === 'table') { // renamed, or moved to a new address
     if (data.slug !== S.table.slug) return location.assign((isGM() ? '/admin/' : '/') + data.slug);
-    S.table = data; document.title = `${S.table.name} · Foxyverse VTT`; if (S.tab === 'table') renderPanel(); return;
+    S.table = data; document.title = `${S.table.name} · Foxyverse VTT`; if (shown('table')) renderPanel('table'); return;
   }
   if (type === 'refresh') return loadState().then(renderAll);
-  if (type === 'user') { upsert(S.users, data); if (S.tab === 'table') renderPanel(); return; }
+  if (type === 'user') { upsert(S.users, data); if (shown('table')) renderPanel('table'); return; }
   if (type === 'scene') {
     if (editsPending) return; // our own queued edits are newer than this echo
-    replaceScene(data); if (S.tab === 'table') renderPanel(); return;
+    replaceScene(data); if (shown('table')) renderPanel('table'); return;
   }
   if (type === 'token') {
     if (by === CLIENT_ID) return; // this page is the source; its local copy is authoritative
@@ -219,28 +220,28 @@ function onEvent(ev) {
   }
   if (type === 'sound') {
     if (op === 'delete') remove(S.sounds, data.id); else { upsert(S.sounds, data); audio.update(data); }
-    if (S.tab === 'sound') renderPanel(); return;
+    if (shown('sound')) renderPanel('sound'); return;
   }
   if (type === 'audio') {
     audio.apply(ev, S.sounds);
     if (op === 'play') { remove(S.playing, ev.id); S.playing.push({ id: ev.id, startedAt: ev.startedAt }); } else if (op === 'stop') remove(S.playing, ev.id); else S.playing = [];
-    if (S.tab === 'sound') renderPanel(); return;
+    if (shown('sound')) renderPanel('sound'); return;
   }
   if (type === 'journal') {
     if (op === 'delete') { remove(S.journals, data.id); if (S.journalId === data.id) S.journalId = null; } else upsert(S.journals, data);
-    if (S.tab === 'journal' && !S.journalEdit) renderPanel(); return;
+    if (shown('journal') && !S.journalEdit) renderPanel('journal'); return;
   }
   if (type === 'show') { S.modal = ev.id; renderModal(); return; }
   if (type === 'comp') {
     if (op === 'delete') remove(S.compendium, data.id); else upsert(S.compendium, data);
-    if (S.tab === 'comp' && !compEditing()) renderPanel(); return;
+    if (shown('comp') && !compEditing()) renderPanel('comp'); return;
   }
-  if (type === 'npcs') { S.npcs = data; if (S.tab === 'comp' && !compEditing()) renderPanel(); return; }
+  if (type === 'npcs') { S.npcs = data; if (shown('comp') && !compEditing()) renderPanel('comp'); return; }
   if (type === 'actor') {
     if (op === 'delete') { remove(S.actors, data.id); if (S.sheetId === data.id) S.sheetId = null; renderAll(); return; }
     if (by === CLIENT_ID && pending.has(data.id)) return;
     const had = actorById(data.id);
-    const typing = S.tab === 'sheets' && S.sheetId === data.id && panelEl.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+    const typing = shown('sheets') && S.sheetId === data.id && inPanels(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
     if (had && typing) {
       // Someone else changed this character (damage, healing, a cast) while the sheet is being edited: keep our local copy, but take the live
       // resources so that our next save cannot write the old HP / mana / favors back.
@@ -250,7 +251,7 @@ function onEvent(ev) {
     upsert(S.actors, data);
     if (!had) { if (!S.actorId) S.actorId = data.id; renderAll(); return; }
     map.redraw(); renderChatWho();
-    if (S.tab === 'sheets' && S.sheetId === data.id) renderPanel();
+    if (shown('sheets') && S.sheetId === data.id) renderPanel('sheets');
     return;
   }
   if (type === 'chat') {
@@ -258,7 +259,7 @@ function onEvent(ev) {
     if (op === 'delete') remove(S.chat, data.id); else upsert(S.chat, data);
     if (S.chat.length > 300) S.chat.splice(0, S.chat.length - 300);
     renderChat();
-    if (fresh) peekChat();
+    if (fresh) bubble(data);
   }
 }
 
@@ -315,12 +316,16 @@ function buildShell() {
   inspectorEl = h('div', { class: 'inspector hidden' });
   hudEl = h('div', { class: 'hud' }); topEl = h('div', { class: 'hud-top' });
   fogNote = h('div', { class: 'fog-note hidden' }, isGM() ? t('noViewers') : t('noViewersPlayer'));
-  const stage = h('div', { id: 'stage' }, canvas, fogNote, inspectorEl, topEl, hudEl);
-  dockEl = h('aside', { id: 'dock' });
+  bubblesEl = h('div', { class: 'bubbles' });
+  const stage = h('div', { id: 'stage' }, canvas, fogNote, inspectorEl, topEl, hudEl, bubblesEl);
+  // Like other VTTs: tabs and panels on the left, the map in the middle, the chat on the right. Both sides can fold away.
+  dockEl = h('div', { id: 'dock', class: 'side-wrap' });
   panelEl = h('section', { id: 'panel' });
   footEl = h('div', { class: 'dock-foot' });
-  chatPane = !S.mapMode && h('aside', { id: 'chatpane' });
-  app.replaceChildren(h('div', { id: 'layout', class: S.mapMode ? 'no-chat' : '' }, chatPane, stage, dockEl));
+  dockPane = h('aside', { id: 'dockpane', class: 'side left' });
+  chatPane = !S.mapMode && h('aside', { id: 'chatpane', class: 'side right' });
+  app.replaceChildren(h('div', { id: 'layout', class: S.mapMode ? 'no-chat' : '' }, dockPane, stage, chatPane));
+  mountSide('dock');
   audio = createAudio({ getOffset: () => S.timeOffset, onBlocked: () => { if (!S.audioBlocked) { S.audioBlocked = true; renderFoot(); } } });
   document.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName ?? '') && isGM()) { e.preventDefault(); undoSceneEdit(); } });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.modal) { S.modal = null; renderModal(); } });
@@ -341,11 +346,12 @@ function buildShell() {
     hpRatio: (tok) => { const a = tok.actorId && actorById(tok.actorId); const max = a?.computed.derived.maxhp; return max ? a.data.hp.cur / max : null; },
     onSelect: (set) => { S.selected = set; renderInspector(); renderChat(); },
     onMove: (tok, x, y) => { api('PATCH', '/tokens/' + tok.id, { x, y }).catch(() => {}); },
-    onOpen: (tok) => { if (tok.actorId && actorById(tok.actorId)) { S.tab = 'sheets'; S.sheetId = tok.actorId; renderAll(); } },
+    onOpen: (tok) => { if (tok.actorId && actorById(tok.actorId)) { S.sheetId = tok.actorId; openTab('sheets'); } },
     onSceneEdit: sceneEdit,
   });
   buildChat();
-  if (chatPane) mountChat();
+  if (chatPane) mountSide('chat');
+  restoreFloats();
   renderAll();
   audio.sync(S.playing, S.sounds);
 }
@@ -397,7 +403,7 @@ function renderFoot() {
     h('button', { class: 'quiet' + (audio.isMuted() ? ' on' : ''), title: t('mute'), onclick: () => { audio.setMuted(!audio.isMuted()); renderFoot(); } }, audio.isMuted() ? t('mute') : '♪'),
     h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: audio.getMaster(), title: t('volume'), oninput: (e) => audio.setMaster(Number(e.target.value)) }),
     S.audioBlocked && h('button', { class: 'primary', onclick: () => { S.audioBlocked = false; audio.unlock(); renderFoot(); } }, t('unlock')),
-    h('span', { class: 'spacer' }),
+    h('span', { class: 'spacer' }), sideToggle('dock'),
     h('button', { class: 'quiet', title: 'FR / EN', onclick: () => { setLang(getLang() === 'fr' ? 'en' : 'fr'); location.reload(); } }, getLang().toUpperCase()),
     isGM() ? gmNav() : h('button', { class: 'quiet', title: t('logout'), onclick: guard(async () => { await request('POST', `/api/t/${ROUTE.slug}/leave`); location.reload(); }) }, `${S.me.name} · ${t('logout')}`));
 }
@@ -410,18 +416,157 @@ function gmNav() {
 
 // The user's own icons (design-reference/icons) on the tabs, as in the plugin.
 const TAB_ICON = { sheets: 'bio', journal: 'notes', rules: 'stats', comp: 'inventory', table: 'tab', system: 'settings', map: 'tab' };
+const tabList = () => (S.mapMode ? [['map', t('mapLibrary')]] : [['sheets', t('sheets')], ['journal', t('journal')], ['rules', t('rules')], ['comp', t('compendium')],
+  ...(isGM() ? [['table', t('table')], ['sound', t('sound')], ['system', t('system')]] : [])]);
+const tabLabel = (id) => tabList().find(([x]) => x === id)?.[1] ?? id;
+/** What a tab needs when it comes into view. */
+function enterTab(id) { if (id === 'system') S.draft = structuredClone(S.system); if (id === 'comp') refreshComp(); }
+/** Show a tab: bring its floating window to the front, or make it the docked one. */
+function openTab(id) {
+  if (floats.has(id)) { enterTab(id); renderPanel(id); raiseFloat(id); return; }
+  S.tab = id; enterTab(id); renderDock();
+}
 function renderDock() {
-  const tabs = S.mapMode ? [['map', t('mapLibrary')]] : [['sheets', t('sheets')], ['journal', t('journal')], ['rules', t('rules')], ['comp', t('compendium')],
-    ...(isGM() ? [['table', t('table')], ['sound', t('sound')], ['system', t('system')]] : [])];
+  const tabs = tabList();
+  if (floats.has(S.tab)) S.tab = tabs.find(([id]) => !floats.has(id))?.[0] ?? S.tab; // the docked tab is never one that floats
+  // Tabs never scroll: one line for players, two for the GM. The active one can be popped out into a floating window.
   fill(dockEl,
-    h('nav', { class: 'tabs' }, tabs.map(([id, label]) => h('button', { class: S.tab === id ? 'on' : '', title: label, onclick: () => { S.tab = id; if (id === 'system') S.draft = structuredClone(S.system); if (id === 'comp') refreshComp(); renderDock(); } }, TAB_ICON[id] && icon(TAB_ICON[id], 'ico tab-ico'), h('span', { class: 'tab-label' }, label)))),
+    h('nav', { class: 'tabs', style: `--cols:${tabColumns(tabs.length)}` }, tabs.map(([id, label]) => {
+      const on = S.tab === id && !floats.has(id), floating = floats.has(id);
+      return h('div', { class: 'tab' + (on ? ' on' : '') + (floating ? ' floating' : '') },
+        h('button', { class: 'tab-main', title: floating ? `${label} (${t('floating')})` : label, onclick: () => openTab(id) }, TAB_ICON[id] && icon(TAB_ICON[id], 'ico tab-ico'), h('span', { class: 'tab-label' }, label)),
+        on && !S.mapMode && h('button', { class: 'tab-pop', title: t('popOut'), onclick: () => popOut(id) }, '⧉'));
+    })),
     panelEl, footEl);
   renderPanel(); renderFoot();
 }
-function renderPanel() {
-  const panels = { map: mapPanel, sheets: sheetsPanel, journal: journalPanel, rules: rulesPanel, table: tablePanel, sound: soundPanel, comp: compPanel, system: systemPanel };
-  panelEl.className = 'panel-' + S.tab;
-  panelEl.replaceChildren((panels[S.tab] ?? panels.chat)());
+const PANELS = () => ({ map: mapPanel, sheets: sheetsPanel, journal: journalPanel, rules: rulesPanel, table: tablePanel, sound: soundPanel, comp: compPanel, system: systemPanel });
+/** Is this tab on screen (docked or floating)? */
+const shown = (id) => (S.tab === id && !floats.has(id)) || floats.has(id);
+/** Is this element inside the docked panel or a floating window? */
+const inPanels = (el) => !!el && (panelEl.contains(el) || [...floats.values()].some((f) => f.body.contains(el)));
+const typingIn = (root) => root.contains(document.activeElement) && /INPUT|TEXTAREA/.test(document.activeElement.tagName) && document.activeElement.type !== 'checkbox';
+/**
+ * Draw the panels on screen: all of them, or only those showing tab "only". A floating window someone is typing in is left alone
+ * (its own changes go through saves), unless force is set.
+ */
+function renderPanel(only = null, { force = false } = {}) {
+  const panels = PANELS();
+  if (!only || (only === S.tab && !floats.has(S.tab))) {
+    panelEl.className = 'panel-' + S.tab;
+    panelEl.replaceChildren(floats.has(S.tab) ? h('p', { class: 'hint pad' }, t('allFloating')) : panels[S.tab]());
+  }
+  for (const [id, f] of floats) {
+    if (only && only !== id) continue;
+    if (!force && !only && typingIn(f.body)) continue;
+    const top = f.body.scrollTop;
+    f.body.className = 'float-body panel-' + id;
+    f.body.replaceChildren(panels[id]());
+    f.body.scrollTop = top;
+  }
+}
+
+// ------------------------------------------------------------------ floating tabs: any tab becomes a window (drag, resize, dock back)
+// Position and size are remembered per tab in this browser (localStorage); open windows come back after a reload.
+const floats = new Map(); // tab id -> { win, body }
+let floatZ = 15;
+const storage = () => { try { return window.localStorage; } catch { return null; } };
+const floatStore = () => readJSON(storage(), 'floatTabs', {});
+function saveFloat(id, patch) { const all = floatStore(); all[id] = { ...(all[id] ?? {}), ...patch }; writeJSON(storage(), 'floatTabs', all); }
+function raiseFloat(id) { const f = floats.get(id); if (f) f.win.style.zIndex = String(++floatZ); }
+function placeFloat(win, r) { Object.assign(win.style, { left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' }); }
+function popOut(id, { remember = true } = {}) {
+  if (floats.has(id) || !tabList().some(([x]) => x === id)) return;
+  const body = h('div', { class: 'float-body' });
+  const head = h('div', { class: 'float-head' }, TAB_ICON[id] && icon(TAB_ICON[id], 'ico tab-ico'), h('b', { class: 'grow' }, tabLabel(id)),
+    h('button', { class: 'quiet', title: t('dockBack'), onclick: () => dockBack(id) }, '⇲'));
+  const win = h('div', { class: 'float-win', role: 'dialog', 'aria-label': tabLabel(id) }, head, body);
+  const saved = floatStore()[id];
+  const r = clampRect(saved ?? { x: 80 + floats.size * 30, y: 70 + floats.size * 30, w: 400, h: 560 }, innerWidth, innerHeight);
+  placeFloat(win, r);
+  floats.set(id, { win, body });
+  document.body.append(win);
+  raiseFloat(id);
+  win.addEventListener('pointerdown', () => raiseFloat(id));
+  // drag by the title bar
+  head.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button')) return;
+    e.preventDefault(); head.setPointerCapture(e.pointerId);
+    const sx = e.clientX, sy = e.clientY, ox = win.offsetLeft, oy = win.offsetTop;
+    const move = (ev) => placeFloat(win, clampRect({ x: ox + ev.clientX - sx, y: oy + ev.clientY - sy, w: win.offsetWidth, h: win.offsetHeight }, innerWidth, innerHeight));
+    const up = () => { head.removeEventListener('pointermove', move); head.removeEventListener('pointerup', up); saveFloat(id, { x: win.offsetLeft, y: win.offsetTop }); };
+    head.addEventListener('pointermove', move); head.addEventListener('pointerup', up);
+  });
+  // resize: the bottom-right corner (CSS resize); the new size is remembered
+  new ResizeObserver(debounce(() => { if (floats.get(id)?.win === win) saveFloat(id, { w: win.offsetWidth, h: win.offsetHeight }); }, 300)).observe(win);
+  if (remember) saveFloat(id, { ...r, open: true });
+  enterTab(id);
+  renderDock();
+}
+function dockBack(id) {
+  const f = floats.get(id); if (!f) return;
+  f.win.remove(); floats.delete(id);
+  saveFloat(id, { open: false });
+  S.tab = id; enterTab(id); renderDock();
+}
+function restoreFloats() {
+  if (S.mapMode) return;
+  for (const [id, v] of Object.entries(floatStore())) if (v?.open) popOut(id, { remember: false });
+}
+addEventListener('resize', debounce(() => { for (const { win } of floats.values()) placeFloat(win, clampRect({ x: win.offsetLeft, y: win.offsetTop, w: win.offsetWidth, h: win.offsetHeight }, innerWidth, innerHeight)); }, 200));
+
+// ------------------------------------------------------------------ the two sides (tabs on the left, chat on the right)
+// "pinned": always open. "dynamic": a thin strip that opens on hover or focus (and, for the chat, shows new messages as bubbles).
+const sideModes = { chat: 'pinned', dock: 'pinned' };
+for (const k of Object.keys(sideModes)) { try { if (localStorage.getItem(k + 'Mode') === 'dynamic') sideModes[k] = 'dynamic'; } catch { /* no storage: pinned */ } }
+const paneOf = (key) => (key === 'chat' ? chatPane : dockPane);
+function sideToggle(key) {
+  const pinned = sideModes[key] === 'pinned';
+  return h('button', { class: 'quiet side-toggle', title: t(pinned ? 'paneToDynamic' : 'paneToPinned'), onclick: () => {
+    sideModes[key] = pinned ? 'dynamic' : 'pinned';
+    try { localStorage.setItem(key + 'Mode', sideModes[key]); } catch { /* private window */ }
+    mountSide(key);
+  } }, pinned ? (key === 'chat' ? '»' : '«') : '📌');
+}
+/** Something that belongs to a side lives outside it for a moment (a "+" window, a slot menu, a dialog): keep the side open. */
+const sideBusy = () => !!document.querySelector('.add-menu, .slot-menu, .modal');
+function openSide(key, on) {
+  const pane = paneOf(key); if (!pane) return;
+  pane.classList.toggle('open', on);
+  if (on && key === 'chat') { pane.querySelector('.unread')?.classList.add('hidden'); chatList.scrollTop = chatList.scrollHeight; bubbles.clear(); }
+}
+function mountSide(key) {
+  const pane = paneOf(key); if (!pane) return;
+  const dynamic = sideModes[key] === 'dynamic';
+  const strip = key === 'chat'
+    ? h('div', { class: 'strip', title: t('chat') }, h('span', { class: 'strip-icon' }, '💬'), h('span', { class: 'unread hidden' }))
+    : h('div', { class: 'strip', title: t('panels') }, tabList().map(([id]) => TAB_ICON[id] && icon(TAB_ICON[id], 'ico tab-ico')));
+  const wrap = key === 'chat' ? h('div', { class: 'chat-wrap side-wrap' }, h('div', { class: 'chat-head' }, h('b', {}, t('chat')), sideToggle('chat')), chatEl) : dockEl;
+  pane.className = `side ${key === 'chat' ? 'right' : 'left'} ${dynamic ? 'dynamic' : 'pinned'}`;
+  fill(pane, strip, wrap);
+  if (key === 'dock' && audio) renderFoot(); // its toggle lives in the footer (the first mount happens before audio exists)
+  pane.onmouseenter = () => { if (sideModes[key] === 'dynamic') openSide(key, true); };
+  pane.onmouseleave = () => { if (sideModes[key] === 'dynamic' && !pane.contains(document.activeElement) && !sideBusy()) openSide(key, false); };
+  pane.onfocusin = () => { if (sideModes[key] === 'dynamic') openSide(key, true); };
+  pane.onfocusout = () => setTimeout(() => { if (sideModes[key] === 'dynamic' && !pane.contains(document.activeElement) && !pane.matches(':hover') && !sideBusy()) openSide(key, false); }, 50);
+  if (!dynamic) bubbles.clear();
+}
+// Folded chat: each new message shows alone as a bubble for 5 s (each bubble its own timer). Hovering a bubble opens the whole chat.
+const bubbles = createBubbles({ life: 5000, onExpire: (id) => bubblesEl?.querySelector(`[data-msg="${id}"]`)?.remove() });
+function bubble(m) {
+  if (sideModes.chat !== 'dynamic' || !chatPane || chatPane.classList.contains('open')) return;
+  chatPane.querySelector('.unread')?.classList.remove('hidden');
+  bubblesEl.querySelector(`[data-msg="${m.id}"]`)?.remove();
+  add(bubblesEl, h('div', { class: 'bubble', 'data-msg': m.id, onmouseenter: peekChat }, msgNode(m)));
+  bubbles.add(m.id);
+}
+/** Open the folded chat for as long as the pointer (or the focus) stays on it. Bubbles sit where the opened chat covers the map. */
+function peekChat() {
+  openSide('chat', true);
+  const check = setInterval(() => {
+    if (!chatPane.classList.contains('open')) return clearInterval(check);
+    if (sideModes.chat === 'dynamic' && !chatPane.matches(':hover') && !chatPane.contains(document.activeElement) && !sideBusy()) { openSide('chat', false); clearInterval(check); }
+  }, 700);
 }
 
 // ------------------------------------------------------------------ chat
@@ -465,32 +610,6 @@ function buildChat() {
     await doRoll(text);
   });
   chatEl = h('div', { class: 'chat' }, chatList, h('div', { class: 'chat-bar' }, sugg, chatWho, chatInput));
-}
-/** The chat lives left of the map, outside the tabs: pinned open, or "dynamic" (a thin strip that opens on hover, focus or a new message). */
-let chatMode = (() => { try { return localStorage.getItem('chatMode') === 'dynamic' ? 'dynamic' : 'pinned'; } catch { return 'pinned'; } })();
-let chatPeek = null;
-function mountChat() {
-  const toggle = h('button', { class: 'quiet', title: t(chatMode === 'pinned' ? 'chatToDynamic' : 'chatToPinned'), onclick: () => {
-    chatMode = chatMode === 'pinned' ? 'dynamic' : 'pinned';
-    try { localStorage.setItem('chatMode', chatMode); } catch { /* private window */ }
-    mountChat(); setTimeout(() => map?.resize?.(), 0);
-  } }, chatMode === 'pinned' ? '⇤' : '📌');
-  const wrap = h('div', { class: 'chat-wrap' }, h('div', { class: 'chat-head' }, h('b', {}, t('chat')), toggle), chatEl);
-  const strip = h('div', { class: 'strip', title: t('chat') }, h('span', { class: 'strip-icon' }, '💬'), h('span', { class: 'unread hidden' }));
-  chatPane.className = chatMode;
-  fill(chatPane, strip, wrap);
-  const open = (on) => { chatPane.classList.toggle('open', on); if (on) { strip.querySelector('.unread').classList.add('hidden'); chatList.scrollTop = chatList.scrollHeight; } };
-  chatPane.onmouseenter = () => { if (chatMode === 'dynamic') open(true); };
-  chatPane.onmouseleave = () => { if (chatMode === 'dynamic' && !chatPane.contains(document.activeElement)) open(false); };
-  chatPane.onfocusin = () => { if (chatMode === 'dynamic') open(true); };
-  chatPane.onfocusout = () => setTimeout(() => { if (chatMode === 'dynamic' && !chatPane.contains(document.activeElement) && !chatPane.matches(':hover')) open(false); }, 50);
-}
-/** Dynamic mode: a new message opens the chat for a few seconds. */
-function peekChat() {
-  if (chatMode !== 'dynamic' || !chatPane || chatPane.classList.contains('open')) return;
-  chatPane.classList.add('open');
-  clearTimeout(chatPeek);
-  chatPeek = setTimeout(() => { if (!chatPane.matches(':hover') && !chatPane.contains(document.activeElement)) chatPane.classList.remove('open'); }, 4000);
 }
 function renderChatWho() {
   chatWho.replaceChildren(h('option', { value: '' }, t('noChar')), ...S.actors.filter((a) => a.perm === 'edit').map((a) => h('option', { value: a.id }, a.name)));
@@ -577,7 +696,7 @@ const sendSave = guard(async (a) => {
   for (const k of ['hp', 'mp', 'fav']) {
     if (a.data[k].cur !== sent[k] || res.data[k].cur === sent[k]) continue;
     a.data[k].cur = res.data[k].cur;
-    const input = $(`[data-r="${k}"]`, panelEl);
+    const input = $(`[data-r="${k}"]`);
     if (input && document.activeElement !== input) input.value = res.data[k].cur;
   }
   for (const k of ['talents', 'spells', 'items']) a.data[k].forEach((x, i) => { if (!x.id) x.id = res.data[k][i]?.id ?? ''; });
@@ -587,7 +706,7 @@ const sendSave = guard(async (a) => {
 });
 const cget = (a, path) => path.split('.').reduce((o, k) => o?.[k], a.computed);
 function patchComputed(a) {
-  $$('[data-c]', panelEl).forEach((el) => {
+  $$('[data-c]').forEach((el) => {
     el.textContent = cget(a, el.dataset.c) ?? 0;
     if (el.dataset.c === 'points.spent') el.classList.toggle('over', a.computed.points.spent > a.computed.points.budget);
   });
@@ -970,12 +1089,12 @@ function soundPanel() {
 // ------------------------------------------------------------------ compendium (GM)
 const CATS = () => [['weapon', t('invWeapons')], ['armor', t('invArmor')], ['consumable', t('invConsumable')], ['bag', t('invBag')], ['other', t('invOther')]];
 let compOpen = new Set(); // ids of entries whose editor is open
-const compEditing = () => panelEl.contains(document.activeElement) && (!!document.activeElement.dataset.search || (compOpen.size > 0 && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)));
+const compEditing = () => inPanels(document.activeElement) && (!!document.activeElement.dataset.search || (compOpen.size > 0 && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)));
 /** Players: what their sheets carry changes all the time, so the tab asks the server each time it opens. */
 const refreshComp = guard(async () => {
   if (isGM() && S.compView === 'global') { S.compGlobal = await request('GET', '/admin/api/compendium'); }
   else { const r = await api('GET', '/compendium'); S.compendium = r.entries; S.npcs = r.npcs; }
-  if (S.tab === 'comp') renderPanel();
+  if (shown('comp')) renderPanel('comp');
 });
 const bonusText = (d) => Object.entries(d.bonuses ?? {}).map(([k, v]) => `${S.system?.stats.find((x) => x.id === k)?.label ?? k} ${v > 0 ? '+' : ''}${v}`).join(', ');
 /** One line of facts about an entry (players read it, the GM sees it above the editor). */
@@ -1013,8 +1132,8 @@ const found = (list) => list.filter((x) => matchesSearch(x.name, compSearch));
 function searchBox() {
   return h('input', { type: 'search', class: 'search', placeholder: '🔍 ' + t('search'), value: compSearch, 'data-search': '1', oninput: (e) => {
     compSearch = e.target.value; const pos = e.target.selectionStart;
-    renderPanel();
-    const box = $('[data-search]', panelEl); if (box) { box.focus(); box.setSelectionRange(pos, pos); }
+    renderPanel('comp', { force: true });
+    const box = $('[data-search]'); if (box) { box.focus(); box.setSelectionRange(pos, pos); }
   } });
 }
 const byCategory = (entries) => CATS().map(([k, label]) => [label, entries.filter((e) => e.kind === 'item' && e.category === k)]).filter(([, list]) => list.length);
