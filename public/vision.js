@@ -62,7 +62,17 @@ export function computeVision(scene, viewers, lights) {
   return { dark, sight, lit, canSee };
 }
 
-export const inReveal = (scene, x, y) => (scene.reveal || []).some((r) => x >= r[0] && y >= r[1] && x <= r[0] + r[2] && y <= r[1] + r[3]);
+/**
+ * Dead look (black and white, 50 %) and no vision: forced by the GM ("dead" / "alive"), else the linked sheet's HP
+ * (hp = current HP when the page has the sheet, else null), else what the server says (tok.dead).
+ */
+export function isTokenDead(tok, hp = null) {
+  if (tok.life === 'dead') return true;
+  if (tok.life === 'alive') return false;
+  return hp != null ? hp <= 0 : !!tok.dead;
+}
+
+export const inReveal =(scene, x, y) => (scene.reveal || []).some((r) => x >= r[0] && y >= r[1] && x <= r[0] + r[2] && y <= r[1] + r[3]);
 
 /** Distance from point to segment, for click-to-erase / door toggling. */
 export function distToSeg(px, py, s) {

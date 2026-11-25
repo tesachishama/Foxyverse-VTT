@@ -3,6 +3,8 @@ import { createMap } from './map.js';
 import { createAudio } from './audio.js';
 import { inventoryView, icon } from './inventory.js';
 import { openTokenCropper } from './tokencrop.js';
+import { signed, tierLabel, damageDetail, matchesSearch } from './format.js';
+import { isTokenDead } from './vision.js';
 
 const S = {
   me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], table: null, allTables: [], mapMode: false,
@@ -270,12 +272,15 @@ const isPlayerToken = (tok) => {
   if (!a) return false;
   return isGM() ? Object.values(a.perms ?? {}).includes('edit') : a.perm === 'edit'; // a player's tokens: sheets they can edit
 };
-/** Whose eyes the fog uses: a player's own tokens; for the GM's "player view", all players, one player, or the selected token. */
-function viewerTokens(tokens) {
-  if (!isGM()) return tokens.filter(isPlayerToken);
-  if (S.viewAs === 'selected' && S.selected.size) return tokens.filter((x) => S.selected.has(x.id));
-  if (typeof S.viewAs === 'number') return tokens.filter((x) => x.sight || actorById(x.actorId)?.perms?.[S.viewAs] === 'edit');
-  return tokens.filter(isPlayerToken);
+/** Forced by the GM, else the sheet's HP when this page has it, else what the server says. */
+const tokenDead = (tok) => { const a = tok.actorId && actorById(tok.actorId); return isTokenDead(tok, a ? a.data.hp.cur : null); };
+/** Whose eyes the fog uses: a player's own tokens; for the GM's "player view", all players, one player, or the selected token. Dead tokens see nothing. */
+function viewerTokens(tokens, { withDead = false } = {}) {
+  const alive = withDead ? tokens : tokens.filter((x) => !tokenDead(x));
+  if (!isGM()) return alive.filter(isPlayerToken);
+  if (S.viewAs === 'selected' && S.selected.size) return alive.filter((x) => S.selected.has(x.id));
+  if (typeof S.viewAs === 'number') return alive.filter((x) => x.sight || actorById(x.actorId)?.perms?.[S.viewAs] === 'edit');
+  return alive.filter(isPlayerToken);
 }
 let editsPending = 0;
 function replaceScene(r) {
@@ -325,18 +330,14 @@ function buildShell() {
       const sc = viewScene(), tokens = viewTokens(), eyes = viewerTokens(tokens);
       return {
         scene: sc, tokens, selected: S.selected, tool: S.tool, gm: isGM(), playerView: S.playerView,
-        viewers: eyes.map((x) => ({ x: x.x, y: x.y, vision: x.vision })), viewerIds: new Set(eyes.map((x) => x.id)),
+        // viewerIds: tokens always drawn for this page (its own, dead ones included); viewers: the eyes (alive only)
+        viewers: eyes.map((x) => ({ x: x.x, y: x.y, vision: x.vision })), viewerIds: new Set(viewerTokens(tokens, { withDead: true }).map((x) => x.id)),
         lights: [...(sc?.lights ?? []), ...tokens.filter((x) => x.light > 0 && !x.hidden).map((x) => ({ x: x.x, y: x.y, radius: x.light }))],
       };
     },
     canMove: (tok) => isGM() || (!!tok.actorId && actorById(tok.actorId)?.perm === 'edit'),
     onFog: (total) => fogNote.classList.toggle('hidden', !total),
-    isDead: (tok) => { // forced by the GM, else the sheet's HP when this page has it, else what the server says
-      if (tok.life === 'dead') return true;
-      if (tok.life === 'alive') return false;
-      const a = tok.actorId && actorById(tok.actorId);
-      return a ? a.data.hp.cur <= 0 : !!tok.dead;
-    },
+    isDead: tokenDead,
     hpRatio: (tok) => { const a = tok.actorId && actorById(tok.actorId); const max = a?.computed.derived.maxhp; return max ? a.data.hp.cur / max : null; },
     onSelect: (set) => { S.selected = set; renderInspector(); renderChat(); },
     onMove: (tok, x, y) => { api('PATCH', '/tokens/' + tok.id, { x, y }).catch(() => {}); },
@@ -435,7 +436,9 @@ function buildChat() {
   const mention = () => { const pos = chatInput.selectionStart, m = /(^|\s)@([^@\n]{0,40})$/.exec(chatInput.value.slice(0, pos)); return m ? { start: pos - m[2].length - 1, end: pos, q: m[2].toLowerCase() } : null; };
   const showSugg = () => {
     const mq = isGM() && mention();
-    opts = mq ? [{ name: 'mj', label: t('narrator') }, ...S.actors.map((a) => ({ name: a.name, avatar: a.data.token || a.data.portrait }))].filter((o) => o.name.toLowerCase().startsWith(mq.q)).slice(0, 8) : [];
+    // a sheet is mentioned by its alias (no spaces); typing part of its name finds it too
+    opts = mq ? [{ name: 'mj', label: t('narrator') }, ...S.actors.filter((a) => a.alias).map((a) => ({ name: a.alias, label: a.name !== a.alias ? a.name : '', avatar: a.data.token || a.data.portrait }))]
+      .filter((o) => o.name.toLowerCase().startsWith(mq.q) || (o.label && matchesSearch(o.label, mq.q))).slice(0, 8) : [];
     active = Math.min(active, Math.max(0, opts.length - 1));
     sugg.classList.toggle('hidden', !opts.length);
     fill(sugg, opts.map((o, i) => h('button', { type: 'button', class: i === active ? 'on' : '', onmousedown: (e) => { e.preventDefault(); pick(o); } },
@@ -532,23 +535,29 @@ function rollCard(m, b, del) {
       h('span', { class: 'total' }, r.total),
       r.target != null && h('span', { class: 'target' }, (check ? '≤ ' : '/ ') + r.target),
       r.outcome && h('span', { class: 'badge ' + r.outcome }, t(r.outcome)))),
-    b.talents && h('div', { class: 'formula' }, `${t('talents')} : ${b.talents.names.join(', ')} (${b.talents.total < 0 ? '+' : '−'}${Math.abs(b.talents.total)})`),
+    b.talents && h('div', { class: 'formula' }, `${t('talents')} : ${b.talents.names.join(', ')} (${signed(b.talents.total)})`),
     b.count > 1 && h('div', { class: 'sum' }, 'Σ ', b.sum),
     h('div', { class: 'roll-actions' },
       (mine || isGM()) && h('button', { onclick: guard(() => api('POST', `/chat/${m.id}/reroll`)) }, '↻ ' + t('reroll')),
-      ['damage', 'heal', 'theal', 'mana'].includes(b.kind) && (isGM() || (ownsActor && b.kind !== 'damage')) && h('button', { class: 'primary', onclick: applyRoll(m) }, t('apply') + (S.selected.size && isGM() ? ` (${S.selected.size})` : ''))),
+      ['damage', 'heal', 'theal', 'mana'].includes(b.kind) && (isGM() || canTargetSelection() || (ownsActor && b.kind !== 'damage')) &&
+        h('button', { class: 'primary', onclick: applyRoll(m) }, t('apply') + (S.selected.size ? ` (${S.selected.size})` : ''))),
     (b.applied ?? []).map((a) => h('div', { class: 'applied' + (a.undone ? ' undone' : '') }, `${a.name}: `, appliedText(a),
-      a.id && !a.undone && (isGM() || (b.kind !== 'damage' && actorById(a.actorId)?.perm === 'edit')) &&
+      a.id && !a.undone && actorById(a.actorId)?.perm === 'edit' && // the server checks it too: players undo on their own sheets only
         h('button', { class: 'undo', title: t('undoApply'), onclick: guard(() => api('POST', `/chat/${m.id}/undo`, { entryId: a.id })) }, '↶'))));
 }
+/** Players apply to the selected tokens only when every one of them is theirs (edit right on the linked sheet). */
+const canTargetSelection = () => S.selected.size > 0 && [...S.selected].every((id) => { const tk = S.tokens.find((x) => x.id === id); return tk?.actorId && actorById(tk.actorId)?.perm === 'edit'; });
 const applyRoll = (m) => guard(async () => {
-  const tokenIds = isGM() ? [...S.selected] : [];
-  if (isGM() && !tokenIds.length && !(m.body.kind !== 'damage' && m.actorId)) return toast(t('noTarget'), false);
+  const tokenIds = [...S.selected];
+  if (!tokenIds.length && !(m.body.kind !== 'damage' && m.actorId)) return toast(t('noTarget'), false);
   await api('POST', `/chat/${m.id}/apply`, { tokenIds });
 });
 function appliedText(a) {
   if (a.note) return a.note;
-  if (a.kind === 'damage') return `−${a.dealt} ${t('hp')}${a.tempLost ? ` (${a.tempLost} ${t('temp').toLowerCase()})` : ''}${a.mpLost ? `, −${a.mpLost} ${t('mp')}` : ''}${a.ko ? ' · KO' : ''}`;
+  if (a.kind === 'damage') {
+    const detail = damageDetail(a.rolls); // each roll and the armor taken off it
+    return `−${a.dealt} ${t('hp')}${detail ? ` [${detail}]` : ''}${a.tempLost ? ` (${a.tempLost} ${t('temp').toLowerCase()})` : ''}${a.mpLost ? `, −${a.mpLost} ${t('mp')}` : ''}${a.ko ? ' · KO' : ''}`;
+  }
   if (a.kind === 'heal') return `+${a.healed} ${t('hp')}`;
   if (a.kind === 'theal') return `+ ${t('temp')} → ${a.temp}`;
   return `+${a.restored} ${t('mp')}`;
@@ -573,6 +582,7 @@ const sendSave = guard(async (a) => {
   }
   for (const k of ['talents', 'spells', 'items']) a.data[k].forEach((x, i) => { if (!x.id) x.id = res.data[k][i]?.id ?? ''; });
   a.data.items.forEach((x) => { if (x._k && x.id && S.openItems.has(x._k)) S.openItems.add(x.id); }); // a new card stays open once it has its real id
+  if (res.alias !== undefined) a.alias = res.alias; // a rename moves an automatic alias
   a.computed = res.computed; pending.delete(a.id); patchComputed(a); map.redraw(); renderChatWho();
 });
 const cget = (a, path) => path.split('.').reduce((o, k) => o?.[k], a.computed);
@@ -605,12 +615,35 @@ function sheetsPanel() {
 }
 
 const compBtn = () => null; // every named item / spell enters the compendium by itself
-function compPick(kind, onPick) {
-  const list = S.compendium.filter((c) => c.kind === kind);
-  if (!list.length) return null;
-  const sel = h('select', { class: 'comp-pick', onchange: (e) => { const c = list.find((x) => x.id === Number(e.target.value)); if (c) onPick(structuredClone(c.data)); } },
-    h('option', { value: '' }, t('fromComp')), list.map((c) => h('option', { value: c.id }, c.name)));
-  return sel;
+/**
+ * The "+" of a sheet list: a small window with "New" and a searchable list of compendium entries.
+ * anchor: the button; kind: 'item' | 'spell'; category: an item type to list (the section's), or null; onNew(); onPick(entryData).
+ */
+function addMenu(anchor, kind, category, onNew, onPick) {
+  $('.add-menu')?.remove();
+  const list = S.compendium.filter((c) => c.kind === kind && (!category || c.category === category));
+  let q = '';
+  const results = h('div', { class: 'add-results' });
+  const close = () => { menu.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', esc); };
+  const draw = () => {
+    const hits = list.filter((c) => matchesSearch(c.name, q)).slice(0, 40);
+    fill(results, hits.length ? hits.map((c) => h('button', { type: 'button', onclick: () => { close(); onPick(structuredClone(c.data)); } }, h('b', {}, c.name), h('span', { class: 'dim' }, ' ' + entrySummary(c))))
+      : h('p', { class: 'hint' }, list.length ? t('noMatch') : t('compEmpty')));
+  };
+  const menu = h('div', { class: 'add-menu', role: 'dialog' },
+    h('button', { type: 'button', class: 'primary', onclick: () => { close(); onNew(); } }, '+ ' + t('newOne')),
+    h('div', { class: 'add-menu-title' }, t('fromCompendium')),
+    list.length > 3 && h('input', { type: 'search', class: 'search', placeholder: '🔍 ' + t('search'), oninput: (e) => { q = e.target.value; draw(); } }),
+    results);
+  draw();
+  document.body.append(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = Math.max(8, Math.min(innerWidth - menu.offsetWidth - 8, r.right - menu.offsetWidth)) + 'px';
+  menu.style.top = Math.max(8, Math.min(innerHeight - menu.offsetHeight - 8, r.bottom + 4)) + 'px';
+  const outside = (e) => { if (!menu.contains(e.target)) close(); };
+  const esc = (e) => { if (e.key === 'Escape') close(); };
+  setTimeout(() => { document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', esc); }, 0);
+  $('input', menu)?.focus();
 }
 function sheetView(a) {
   const sys = S.system, d = a.data, idx = statIndex();
@@ -627,7 +660,9 @@ function sheetView(a) {
     h('div', { class: 'grid2' },
       h('label', {}, t('cls'), field(a, d.bio, 'class')), h('label', {}, t('element'), field(a, d.bio, 'element')),
       h('label', {}, t('level'), field(a, d.bio, 'level', 'int', { min: 1, class: 'n' })),
-      h('label', { class: 'check' }, field(a, d, 'elemental', 'bool'), t('elemental'))));
+      h('label', { class: 'check' }, field(a, d, 'elemental', 'bool'), t('elemental')),
+      isGM() && h('label', { title: t('aliasHint') }, t('alias'), h('input', { type: 'text', class: 'code', value: a.alias ?? '', maxlength: 40, placeholder: t('aliasAuto'),
+        onchange: guard(async (e) => { if (pending.has(a.id)) await saveNow(a); const r = await api('PATCH', '/actors/' + a.id, { alias: e.target.value }); a.alias = r.alias; e.target.value = r.alias; }) }))));
 
   const res = section(t('hp') + ' / ' + t('mp') + ' / ' + t('fav'), h('div', { class: 'res-grid' },
     h('label', {}, t('hp'), field(a, d.hp, 'cur', 'int', { min: -9999, class: 'n', 'data-r': 'hp' }), ' / ', C(a, 'derived.maxhp')),
@@ -647,11 +682,10 @@ function sheetView(a) {
     h('div', { class: 'quick' }, sys.quickRolls.map((q) => rollBtn(q.id, q.label, 'roll wide')),
       h('label', {}, t('actions') + ' +', num(d, 'bonact', -99)), h('label', {}, '+', num(d, 'bonspe', -999)))));
 
-  // Tiers in roll terms (T2 = -3 on the die); shown as the bonus they are on a roll-under check ("+3").
+  // Tiers in roll terms, shown signed as they act on the die: T2 "-3" (a roll-under check gets easier). Display only.
   const tierMod = (n) => Number(sys.knowledgeTiers[n] ?? 0);
-  const tierLabel = (n) => `T${n} ${tierMod(n) > 0 ? '−' : '+'}${Math.abs(tierMod(n))}`;
   const tierKeys = [...new Set(['0', ...Object.keys(sys.knowledgeTiers)])].sort((x, y) => x - y);
-  const activeBonus = -d.talents.filter((tl) => tl.enabled).reduce((n, tl) => n + tierMod(tl.tier), 0);
+  const activeBonus = d.talents.filter((tl) => tl.enabled).reduce((n, tl) => n + tierMod(tl.tier), 0);
   const talents = section(t('talents'), h('div', {},
     d.talents.map((tl, i) => {
       const open = openTalents.has(tl);
@@ -659,12 +693,12 @@ function sheetView(a) {
         h('div', { class: 'line' },
           h('input', { type: 'checkbox', title: t('talentActive'), checked: tl.enabled, onchange: (e) => { tl.enabled = e.target.checked; saveActor(a); renderPanel(); } }),
           field(a, tl, 'name', 'text', { class: 'grow', placeholder: t('name') }),
-          (() => { const sel = h('select', { onchange: (e) => { tl.tier = Number(e.target.value); saveActor(a); renderPanel(); } }, tierKeys.map((k) => h('option', { value: k }, tierLabel(k)))); sel.value = tl.tier; return sel; })(),
+          (() => { const sel = h('select', { onchange: (e) => { tl.tier = Number(e.target.value); saveActor(a); renderPanel(); } }, tierKeys.map((k) => h('option', { value: k }, tierLabel(sys.knowledgeTiers, k)))); sel.value = tl.tier; return sel; })(),
           h('button', { class: 'x', title: t('description'), onclick: () => { if (open) openTalents.delete(tl); else openTalents.add(tl); renderPanel(); } }, open ? '▴' : '▾'),
           h('button', { class: 'x', title: t('del'), onclick: () => { d.talents.splice(i, 1); saveActor(a); renderPanel(); } }, '×')),
         open && field(a, tl, 'description', 'area', { rows: 3, placeholder: t('description') }));
     }),
-    h('p', { class: 'hint' }, activeBonus ? `${t('talentsOn')} : ${activeBonus > 0 ? '+' : ''}${activeBonus}` : t('talentHint'))),
+    h('p', { class: 'hint' }, activeBonus ? `${t('talentsOn')} : ${signed(activeBonus)}` : t('talentHint'))),
   h('div', { class: 'addrow' }, h('button', { class: 'add', onclick: () => { const tl = { id: '', name: '', tier: 0, enabled: false, description: '' }; d.talents.push(tl); openTalents.add(tl); saveActor(a); renderPanel(); } }, '+ ' + t('add'))));
 
   const spells = section(t('spells'), h('div', {}, d.spells.map((sp, i) => h('div', { class: 'spell' },
@@ -680,9 +714,11 @@ function sheetView(a) {
     h('div', { class: 'spell-effect' + (sp.locked ? ' locked' : '') },
       field(a, sp, 'effect', 'area', { rows: 2, placeholder: t('effect'), readonly: sp.locked }),
       h('button', { class: 'quiet', title: sp.locked ? t('unlockText') : t('lockText'), onclick: () => { sp.locked = !sp.locked; saveActor(a); renderPanel(); } }, sp.locked ? '✎ ' + t('edit') : '🔒 ' + t('save')))))),
-  h('div', { class: 'addrow' }, h('button', { class: 'add', onclick: () => { d.spells.push({ id: '', name: '', effect: '', cost: 1, costType: 'mp', armed: false, continuous: false, locked: false }); saveActor(a); renderPanel(); } }, '+ ' + t('add')), compPick('spell', (e) => { d.spells.push({ ...e, id: '' }); saveActor(a); renderPanel(); })));
+  h('div', { class: 'addrow' }, h('button', { class: 'add', onclick: (e) => addMenu(e.currentTarget, 'spell', null,
+    () => { d.spells.push({ id: '', name: '', effect: '', cost: 1, costType: 'mp', armed: false, continuous: false, locked: false }); saveActor(a); renderPanel(); },
+    (entry) => { d.spells.push({ ...entry, id: '' }); saveActor(a); renderPanel(); }) }, '+ ' + t('add'))));
 
-  const items = inventoryView({ a, S, field, saveActor, rerender: renderPanel, compBtn, compPick });
+  const items = inventoryView({ a, S, field, saveActor, rerender: renderPanel, compBtn, addMenu, rollButtons: (text) => inline(text, (c) => doRoll(c, a.id)) });
   const money = section(t('currency'), h('div', { class: 'line' }, ['pc', 'pa', 'po'].map((k) => h('label', {}, k.toUpperCase(), field(a, d.currency, k, 'int', { min: 0, class: 'n wide' })))));
   const notes = section(t('notes'), field(a, d, 'notes', 'area', { rows: 6 }));
   const gm = isGM() && section('GM', h('div', { class: 'line' },
@@ -934,7 +970,7 @@ function soundPanel() {
 // ------------------------------------------------------------------ compendium (GM)
 const CATS = () => [['weapon', t('invWeapons')], ['armor', t('invArmor')], ['consumable', t('invConsumable')], ['bag', t('invBag')], ['other', t('invOther')]];
 let compOpen = new Set(); // ids of entries whose editor is open
-const compEditing = () => compOpen.size > 0 && panelEl.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+const compEditing = () => panelEl.contains(document.activeElement) && (!!document.activeElement.dataset.search || (compOpen.size > 0 && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)));
 /** Players: what their sheets carry changes all the time, so the tab asks the server each time it opens. */
 const refreshComp = guard(async () => {
   if (isGM() && S.compView === 'global') { S.compGlobal = await request('GET', '/admin/api/compendium'); }
@@ -963,6 +999,7 @@ function entryEditor(e, save) {
         (() => { const sel = h('select', { onchange: (ev) => { d.type = ev.target.value; } }, CATS().map(([k, l]) => h('option', { value: k }, l))); sel.value = d.type ?? 'other'; return sel; })(),
         h('label', {}, t('defP'), num('pdef')), h('label', {}, t('defM'), num('mdef'))),
       h('label', {}, t('slotsExpr'), txt('equipExpr', { class: 'code' })),
+      h('label', {}, t('damage'), txt('damage', { class: 'code grow', placeholder: '[pdmg 2d30 | physique]' })),
       S.system && h('div', { class: 'line' }, S.system.stats.map((st) => h('label', {}, st.label, h('input', { type: 'number', class: 'n', value: d.bonuses?.[st.id] ?? 0,
         oninput: (ev) => { const v = Number(ev.target.value) || 0; d.bonuses ??= {}; if (v) d.bonuses[st.id] = v; else delete d.bonuses[st.id]; } })))),
       h('textarea', { rows: 3, placeholder: t('notes'), oninput: (ev) => { d.notes = ev.target.value; } }, d.notes ?? '')];
@@ -970,23 +1007,35 @@ function entryEditor(e, save) {
     h('input', { type: 'text', class: 'title', value: name, maxlength: 80, oninput: (ev) => { name = ev.target.value; } }),
     fields, h('div', { class: 'line' }, h('button', { class: 'primary', onclick: guard(async () => { await save({ name, data: { ...d, name } }); compOpen.delete(e.id); toast(t('saved'), false); renderPanel(); }) }, t('save'))));
 }
+/** Live name filter shared by every compendium view; keeps the caret where it was across re-renders. */
+let compSearch = '';
+const found = (list) => list.filter((x) => matchesSearch(x.name, compSearch));
+function searchBox() {
+  return h('input', { type: 'search', class: 'search', placeholder: '🔍 ' + t('search'), value: compSearch, 'data-search': '1', oninput: (e) => {
+    compSearch = e.target.value; const pos = e.target.selectionStart;
+    renderPanel();
+    const box = $('[data-search]', panelEl); if (box) { box.focus(); box.setSelectionRange(pos, pos); }
+  } });
+}
 const byCategory = (entries) => CATS().map(([k, label]) => [label, entries.filter((e) => e.kind === 'item' && e.category === k)]).filter(([, list]) => list.length);
 function compPanel() {
   if (!isGM()) return playerCompendium();
   const sw = h('div', { class: 'line seg' },
     ['table', 'global'].map((v) => h('button', { class: S.compView === v ? 'on' : '', onclick: () => { S.compView = v; compOpen = new Set(); refreshComp(); renderPanel(); } }, v === 'table' ? t('compThis') : t('compGlobal'))));
-  return h('div', { class: 'pad' }, sw, S.compView === 'global' ? globalCompendium() : tableCompendium());
+  return h('div', { class: 'pad' }, sw, searchBox(), S.compView === 'global' ? globalCompendium() : tableCompendium());
 }
 /** Players: items by category, spells, NPCs (name and picture only). Read-only. */
 function playerCompendium() {
   const entry = (e) => h('details', { class: 'entry' }, h('summary', {}, h('b', {}, e.name), h('span', { class: 'dim' }, ' ' + entrySummary(e))),
     e.data.notes && h('p', {}, e.data.notes), e.data.effect && h('p', {}, e.data.effect));
-  const items = byCategory(S.compendium), spells = S.compendium.filter((e) => e.kind === 'spell');
+  const all = found(S.compendium), npcs = found(S.npcs);
+  const items = byCategory(all), spells = all.filter((e) => e.kind === 'spell');
   return h('div', { class: 'pad' },
+    (S.compendium.length > 0 || S.npcs.length > 0) && searchBox(),
     !S.compendium.length && !S.npcs.length && h('p', { class: 'hint' }, t('compPlayerHint')),
     items.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('items')), items.map(([label, list]) => [h('h4', {}, label), list.map(entry)])),
     spells.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('spells')), spells.map(entry)),
-    S.npcs.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('npcs')), h('div', { class: 'npcs' }, S.npcs.map((n) => h('div', { class: 'npc' }, n.portrait ? h('img', { src: n.portrait, alt: '' }) : h('span', { class: 'avatar' }, '?'), h('b', {}, n.name))))));
+    npcs.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('npcs')), h('div', { class: 'npcs' }, npcs.map((n) => h('div', { class: 'npc' }, n.portrait ? h('img', { src: n.portrait, alt: '' }) : h('span', { class: 'avatar' }, '?'), h('b', {}, n.name))))));
 }
 /** GM, this table: edit in place, show to players, update copies whose original changed, NPC list. */
 function tableCompendium() {
@@ -1005,7 +1054,7 @@ function tableCompendium() {
     const r = await api('POST', '/compendium', { kind, name: kind === 'spell' ? t('newSpell') : t('newItem'), data: type ? { type } : {} });
     upsert(S.compendium, r); compOpen.add(r.id); renderPanel();
   });
-  const items = S.compendium.filter((e) => e.kind === 'item'), spells = S.compendium.filter((e) => e.kind === 'spell');
+  const items = found(S.compendium).filter((e) => e.kind === 'item'), spells = found(S.compendium).filter((e) => e.kind === 'spell');
   return [
     h('p', { class: 'hint' }, t('compGmHint')),
     h('section', { class: 'sec' }, h('h3', {}, t('items'), h('button', { class: 'quiet', onclick: create('item', 'other') }, '+ ' + t('newItem'))),
@@ -1014,7 +1063,7 @@ function tableCompendium() {
     h('section', { class: 'sec' }, h('h3', {}, t('spells'), h('button', { class: 'quiet', onclick: create('spell') }, '+ ' + t('newSpell'))),
       !spells.length && h('p', { class: 'hint' }, t('empty')), spells.map(row)),
     h('section', { class: 'sec' }, h('h3', {}, t('npcs')), h('p', { class: 'hint' }, t('npcHint')),
-      S.actors.map((a) => h('label', { class: 'line check' }, h('input', { type: 'checkbox', checked: a.shown, onchange: guard(async (ev) => { Object.assign(a, await api('PATCH', '/actors/' + a.id, { shown: ev.target.checked })); }) }),
+      found(S.actors).map((a) => h('label', { class: 'line check' }, h('input', { type: 'checkbox', checked: a.shown, onchange: guard(async (ev) => { Object.assign(a, await api('PATCH', '/actors/' + a.id, { shown: ev.target.checked })); }) }),
         h('b', { class: 'grow' }, a.name), h('span', { class: 'dim' }, `${t('level')} ${a.data.bio.level}`)))),
   ];
 }
@@ -1049,7 +1098,7 @@ function globalCompendium() {
         outside && h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) { await request('DELETE', '/admin/api/compendium/' + e.id); await refreshComp(); } }) }, '×')),
       open && entryEditor(e, async (body) => { await request('PATCH', '/admin/api/compendium/' + e.id, { ...body, table: S.table.slug }); await refreshComp(); }));
   };
-  const entries = g.entries.filter(keep), npcs = g.npcs.filter(keep);
+  const entries = found(g.entries.filter(keep)), npcs = found(g.npcs.filter(keep));
   const newCamp = h('select', {}, h('option', { value: '' }, t('noCampaign')), g.campaigns.map((c) => h('option', { value: c.id }, c.name)));
   const create = (kind) => guard(async () => {
     const r = await request('POST', '/admin/api/compendium', { kind, name: kind === 'spell' ? t('newSpell') : t('newItem'), table: S.table.slug, campaignId: newCamp.value ? Number(newCamp.value) : null });

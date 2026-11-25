@@ -37,7 +37,7 @@ test('v1 data moves into the table "test" with its rules; v1 accounts are droppe
     db.exec(`INSERT INTO users VALUES (1, 'Mistress', 's', 'h', 'gm', '#ffffff', 1), (2, 'Pip', 's', 'h', 'player', '#00ff00', 1);
       INSERT INTO sessions VALUES ('t', 2, 9999999999999);
       INSERT INTO scenes (id, name, width, height, active, created, walls) VALUES (1, 'Old map', 800, 600, 1, 1, '[[0,0,10,0,0,0]]');
-      INSERT INTO actors VALUES (1, 'Old hero', 2, '{"stats":{"constitution":{"base":7}}}', 1, 1);
+      INSERT INTO actors VALUES (1, 'Old hero', 2, '{"stats":{"constitution":{"base":7}}}', 1, 1), (2, 'Old hero', NULL, '{}', 1, 1);
       INSERT INTO tokens (scene_id, name, x, y, actor_id) VALUES (1, 'Old hero', 5, 5, 1);
       INSERT INTO chat (user_id, user_name, body, ts) VALUES (2, 'Pip', '{"t":"text","text":"hello from v1"}', 1);
       INSERT INTO journals (title, visibility, created, updated) VALUES ('Lore', '"all"', 1, 1);
@@ -52,8 +52,10 @@ test('v1 data moves into the table "test" with its rules; v1 accounts are droppe
     const st = (await srv.call('GET', '/admin/api/t/test/state')).body;
     assert.equal(st.scene.name, 'Old map'); assert.deepEqual(st.scene.walls, [[0, 0, 10, 0, 0, 0]]);
     assert.equal(st.tokens.length, 1); assert.equal(st.tokens[0].actorId, 1);
-    assert.equal(st.actors[0].name, 'Old hero'); assert.deepEqual(st.actors[0].perms, {});
-    assert.equal(st.actors[0].computed.derived.maxhp, 21); // con 7 * 3: the table kept the edited v1 rules
+    const old = st.actors.find((a) => a.id === 1);
+    assert.equal(old.name, 'Old hero'); assert.deepEqual(old.perms, {});
+    assert.equal(old.computed.derived.maxhp, 21); // con 7 * 3: the table kept the edited v1 rules
+    assert.deepEqual(st.actors.map((a) => a.alias).sort(), ['Oldhero', 'Oldhero2']); // existing sheets get unique "@" aliases
     assert.equal(st.chat[0].body.text, 'hello from v1');
     assert.equal(st.journals.length, 1); assert.equal(st.sounds.length, 1);
     assert.deepEqual(st.compendium.map((c) => c.name), ['Spark']); // v1 NPC templates and talent entries are gone

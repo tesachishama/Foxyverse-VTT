@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, accessSync, constants } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateSystem } from './rules.js';
+import { uniqueAlias } from './narration.js';
 
 export const DATA_DIR = process.env.DATA_DIR || join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
 export const UPLOAD_DIR = join(DATA_DIR, 'uploads');
@@ -115,6 +116,14 @@ addColumn('compendium', 'source_updated', 'INTEGER');                // ...as it
 if (richer) {
   // NPCs are sheets now and talents stay on sheets: their old compendium entries go.
   db.exec("DELETE FROM compendium WHERE kind NOT IN ('item', 'spell'); UPDATE compendium SET updated = created;");
+}
+
+// ---- ROADMAP 2: "@" aliases (no spaces, unique per table, GM-only). alias_auto: still follows the sheet's name.
+addColumn('actors', 'alias', 'TEXT');
+addColumn('actors', 'alias_auto', 'INTEGER NOT NULL DEFAULT 1');
+for (const a of db.prepare('SELECT id, table_id, name FROM actors WHERE alias IS NULL ORDER BY id').all()) {
+  const taken = db.prepare('SELECT alias FROM actors WHERE table_id IS ? AND alias IS NOT NULL').all(a.table_id).map((r) => r.alias);
+  db.prepare('UPDATE actors SET alias = ? WHERE id = ?').run(uniqueAlias(a.name, taken), a.id);
 }
 
 const systems = new Map(); // table id -> parsed system (cache)

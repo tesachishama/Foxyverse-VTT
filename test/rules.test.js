@@ -61,6 +61,24 @@ test('physical damage uses pdef per roll, magical uses mdef, true ignores both',
   const tru = { ...phys, dtype: 'true' }; assert.equal(applyRoll(sys, a, tru).report.dealt, 10);
 });
 
+test('armor comes off each roll separately (never below 0), then the rolls add up; the report details them', () => {
+  const a = make({ stats: { constitution: 20 }, items: [{ id: 'x', name: 'Plate', usedSlots: ['torso'], pdef: 5, mdef: 3 }] });
+  a.hp.cur = 40;
+  const body = { kind: 'damage', dtype: 'physical', results: [{ total: 12 }, { total: 3 }, { total: 8 }], sum: 23 }; // "pdmg 3 2d20"
+  const { data, report } = applyRoll(sys, a, body);
+  assert.deepEqual(report.rolls, [{ raw: 12, armor: 5, dealt: 7 }, { raw: 3, armor: 3, dealt: 0 }, { raw: 8, armor: 5, dealt: 3 }]);
+  assert.equal(report.dealt, 10); assert.equal(data.hp.cur, 30); // not 23 - 5 = 18
+  assert.deepEqual(applyRoll(sys, a, { ...body, dtype: 'magical' }).report.rolls.map((r) => r.dealt), [9, 0, 5]);
+  assert.equal(applyRoll(sys, a, { ...body, dtype: 'true' }).report.dealt, 23);
+  assert.equal(undoApply(sys, data, report.delta).hp.cur, 40); // undo gives back exactly the state before
+});
+
+test('weapons keep their damage line (roll buttons), cut to 300 characters', () => {
+  const d = sanitizeActorData({ items: [{ name: 'Sword', type: 'weapon', damage: '[pdmg 2d30 | physique][mdmg 2d30 | magique]' }, { name: 'Long', type: 'weapon', damage: 'x'.repeat(400) }, { name: 'Rope' }] }, sys);
+  assert.equal(d.items[0].damage, '[pdmg 2d30 | physique][mdmg 2d30 | magique]');
+  assert.equal(d.items[1].damage.length, 300); assert.equal(d.items[2].damage, '');
+});
+
 test('temp HP absorbs first; KO at 0', () => {
   const a = make({ stats: { constitution: 5 } }); a.hp.cur = 10; a.hp.temp = 4;
   const body = { kind: 'damage', dtype: 'true', results: [{ total: 6 }], sum: 6 };

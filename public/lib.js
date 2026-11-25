@@ -113,6 +113,9 @@ const DICT = {
     charRules: 'Création de personnage', baseStat: 'Stat de départ', startPoints: 'Points de départ', startMax: 'Max au départ', spellStats: 'Jets de sorts (armé / non armé)',
     rollTypes: 'Types de jets', idHint: 'Changer un id remet la stat à zéro sur les fiches existantes.', soundHint: 'Les sons se lancent pour tous les joueurs en même temps.',
     noPlayersTokens: 'Aucun jeton de joueur : le brouillard est total.',
+    alias: 'Alias @', aliasAuto: 'depuis le nom', aliasHint: "Pour la narration : @alias dans le chat (sans espaces, unique dans la table, visible par le MJ seul). Vide : suit le nom.",
+    search: 'Rechercher', newOne: 'Nouveau', fromCompendium: 'Depuis le compendium', noMatch: 'Aucun résultat.', compEmpty: 'Rien de cette catégorie dans le compendium.',
+    damage: 'Dégâts',
   },
   en: {
     name: 'Name', logout: 'Switch player',
@@ -177,6 +180,9 @@ const DICT = {
     charRules: 'Character creation', baseStat: 'Starting stat', startPoints: 'Starting points', startMax: 'Starting max', spellStats: 'Spell rolls (armed / unarmed)',
     rollTypes: 'Roll types', idHint: 'Changing an id resets that stat on existing sheets.', soundHint: 'Sounds start for every player at the same time.',
     noPlayersTokens: 'No player tokens: fog is total.',
+    alias: '@ alias', aliasAuto: 'from the name', aliasHint: 'For narration: @alias in the chat (no spaces, unique in the table, seen by the GM only). Empty: follows the name.',
+    search: 'Search', newOne: 'New', fromCompendium: 'From the compendium', noMatch: 'No match.', compEmpty: 'Nothing of this category in the compendium.',
+    damage: 'Damage',
   },
 };
 let lang = localStorage.getItem('lang') || (navigator.language || 'fr').slice(0, 2);

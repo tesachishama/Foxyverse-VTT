@@ -152,7 +152,8 @@ export function sanitizeActorData(raw, sys) {
       let used = Array.isArray(i?.usedSlots) ? [...new Set(i.usedSlots.map((x) => canonizeSlotToken(x)).filter(Boolean))] : [];
       if (!used.length && i?.equipped) used = ['other']; // sheets from before slots existed
       return { id: str(i?.id, 16) || newId(), name: str(i?.name, 80), type, qty: int(i?.qty ?? 1, 0, 99999), bonuses, pdef: int(i?.pdef, 0, 9999), mdef: int(i?.mdef, 0, 9999),
-        notes: str(i?.notes, 2000), equipExpr: i?.equipExpr !== undefined ? str(i.equipExpr, 300) : type === 'weapon' ? '[weapons]' : '', usedSlots: used };
+        notes: str(i?.notes, 2000), damage: str(i?.damage, 300), // a weapon's roll buttons, e.g. "[pdmg 2d30 | physique]" (shown for weapons only)
+        equipExpr: i?.equipExpr !== undefined ? str(i.equipExpr, 300) : type === 'weapon' ? '[weapons]' : '', usedSlots: used };
     })),
     currency: { pc: int(r.currency?.pc, 0, 1e12), pa: int(r.currency?.pa, 0, 1e12), po: int(r.currency?.po, 0, 1e12) },
     notes: str(r.notes, 20000),
@@ -272,12 +273,12 @@ export function applyRoll(sys, data, body) {
   const report = { kind: body.kind };
 
   if (body.kind === 'damage') {
-    let dealt = 0;
-    for (const a of amounts) {
-      if (body.dtype === 'physical') dealt += next.elemental ? 0 : Math.max(0, a - c.pdef);
-      else if (body.dtype === 'magical') dealt += Math.max(0, a - c.mdef);
-      else dealt += a;
-    }
+    // "pdmg 3 2d20" is three rolls: the armor (DP or DM) comes off each roll on its own (never below 0), then they add up.
+    const armor = body.dtype === 'physical' ? c.pdef : body.dtype === 'magical' ? c.mdef : 0;
+    const immune = body.dtype === 'physical' && next.elemental; // elementals ignore physical damage
+    const rolls = amounts.map((a) => ({ raw: a, armor: immune ? a : Math.min(a, armor), dealt: immune ? 0 : Math.max(0, a - armor) }));
+    const dealt = rolls.reduce((n, r) => n + r.dealt, 0);
+    report.rolls = rolls;
     const tempLost = Math.min(next.hp.temp, dealt); next.hp.temp -= tempLost;
     let rest = dealt - tempLost, hpLost = 0, mpLost = 0;
     if (next.elemental) { mpLost = Math.min(next.mp.cur, rest); next.mp.cur -= mpLost; }

@@ -14,7 +14,7 @@ import { parseCommand, evaluate, evaluateStatic, FormulaError } from './engine.j
 import { validateSystem, defaultActorData, sanitizeActorData, actorContext, pointBudget, executeRoll, applyRoll, castSpell, undoApply, tokenImage, resourceMaxes, followMax, fillResources } from './rules.js';
 import { logServerError } from './log.js';
 import { diffSystems } from './sysdiff.js';
-import { parseNarration } from './narration.js';
+import { parseNarration, uniqueAlias, aliasFrom, NARRATOR } from './narration.js';
 
 const PORT = process.env.PORT === '0' ? 0 : Number(process.env.PORT) || 3000; // 0: any free port (tests)
 const HOST = process.env.HOST || '0.0.0.0';
@@ -41,7 +41,7 @@ const tableBySlug = (slug) => db.prepare('SELECT * FROM game_tables WHERE slug =
 const tableView = (t) => ({ slug: t.slug, name: t.name, listed: !!t.listed });
 const sceneView = (s) => ({ id: s.id, name: s.name, image: s.image, width: s.width, height: s.height, grid: s.grid, ox: s.ox, oy: s.oy, active: !!s.active,
   fog: !!s.fog, dark: !!s.dark, walls: jparse(s.walls, []), lights: jparse(s.lights, []), reveal: jparse(s.reveal, []) });
-/** Shown dead (black and white, 80 %) for everyone: forced by the GM, or automatically when the linked sheet is at 0 HP or less. */
+/** Shown dead (black and white, 50 %, no vision) for everyone: forced by the GM, or automatically when the linked sheet is at 0 HP or less. */
 function tokenDead(t) {
   if (t.life === 'dead') return true;
   if (t.life === 'alive' || !t.actor_id) return false;
@@ -93,7 +93,7 @@ function actorView(row, u) {
   const data = sanitizeActorData(JSON.parse(row.data), sys);
   const c = actorContext(sys, data);
   const gm = u.role === 'gm';
-  return { id: row.id, name: row.name, perm: permOf(u, row.id), perms: gm ? permsOf(row.id) : undefined, shown: gm ? !!row.shown : undefined, campaignId: gm ? row.campaign_id ?? null : undefined, data,
+  return { id: row.id, name: row.name, perm: permOf(u, row.id), perms: gm ? permsOf(row.id) : undefined, alias: gm ? row.alias ?? '' : undefined, shown: gm ? !!row.shown : undefined, campaignId: gm ? row.campaign_id ?? null : undefined, data,
     computed: { stats: c.stats, derived: c.derived, errors: c.errors, pdef: c.pdef, mdef: c.mdef, points: pointBudget(sys, data) } };
 }
 
@@ -481,9 +481,12 @@ tbl('DELETE', '/tokens/:id', 'gm', ({ table, by, params }) => {
 });
 
 // ---- actors (sheets). Only the GM creates and deletes them; players edit the ones they have the "edit" right on.
+/** Aliases already used in a table, but the one of the sheet "except". */
+const aliasesOf = (tableId, except = -1) => db.prepare('SELECT alias FROM actors WHERE table_id = ? AND id != ? AND alias IS NOT NULL').all(tableId, except).map((r) => r.alias);
 function insertActor(table, name, data) {
-  const t = now();
-  const r = db.prepare('INSERT INTO actors (table_id, name, owner_id, data, created, updated, campaign_id) VALUES (?,?,?,?,?,?,?)').run(table.id, String(name ?? 'New character').slice(0, 80) || 'New character', null, JSON.stringify(data), t, t, table.campaign_id ?? null);
+  const t = now(), clean = String(name ?? 'New character').slice(0, 80) || 'New character';
+  const r = db.prepare('INSERT INTO actors (table_id, name, owner_id, data, created, updated, campaign_id, alias, alias_auto) VALUES (?,?,?,?,?,?,?,?,1)')
+    .run(table.id, clean, null, JSON.stringify(data), t, t, table.campaign_id ?? null, uniqueAlias(clean, aliasesOf(table.id)));
   syncCompendium(table);
   return getRow('actors', r.lastInsertRowid);
 }
@@ -511,6 +514,13 @@ tbl('PATCH', '/actors/:id', 'player', ({ user, table, by, params, body }) => {
     if (user.role !== 'gm') throw forbidden();
     db.prepare('UPDATE actors SET shown = ? WHERE id = ?').run(body.shown ? 1 : 0, cur.id);
   }
+  // "@" alias: the GM's alone. Empty = follow the name again. A taken alias gets a number; "mj" / "gm" are reserved.
+  if (body.alias !== undefined) {
+    if (user.role !== 'gm') throw forbidden();
+    const want = aliasFrom(body.alias);
+    if (NARRATOR.includes(want.toLowerCase())) throw bad('"@mj" and "@gm" are reserved for narration');
+    db.prepare('UPDATE actors SET alias = ?, alias_auto = ? WHERE id = ?').run(uniqueAlias(want || name, aliasesOf(table.id, cur.id)), want ? 0 : 1, cur.id);
+  } else if (name !== cur.name && cur.alias_auto) db.prepare('UPDATE actors SET alias = ? WHERE id = ?').run(uniqueAlias(name, aliasesOf(table.id, cur.id)), cur.id);
   db.prepare('UPDATE actors SET name=?, data=?, updated=? WHERE id=?').run(name, JSON.stringify(data), now(), cur.id);
   const row = getRow('actors', cur.id);
   pushActor(row, by);
@@ -587,7 +597,7 @@ tbl('POST', '/chat', 'player', ({ user, table, body }) => {
   }
   const speaker = actorForRoll(user, table, body.actorId);
   if (user.role === 'gm') { // narration: "@Sheet text" lines and "@mj" narration, all in one message
-    const actors = db.prepare('SELECT id, name, data FROM actors WHERE table_id = ?').all(table.id);
+    const actors = db.prepare('SELECT id, name, alias, data FROM actors WHERE table_id = ?').all(table.id);
     const parts = parseNarration(text, actors);
     if (parts) {
       const byId = new Map(actors.map((a) => [a.id, a]));
@@ -628,9 +638,10 @@ tbl('POST', '/chat/:id/apply', 'player', ({ user, table, by, params, body }) => 
   const targets = [];
   const ids = Array.isArray(body.tokenIds) ? body.tokenIds.slice(0, 50) : [];
   if (ids.length) {
-    if (!gm) throw forbidden('Only the GM applies effects to tokens');
     for (const id of ids) {
       const t = tokenInTable(id, table.id); const a = t?.actor_id ? getRow('actors', t.actor_id) : null;
+      // a player only applies to the tokens of sheets they can edit (every target is checked before anything changes)
+      if (!gm && (!t || t.hidden || !a || !canEditActor(user, a))) throw forbidden('You can only apply effects to your own tokens');
       targets.push({ name: t?.name ?? '?', tokenId: t?.id ?? null, actor: a });
     }
   } else {
@@ -658,7 +669,7 @@ tbl('POST', '/chat/:id/undo', 'player', ({ user, table, by, params, body }) => {
   if (!entry || !entry.actorId) throw notFound('Unknown application');
   if (entry.undone) throw bad('Already undone');
   const actor = inTable('actors', entry.actorId, table.id); if (!actor) throw bad('That character no longer exists');
-  if (user.role !== 'gm' && (roll.kind === 'damage' || !canEditActor(user, actor))) throw forbidden();
+  if (!canEditActor(user, actor)) throw forbidden('You can only undo on your own characters'); // the GM can edit every sheet
   const sys = getSystem(table.id);
   const data = undoApply(sys, sanitizeActorData(JSON.parse(actor.data), sys), entry.delta);
   db.prepare('UPDATE actors SET data=?, updated=? WHERE id=?').run(JSON.stringify(data), now(), actor.id);

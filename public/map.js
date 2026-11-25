@@ -1,6 +1,7 @@
 // Canvas battle map. World units are map pixels; the camera is {x, y} (world point at the top-left) plus zoom.
 import { computeVision, inReveal, distToSeg } from './vision.js';
 
+export const DEAD_ALPHA = 0.5;
 const images = new Map();
 function image(url, redraw) {
   if (!url) return null;
@@ -134,8 +135,8 @@ export function createMap(canvas, hooks) {
   function drawToken(scene, t, selected) {
     const d = t.size * scene.grid * 0.92, r = d / 2;
     const dead = !!hooks.isDead?.(t);
-    ctx.save(); ctx.globalAlpha = (t.hidden ? 0.5 : 1) * (dead ? 0.8 : 1);
-    if (dead) ctx.filter = 'grayscale(1)'; // a dead character: black and white, 80 % opacity
+    ctx.save(); ctx.globalAlpha = (t.hidden ? 0.5 : 1) * (dead ? DEAD_ALPHA : 1);
+    if (dead) ctx.filter = 'grayscale(1)'; // a dead character: black and white, 50 % opacity (and no vision, see app.js)
     ctx.beginPath(); ctx.arc(t.x, t.y, r, 0, Math.PI * 2); ctx.fillStyle = t.color; ctx.fill();
     const ti = image(t.image, redraw);
     if (ti) { ctx.save(); ctx.clip(); ctx.drawImage(ti, t.x - r, t.y - r, d, d); ctx.restore(); }

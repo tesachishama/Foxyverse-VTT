@@ -92,7 +92,9 @@ fieldset.readonly .sheet-head > .quiet { display: none; } /* its own back button
 .msg.roll { background: var(--void); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; }
 .roll-head { font-family: var(--serif); font-size: 15px; } .formula { color: var(--lilac); font-size: 12px; }
 .res { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; }
-.dice { display: inline-flex; flex-wrap: wrap; gap: 4px; } .dgroup { display: inline-flex; gap: 2px; }
+/* long rolls (30d6...) wrap onto new lines instead of running out of the chat */
+.dice { display: inline-flex; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; } .dgroup { display: inline-flex; flex-wrap: wrap; gap: 2px; min-width: 0; max-width: 100%; }
+.formula, .applied { overflow-wrap: anywhere; } .msg.roll > *, .chat-list > * { min-width: 0; }
 .die { min-width: 22px; text-align: center; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; }
 .die.nat1 { border-color: var(--gold); color: var(--gold); } .die.nat20 { border-color: var(--bad); color: var(--bad); }
 .total { font: 600 26px/1 var(--serif); } .target { color: var(--lilac); }
@@ -281,3 +283,13 @@ button.on { outline: 0; background: var(--blush); border-color: var(--blush); co
 .tools button.on, .seg button.on { background: var(--blush); border-color: var(--blush); color: var(--plum); }
 .row.on b { color: var(--blush); } .sound.on, .inv-item.on { border-color: var(--lilac); box-shadow: inset 3px 0 0 var(--lilac); }
 .suggest button.on { background: var(--raised); color: var(--blush); border: 0; }
+
+/* ROADMAP 2 — sheet "+" window, compendium search, weapon damage line */
+.add-menu { position: fixed; z-index: 31; width: 290px; max-height: 60vh; overflow-y: auto; background: var(--plum); border: 2px solid var(--lilac); border-radius: 16px;
+  padding: 8px; display: grid; gap: 6px; box-shadow: 0 6px 24px rgba(0, 0, 0, .5); }
+.add-menu-title { font: 600 14px var(--serif); color: var(--lilac); text-align: center; margin-top: 2px; }
+.add-results { display: grid; gap: 4px; } .add-results button { text-align: left; border-radius: 12px; font-weight: 400; overflow-wrap: anywhere; }
+.add-results .hint { margin: 2px 4px; font-size: 12px; }
+input.search { width: 100%; margin: 0 0 8px; }
+.inv-damage { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0 0 26px; }
+.inv-damage-edit { display: flex; gap: 6px; }
