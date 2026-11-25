@@ -33,3 +33,16 @@ export function createBubbles({ life = 5000, onExpire, setTimer = setTimeout, cl
     ids: () => [...timers.keys()],
   };
 }
+
+/**
+ * Keyboard moves for the selected tokens: arrows, and the WASD keys by their place on the keyboard (event.code), so the same keys
+ * work as ZQSD on a French AZERTY keyboard without detecting anything. Returns { dx, dy } in cells, or null.
+ */
+const STEPS = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0], KeyW: [0, -1], KeyS: [0, 1], KeyA: [-1, 0], KeyD: [1, 0] };
+export function keyStep(e) {
+  if (e.ctrlKey || e.metaKey || e.altKey) return null; // shortcuts (Ctrl+Z, Ctrl+S...) are not moves
+  const s = STEPS[e.code] ?? STEPS[e.key];
+  return s ? { dx: s[0], dy: s[1] } : null;
+}
+/** Keys go to the map only when nobody is typing (fields, the chat) and no dialog is open. */
+export const typingTarget = (el) => !!el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable === true);

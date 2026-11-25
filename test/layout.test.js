@@ -38,3 +38,17 @@ test('2.5 window positions are remembered in browser storage, and a broken stora
   assert.deepEqual(readJSON(null, 'x', 'fallback'), 'fallback');
   mem.set('bad', '{not json'); assert.deepEqual(readJSON(store, 'bad', {}), {});
 });
+
+test('keyboard: arrows and WASD by key position (ZQSD on AZERTY) move one cell; shortcuts and typing are left alone', async () => {
+  const { keyStep, typingTarget } = await import('../public/layout.js');
+  assert.deepEqual(keyStep({ code: 'ArrowUp', key: 'ArrowUp' }), { dx: 0, dy: -1 });
+  assert.deepEqual(keyStep({ code: 'KeyW', key: 'z' }), { dx: 0, dy: -1 }); // AZERTY: the Z key sits where W is on QWERTY
+  assert.deepEqual(keyStep({ code: 'KeyA', key: 'q' }), { dx: -1, dy: 0 }); // AZERTY Q
+  assert.deepEqual(keyStep({ code: 'KeyS', key: 's' }), { dx: 0, dy: 1 });
+  assert.deepEqual(keyStep({ code: 'KeyD', key: 'd' }), { dx: 1, dy: 0 });
+  assert.equal(keyStep({ code: 'KeyZ', key: 'w' }), null); // AZERTY W key: not a move
+  assert.equal(keyStep({ code: 'KeyW', key: 'w', ctrlKey: true }), null);
+  assert.equal(keyStep({ code: 'KeyX', key: 'x' }), null);
+  assert.equal(typingTarget({ tagName: 'TEXTAREA' }), true); assert.equal(typingTarget({ tagName: 'DIV', isContentEditable: true }), true);
+  assert.equal(typingTarget({ tagName: 'BODY' }), false); assert.equal(typingTarget(null), false);
+});

@@ -5,9 +5,9 @@ import { inventoryView, icon } from './inventory.js';
 import { openTokenCropper } from './tokencrop.js';
 import { signed, tierLabel, damageText, matchesSearch } from './format.js';
 import { isTokenDead, pickViewers, markSeen, orBits, bitsToBase64, bitsFromBase64 } from './vision.js';
-import { radiusStep } from './walls.js';
+import { radiusStep, moveBlocked } from './walls.js';
 import { ghostsOf, newGroup, tpGroups } from './tp.js';
-import { tabColumns, clampRect, readJSON, writeJSON, createBubbles } from './layout.js';
+import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget } from './layout.js';
 
 const S = {
   me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], table: null, allTables: [], mapMode: false,
@@ -363,6 +363,26 @@ const toggleDoor = guard(async (w) => {
   replaceScene(await api('POST', `/scenes/${sc.id}/door`, { at: w.slice(0, 4) }));
 });
 
+/**
+ * Arrows / WASD (ZQSD on AZERTY, by key position) move the selected tokens one cell. Players stop at tangible walls and closed
+ * doors (the server checks it too, and puts the token back if it refuses); the GM goes anywhere.
+ */
+function moveByKey(e) {
+  const step = keyStep(e), sc = viewScene();
+  if (!step || !sc || !S.selected.size || typingTarget(document.activeElement) || document.querySelector('.modal, .add-menu')) return;
+  const toks = S.tokens.filter((x) => S.selected.has(x.id) && x.sceneId === sc.id && (isGM() || (!!x.actorId && actorById(x.actorId)?.perm === 'edit')));
+  if (!toks.length) return;
+  e.preventDefault(); // arrows would scroll the page
+  for (const tok of toks) {
+    const x = tok.x + step.dx * sc.grid, y = tok.y + step.dy * sc.grid;
+    if (x < 0 || y < 0 || (sc.width && x > sc.width) || (sc.height && y > sc.height)) continue; // stays on the map
+    if (!isGM() && moveBlocked(sc.walls, tok.x, tok.y, x, y)) continue;
+    Object.assign(tok, { x, y });
+    api('PATCH', '/tokens/' + tok.id, { x, y }).catch((err) => { if (err.data?.token) { Object.assign(tok, err.data.token); map.redraw(); } });
+  }
+  map.redraw();
+}
+
 function undoSceneEdit() {
   const last = S.undo[S.undo.length - 1];
   if (!last || last.sceneId !== viewScene()?.id) return;
@@ -387,6 +407,7 @@ function buildShell() {
   audio = createAudio({ getOffset: () => S.timeOffset, onBlocked: () => { if (!S.audioBlocked) { S.audioBlocked = true; renderFoot(); } } });
   document.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName ?? '') && isGM()) { e.preventDefault(); undoSceneEdit(); } });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.modal) { S.modal = null; renderModal(); } });
+  document.addEventListener('keydown', moveByKey);
   document.addEventListener('click', () => { if (S.audioBlocked) { S.audioBlocked = false; audio.unlock(); renderFoot(); } });
   map = createMap(canvas, {
     state: () => {

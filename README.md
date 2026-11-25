@@ -264,7 +264,7 @@ On the silhouette: hover a slot for its name and item, click an equipped slot to
 ### Map tools
 | Tool | How it works |
 |---|---|
-| Select | click/shift-click tokens, drag to move, double-click for the sheet; click a wall, door, light or TP cell to set it up in the inspector (right of the map); drag a light or TP cell to move it |
+| Select | click/shift-click tokens, drag to move (or the **arrow keys / WASD**, ZQSD on a French keyboard: one cell per press), double-click for the sheet; click a wall, door, light or TP cell to set it up in the inspector (right of the map); drag a light or TP cell to move it |
 | Wall | blocks sight and light. Click points to chain walls; right-click or Esc finishes |
 | Tangible wall | blocks players' movement (not sight); the GM walks through |
 | Rectangle / Circle | drag; rectangle is 4 walls, circle is a polygon sized to its radius (the kind of wall is chosen in the list next to the tools) |
