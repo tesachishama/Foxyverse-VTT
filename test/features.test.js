@@ -28,7 +28,7 @@ test('scenes: fog, walls, lights, reveal are stored and sanitised; GM sees all s
   assert.equal(b.body.active, false);
   const upd = await gm('PATCH', `/scenes/${b.body.id}`, { fog: true, dark: true, walls: [[1.234, 2, 300, 2, 1, 0], 'junk', [0, 0, 'x', 5]], lights: [{ x: 10, y: 10, radius: 999 }], reveal: [[10, 10, -5, 20]] });
   assert.equal(upd.body.fog, true); assert.equal(upd.body.dark, true);
-  assert.deepEqual(upd.body.walls[0], [1.2, 2, 300, 2, 1, 0]); assert.equal(upd.body.walls.length, 2);
+  assert.deepEqual(upd.body.walls[0], [1.2, 2, 300, 2, 1, 0, 0, 0, 1]); assert.equal(upd.body.walls.length, 2);
   assert.equal(upd.body.lights[0].radius, 100); assert.deepEqual(upd.body.reveal[0], [10, 10, 5, 20]);
   const tk = await gm('POST', '/tokens', { sceneId: b.body.id, name: 'Prep', vision: 6, light: 3 });
   assert.equal(tk.body.vision, 6); assert.equal(tk.body.light, 3);
@@ -67,7 +67,7 @@ test('player portrait propagates to linked tokens; a player with the edit right 
   const after = (await pip('GET', '/state')).body.tokens.find((t) => t.id === tok.body.id);
   assert.equal(after.image, png.body.url);
   const own = await pip('PATCH', `/tokens/${tok.body.id}`, { image: null, name: 'hacked', vision: 99 });
-  assert.equal(own.body.image, null); assert.equal(own.body.name, 'Hero'); assert.equal(own.body.vision, 0); // only x, y, image are player-editable
+  assert.equal(own.body.image, null); assert.equal(own.body.name, 'Hero'); assert.equal(own.body.vision, 100); // only x, y, image are player-editable (vision: 100 cells by default)
 });
 
 test('a sheet has a full portrait and a separate round token; the token is what the map uses', async () => {

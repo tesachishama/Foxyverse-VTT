@@ -31,7 +31,7 @@ export const eventsUrl = () => `${apiBase}/events?c=${CLIENT_ID}`;
 export async function request(method, url, body) {
   const res = await fetch(url, { method, headers: { 'X-Client': CLIENT_ID, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status, data });
   return data;
 }
 export const api = (method, path, body) => request(method, apiBase + path, body);
@@ -46,7 +46,25 @@ export function toast(msg, bad = true) {
   document.body.append(el);
   setTimeout(() => el.remove(), 4000);
 }
-export const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+/**
+ * In-page replacement for confirm() / prompt() (some browsers and embedded views block native dialogs, and the buttons then did nothing).
+ * ask(message) -> Promise<boolean>; ask(message, { input: 'default' }) -> Promise<string | null>.
+ */
+export function ask(message, { input } = {}) {
+  return new Promise((resolve) => {
+    const field = input !== undefined && h('input', { type: 'text', value: input, class: 'grow' });
+    const done = (v) => { wrap.remove(); document.removeEventListener('keydown', key, true); resolve(v); };
+    const ok = () => done(field ? field.value : true), no = () => done(field ? null : false);
+    const key = (e) => { if (e.key === 'Escape') { e.stopPropagation(); no(); } else if (e.key === 'Enter') { e.preventDefault(); ok(); } };
+    const wrap = h('div', { class: 'modal ask', onclick: (e) => { if (e.target === e.currentTarget) no(); } },
+      h('div', { class: 'modal-card' }, h('p', {}, message), field,
+        h('div', { class: 'line' }, h('button', { class: 'primary', onclick: ok }, t('okBtn')), h('button', { onclick: no }, t('cancel')))));
+    document.body.append(wrap);
+    document.addEventListener('keydown', key, true);
+    (field || wrap.querySelector('button.primary')).focus();
+  });
+}
+export const debounce =(fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
 // ------------------------------------------------------------------ i18n
 const DICT = {
@@ -107,12 +125,26 @@ const DICT = {
     newEntry: 'Nouvelle entrée', edit: 'Modifier', showPlayers: 'Montrer aux joueurs', visibility: 'Visible par', visGM: 'MJ seul', visAll: 'Tout le monde', visCustom: 'Joueurs choisis',
     image: 'Image', body: 'Texte', title: 'Titre', play: 'Lecture', stop: 'Stop', stopAll: 'Tout arrêter', loop: 'Boucle', volume: 'Volume', uploadAudio: 'Ajouter un son',
     unlock: 'Activer le son', mute: 'Muet', toolSelect: 'Sélection', toolWall: 'Mur', toolDoor: 'Porte', toolLight: 'Lumière', toolReveal: 'Révéler', toolErase: 'Gomme',
-    fog: 'Brouillard', dark: 'Obscurité', playerView: 'Vue joueurs', radius: 'Rayon', vision: 'Vision (cases)', light: 'Lumière (cases)',
+    fog: 'Brouillard', dark: 'Obscurité', playerView: 'Vue joueurs', radius: 'Rayon', vision: 'Vision (cases, 0 = aucune)', light: 'Lumière (cases)',
     clearWalls: 'Effacer les murs', clearReveal: 'Effacer les zones révélées', clearLights: 'Effacer les lumières', view: 'Voir', template: 'Enregistrer comme modèle',
     instantiate: 'Créer + jeton', statsEditor: 'Statistiques', aliases: 'Alias (séparés par des virgules)', kind: 'Type', dtype: 'Dégâts', tiers: 'Paliers de maîtrise',
     charRules: 'Création de personnage', baseStat: 'Stat de départ', startPoints: 'Points de départ', startMax: 'Max au départ', spellStats: 'Jets de sorts (armé / non armé)',
     rollTypes: 'Types de jets', idHint: 'Changer un id remet la stat à zéro sur les fiches existantes.', soundHint: 'Les sons se lancent pour tous les joueurs en même temps.',
     noPlayersTokens: 'Aucun jeton de joueur : le brouillard est total.',
+    alias: 'Alias @', aliasAuto: 'depuis le nom', aliasHint: "Pour la narration : @alias dans le chat (sans espaces, unique dans la table, visible par le MJ seul). Vide : suit le nom.",
+    search: 'Rechercher', newOne: 'Nouveau', fromCompendium: 'Depuis le compendium', noMatch: 'Aucun résultat.', compEmpty: 'Rien de cette catégorie dans le compendium.',
+    toolTp: 'Case de TP', tpGroup: 'Groupe', tpNewGroup: '+ nouveau groupe', tpLinked: 'Liée au groupe', tpHint: 'Un token posé ici apparaît en fantôme sur les autres cases du groupe ; le joueur peut prendre le fantôme pour continuer de l’autre côté.',
+    okBtn: 'OK', damage: 'Dégâts', tookDamage: 'a pris {n} dégâts',
+    paneToDynamic: 'Replier automatiquement', paneToPinned: 'Garder ouvert', panels: 'Onglets', popOut: 'Détacher en fenêtre', dockBack: 'Remettre dans les onglets',
+    floating: 'en fenêtre', allFloating: 'Tous les onglets sont en fenêtres.',
+    toolTWall: 'Mur tangible', toolAntiLight: 'Anti-lumière', wallKind: 'Type de mur dessiné', wallBoth: 'Mur + tangible', wallTitle: 'Mur',
+    isDoor: 'Porte', doorOpen: 'Ouverte', doorLocked: 'Verrouillée', doorLockedHint: 'Seul le MJ peut l’ouvrir ou la fermer.',
+    blocksMove: 'Bloque le mouvement', blocksMoveHint: 'Les joueurs ne peuvent pas déplacer leur token au travers (le MJ si).', blocksSight: 'Bloque la vue et la lumière',
+    sharedVision: 'Vision partagée', sharedVisionHint: 'Les joueurs voient aussi par les tokens des fiches qu’ils ne font que voir.',
+    darkvision: 'Darkvision', darkvisionHint: 'Voit toute sa zone de vision sans lumière (en noir et blanc là où il fait noir).',
+    exploreMemory: 'Mémoire d’exploration', exploreHint: 'Ce qu’un joueur a déjà vu reste assombri au lieu de redevenir noir (sans les tokens).',
+    resetExplore: 'Réinitialiser l’exploration…', everyone: 'Tous les joueurs', confirmResetExplore: 'Effacer ce qui a été exploré sur cette scène ?',
+    playersWin: 'La lumière des joueurs l’emporte', playersWinHint: 'Les lumières portées par les tokens des joueurs ne sont pas éteintes par cette zone.',
   },
   en: {
     name: 'Name', logout: 'Switch player',
@@ -171,12 +203,26 @@ const DICT = {
     newEntry: 'New entry', edit: 'Edit', showPlayers: 'Show to players', visibility: 'Visible to', visGM: 'GM only', visAll: 'Everyone', visCustom: 'Chosen players',
     image: 'Image', body: 'Text', title: 'Title', play: 'Play', stop: 'Stop', stopAll: 'Stop all', loop: 'Loop', volume: 'Volume', uploadAudio: 'Add a sound',
     unlock: 'Enable sound', mute: 'Mute', toolSelect: 'Select', toolWall: 'Wall', toolDoor: 'Door', toolLight: 'Light', toolReveal: 'Reveal', toolErase: 'Erase',
-    fog: 'Fog', dark: 'Darkness', playerView: 'Player view', radius: 'Radius', vision: 'Vision (cells)', light: 'Light (cells)',
+    fog: 'Fog', dark: 'Darkness', playerView: 'Player view', radius: 'Radius', vision: 'Vision (cells, 0 = none)', light: 'Light (cells)',
     clearWalls: 'Clear walls', clearReveal: 'Clear revealed areas', clearLights: 'Clear lights', view: 'View', template: 'Save as template',
     instantiate: 'Create + token', statsEditor: 'Stats', aliases: 'Aliases (comma separated)', kind: 'Kind', dtype: 'Damage', tiers: 'Knowledge tiers',
     charRules: 'Character creation', baseStat: 'Starting stat', startPoints: 'Starting points', startMax: 'Starting max', spellStats: 'Spell rolls (armed / unarmed)',
     rollTypes: 'Roll types', idHint: 'Changing an id resets that stat on existing sheets.', soundHint: 'Sounds start for every player at the same time.',
     noPlayersTokens: 'No player tokens: fog is total.',
+    alias: '@ alias', aliasAuto: 'from the name', aliasHint: 'For narration: @alias in the chat (no spaces, unique in the table, seen by the GM only). Empty: follows the name.',
+    search: 'Search', newOne: 'New', fromCompendium: 'From the compendium', noMatch: 'No match.', compEmpty: 'Nothing of this category in the compendium.',
+    toolTp: 'TP cell', tpGroup: 'Group', tpNewGroup: '+ new group', tpLinked: 'Linked group', tpHint: 'A token standing here shows as a ghost on the other cells of the group; the player can pick up the ghost to go on from there.',
+    okBtn: 'OK', damage: 'Damage', tookDamage: 'took {n} damage',
+    paneToDynamic: 'Fold away automatically', paneToPinned: 'Keep open', panels: 'Tabs', popOut: 'Pop out into a window', dockBack: 'Put back in the tabs',
+    floating: 'in a window', allFloating: 'Every tab is in a window.',
+    toolTWall: 'Tangible wall', toolAntiLight: 'Anti-light', wallKind: 'Kind of wall drawn', wallBoth: 'Wall + tangible', wallTitle: 'Wall',
+    isDoor: 'Door', doorOpen: 'Open', doorLocked: 'Locked', doorLockedHint: 'Only the GM can open or close it.',
+    blocksMove: 'Blocks movement', blocksMoveHint: 'Players cannot move their token through it (the GM can).', blocksSight: 'Blocks sight and light',
+    sharedVision: 'Shared vision', sharedVisionHint: 'Players also see through the tokens of sheets they can only view.',
+    darkvision: 'Darkvision', darkvisionHint: 'Sees its whole vision zone without light (in black and white where it is dark).',
+    exploreMemory: 'Exploration memory', exploreHint: 'What a player has already seen stays dimmed instead of going black again (without tokens).',
+    resetExplore: 'Reset exploration…', everyone: 'All players', confirmResetExplore: 'Erase what was explored on this scene?',
+    playersWin: "Players' light wins", playersWinHint: "Lights carried by players' tokens are not put out by this area.",
   },
 };
 let lang = localStorage.getItem('lang') || (navigator.language || 'fr').slice(0, 2);

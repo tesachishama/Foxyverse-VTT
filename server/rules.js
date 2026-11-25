@@ -93,7 +93,7 @@ export function defaultActorData(sys) {
   const stats = {};
   sys.stats.forEach((s) => { stats[s.id] = { base: sys.character.baseStat, passive: 0 }; });
   const data = { bio: { class: '', element: '', level: 1 }, stats, hp: { cur: 0, temp: 0 }, mp: { cur: 0 }, fav: { cur: 0 },
-    bonact: 0, bonspe: 0, elemental: false, talents: [], spells: [], items: [], currency: { pc: 0, pa: 0, po: 0 }, notes: '' };
+    bonact: 0, bonspe: 0, elemental: false, darkvision: false, talents: [], spells: [], items: [], currency: { pc: 0, pa: 0, po: 0 }, notes: '' };
   return fillResources(sys, data);
 }
 
@@ -141,6 +141,7 @@ export function sanitizeActorData(raw, sys) {
     mp: { cur: int(r.mp?.cur, 0, 999999) },
     fav: { cur: int(r.fav?.cur, 0, 999) },
     bonact: int(r.bonact, -99, 99), bonspe: int(r.bonspe, -999, 999), elemental: !!r.elemental,
+    darkvision: r.darkvision === true, // sees its whole vision zone without light (in black and white where it is dark)
     // a ticked talent is a passive modifier on every stat check (see talentModifier)
     talents: list(r.talents, (t) => ({ id: str(t?.id, 16) || newId(), name: str(t?.name, 80), tier: int(t?.tier ?? 0, 0, 20), enabled: t?.enabled === true, description: str(t?.description, 4000) })),
     spells: list(r.spells, (s) => ({ id: str(s?.id, 16) || newId(), name: str(s?.name, 80), effect: str(s?.effect, 2000), cost: int(s?.cost, 0, 99999),
@@ -152,7 +153,8 @@ export function sanitizeActorData(raw, sys) {
       let used = Array.isArray(i?.usedSlots) ? [...new Set(i.usedSlots.map((x) => canonizeSlotToken(x)).filter(Boolean))] : [];
       if (!used.length && i?.equipped) used = ['other']; // sheets from before slots existed
       return { id: str(i?.id, 16) || newId(), name: str(i?.name, 80), type, qty: int(i?.qty ?? 1, 0, 99999), bonuses, pdef: int(i?.pdef, 0, 9999), mdef: int(i?.mdef, 0, 9999),
-        notes: str(i?.notes, 2000), equipExpr: i?.equipExpr !== undefined ? str(i.equipExpr, 300) : type === 'weapon' ? '[weapons]' : '', usedSlots: used };
+        notes: str(i?.notes, 2000), damage: str(i?.damage, 300), // a weapon's roll buttons, e.g. "[pdmg 2d30 | physique]" (shown for weapons only)
+        equipExpr: i?.equipExpr !== undefined ? str(i.equipExpr, 300) : type === 'weapon' ? '[weapons]' : '', usedSlots: used };
     })),
     currency: { pc: int(r.currency?.pc, 0, 1e12), pa: int(r.currency?.pa, 0, 1e12), po: int(r.currency?.po, 0, 1e12) },
     notes: str(r.notes, 20000),
@@ -272,12 +274,12 @@ export function applyRoll(sys, data, body) {
   const report = { kind: body.kind };
 
   if (body.kind === 'damage') {
-    let dealt = 0;
-    for (const a of amounts) {
-      if (body.dtype === 'physical') dealt += next.elemental ? 0 : Math.max(0, a - c.pdef);
-      else if (body.dtype === 'magical') dealt += Math.max(0, a - c.mdef);
-      else dealt += a;
-    }
+    // "pdmg 3 2d20" is three rolls: the armor (DP or DM) comes off each roll on its own (never below 0), then they add up.
+    const armor = body.dtype === 'physical' ? c.pdef : body.dtype === 'magical' ? c.mdef : 0;
+    const immune = body.dtype === 'physical' && next.elemental; // elementals ignore physical damage
+    const rolls = amounts.map((a) => ({ raw: a, armor: immune ? a : Math.min(a, armor), dealt: immune ? 0 : Math.max(0, a - armor) }));
+    const dealt = rolls.reduce((n, r) => n + r.dealt, 0);
+    report.rolls = rolls;
     const tempLost = Math.min(next.hp.temp, dealt); next.hp.temp -= tempLost;
     let rest = dealt - tempLost, hpLost = 0, mpLost = 0;
     if (next.elemental) { mpLost = Math.min(next.mp.cur, rest); next.mp.cur -= mpLost; }

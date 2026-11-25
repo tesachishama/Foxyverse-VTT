@@ -1,16 +1,27 @@
 // GM narration: one chat message where several characters speak in turn.
-//   "@Gwen Hello there"   -> a line said by the sheet named Gwen (its token and name are shown)
-//   "@mj The door creaks" -> narration (italics, no name)       ("@gm" works too)
+//   "@GwenDoline Hello there" -> a line said by the sheet whose alias is GwenDoline (its token and name are shown)
+//   "@mj The door creaks"     -> narration (italics, no name)       ("@gm" works too)
 // The speaker set by a mention stays until the next mention; text before the first mention uses the GM's chosen identity.
-// Names may contain spaces: the longest sheet name that follows "@" wins. Pure module (no DB), shared with the tests.
+// Mentions use each sheet's alias (no spaces, unique in the table, GM-only). Pure module (no DB), shared with the tests.
 
-const NARRATOR = ['mj', 'gm'];
+export const NARRATOR = ['mj', 'gm'];
 const boundary = (ch) => ch === undefined || /[\s,.:;!?)]/.test(ch);
 
-/** actors: [{ id, name }]. Returns null when the text mentions nobody (an ordinary message), else
+/** The alias a name gives: no spaces and no "@" ("Gwen Doline" -> "GwenDoline"), at most 40 characters. */
+export const aliasFrom = (name) => String(name ?? '').replace(/[\s@]+/g, '').slice(0, 40);
+/** First free alias among base, base2, base3... (case-insensitive; "mj" and "gm" are never free). */
+export function uniqueAlias(base, taken) {
+  const root = aliasFrom(base) || 'Fiche';
+  const used = new Set([...taken].map((x) => String(x).toLowerCase()));
+  const free = (x) => !used.has(x.toLowerCase()) && !NARRATOR.includes(x.toLowerCase());
+  if (free(root)) return root;
+  for (let n = 2; ; n++) { const x = root.slice(0, 40 - String(n).length) + n; if (free(x)) return x; }
+}
+
+/** actors: [{ id, alias }]. Returns null when the text mentions nobody (an ordinary message), else
  *  [{ kind: 'default' | 'actor' | 'narration', actorId?, text }] with empty parts dropped. */
 export function parseNarration(text, actors) {
-  const names = [...actors.filter((a) => a.name?.trim()).map((a) => ({ key: a.name.trim().toLowerCase(), actor: a })), ...NARRATOR.map((key) => ({ key, narrator: true }))]
+  const names = [...actors.filter((a) => a.alias?.trim()).map((a) => ({ key: a.alias.trim().toLowerCase(), actor: a })), ...NARRATOR.map((key) => ({ key, narrator: true }))]
     .sort((a, b) => b.key.length - a.key.length);
   const lower = text.toLowerCase();
   const marks = []; // { at, end, who }

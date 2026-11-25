@@ -1,7 +1,8 @@
 // A database written by v1 (everything global, accounts with passwords) opens as a first table "test".
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { startServer } from './helpers.js';
@@ -37,7 +38,7 @@ test('v1 data moves into the table "test" with its rules; v1 accounts are droppe
     db.exec(`INSERT INTO users VALUES (1, 'Mistress', 's', 'h', 'gm', '#ffffff', 1), (2, 'Pip', 's', 'h', 'player', '#00ff00', 1);
       INSERT INTO sessions VALUES ('t', 2, 9999999999999);
       INSERT INTO scenes (id, name, width, height, active, created, walls) VALUES (1, 'Old map', 800, 600, 1, 1, '[[0,0,10,0,0,0]]');
-      INSERT INTO actors VALUES (1, 'Old hero', 2, '{"stats":{"constitution":{"base":7}}}', 1, 1);
+      INSERT INTO actors VALUES (1, 'Old hero', 2, '{"stats":{"constitution":{"base":7}}}', 1, 1), (2, 'Old hero', NULL, '{}', 1, 1);
       INSERT INTO tokens (scene_id, name, x, y, actor_id) VALUES (1, 'Old hero', 5, 5, 1);
       INSERT INTO chat (user_id, user_name, body, ts) VALUES (2, 'Pip', '{"t":"text","text":"hello from v1"}', 1);
       INSERT INTO journals (title, visibility, created, updated) VALUES ('Lore', '"all"', 1, 1);
@@ -50,10 +51,13 @@ test('v1 data moves into the table "test" with its rules; v1 accounts are droppe
     const tables = (await srv.call('GET', '/admin/api/tables')).body.tables;
     assert.deepEqual(tables.map((t) => [t.slug, t.players]), [['test', 0]]); // no slots: the GM creates them again
     const st = (await srv.call('GET', '/admin/api/t/test/state')).body;
-    assert.equal(st.scene.name, 'Old map'); assert.deepEqual(st.scene.walls, [[0, 0, 10, 0, 0, 0]]);
+    assert.equal(st.scene.name, 'Old map'); assert.deepEqual(st.scene.walls, [[0, 0, 10, 0, 0, 0, 0, 0, 1]]); // old walls: block sight and light, not movement
     assert.equal(st.tokens.length, 1); assert.equal(st.tokens[0].actorId, 1);
-    assert.equal(st.actors[0].name, 'Old hero'); assert.deepEqual(st.actors[0].perms, {});
-    assert.equal(st.actors[0].computed.derived.maxhp, 21); // con 7 * 3: the table kept the edited v1 rules
+    assert.equal(st.tokens[0].vision, 100); // vision 0 meant "unlimited": it becomes 100 cells (0 now means no vision)
+    const old = st.actors.find((a) => a.id === 1);
+    assert.equal(old.name, 'Old hero'); assert.deepEqual(old.perms, {});
+    assert.equal(old.computed.derived.maxhp, 21); // con 7 * 3: the table kept the edited v1 rules
+    assert.deepEqual(st.actors.map((a) => a.alias).sort(), ['Oldhero', 'Oldhero2']); // existing sheets get unique "@" aliases
     assert.equal(st.chat[0].body.text, 'hello from v1');
     assert.equal(st.journals.length, 1); assert.equal(st.sounds.length, 1);
     assert.deepEqual(st.compendium.map((c) => c.name), ['Spark']); // v1 NPC templates and talent entries are gone
@@ -72,4 +76,19 @@ test('a brand new database starts with no table at all', async () => {
     assert.deepEqual((await srv.call('GET', '/admin/api/tables')).body.tables, []);
     assert.doesNotMatch(srv.logs(), /Migrated/);
   } finally { await srv.stop(); }
+});
+
+test('the vision migration runs once: a token the GM later sets to 0 (no vision) stays at 0 after a restart', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'foxy-keep-'));
+  try {
+    const one = await startServer({ DATA_DIR: dir });
+    await one.call('POST', '/admin/api/tables', { slug: 'keep' });
+    const sc = (await one.call('POST', '/admin/api/t/keep/scenes', { name: 'S' })).body;
+    const tok = (await one.call('POST', '/admin/api/t/keep/tokens', { sceneId: sc.id, vision: 0 })).body;
+    assert.equal(tok.vision, 0);
+    await one.stop();
+    const two = await startServer({ DATA_DIR: dir });
+    assert.equal((await two.call('GET', '/admin/api/t/keep/state')).body.tokens[0].vision, 0);
+    await two.stop();
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 });

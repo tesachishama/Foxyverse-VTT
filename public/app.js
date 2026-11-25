@@ -1,13 +1,19 @@
-import { h, $, $$, api, request, setApiBase, eventsUrl, CLIENT_ID, upload, toast, debounce, t, setLang, getLang, inline, markdown, setKnownRollTypes } from './lib.js';
+import { h, $, $$, api, request, setApiBase, eventsUrl, CLIENT_ID, upload, toast, debounce, t, setLang, getLang, inline, markdown, setKnownRollTypes, ask } from './lib.js';
 import { createMap } from './map.js';
 import { createAudio } from './audio.js';
 import { inventoryView, icon } from './inventory.js';
 import { openTokenCropper } from './tokencrop.js';
+import { signed, tierLabel, damageText, matchesSearch } from './format.js';
+import { isTokenDead, pickViewers, markSeen, orBits, bitsToBase64, bitsFromBase64 } from './vision.js';
+import { radiusStep, moveBlocked } from './walls.js';
+import { ghostsOf, newGroup, tpGroups } from './tp.js';
+import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget } from './layout.js';
 
 const S = {
   me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], table: null, allTables: [], mapMode: false,
   tab: 'sheets', sheetId: null, selected: new Set(), rollMod: '', draft: null,
   sounds: [], playing: [], journals: [], compendium: [], npcs: [], compView: 'table', compGlobal: null, compFilter: { tables: null, campaigns: null }, campaigns: [], savedSystems: [], timeOffset: 0, viewId: null, tool: { name: 'select', radius: 6, snap: 'grid' }, playerView: false, viewAs: 'players', undo: [],
+  picked: null, // the GM's picked map item: { kind: 'wall', index } or { kind: 'light', id }
   journalId: null, journalEdit: false, modal: null, audioBlocked: false, openItems: new Set(),
   actorId: Number(localStorage.getItem('speakAs')) || null,
 };
@@ -22,7 +28,7 @@ const add = (el, ...kids) => { el.append(...clean(kids)); return el; };
 const upsert = (list, item) => { const i = list.findIndex((x) => x.id === item.id); if (i >= 0) list[i] = item; else list.push(item); };
 const remove = (list, id) => { const i = list.findIndex((x) => x.id === id); if (i >= 0) list.splice(i, 1); };
 const guard = (fn) => async (...a) => { try { return await fn(...a); } catch (e) { toast(e.message); } };
-let map, dockEl, panelEl, chatEl, chatPane, chatList, chatInput, chatWho, inspectorEl, hudEl, topEl, footEl, fogNote, audio, editQueue = Promise.resolve();
+let map, dockEl, dockPane, bubblesEl, panelEl, chatEl, chatPane, chatList, chatInput, chatWho, inspectorEl, hudEl, topEl, footEl, fogNote, audio, editQueue = Promise.resolve();
 
 // ------------------------------------------------------------------ boot & pages
 // URLs: "/" tables, "/<table>" pick a player then play, "/admin" GM home, "/admin/<table>" GM at a table, "/admin?map=<id>" map library editor.
@@ -133,7 +139,7 @@ async function adminHome() {
         h('button', { title: t('playerLink'), onclick: () => copyText(`${location.origin}/${x.slug}`) }, t('copyLink')),
         h('a', { class: 'button primary', href: '/admin/' + x.slug }, t('openTable')),
         h('button', { class: 'x', title: t('del'), onclick: guard(async () => {
-          if (prompt(`${t('confirmTable')} ${x.slug}`) !== x.slug) return;
+          if ((await ask(`${t('confirmTable')} ${x.slug}`, { input: '' })) !== x.slug) return;
           await request('DELETE', `/admin/api/tables/${x.slug}`); reload();
         }) }, '×')))),
       h('div', { class: 'line' }, name, slug, newCamp, h('label', { class: 'check' }, listed, t('listed')), h('button', { class: 'primary', onclick: create }, '+ ' + t('newTable')))),
@@ -142,20 +148,20 @@ async function adminHome() {
         h('input', { type: 'text', class: 'grow', value: c.name, maxlength: 60, onchange: guard(async (e) => { await request('PATCH', `/admin/api/campaigns/${c.id}`, { name: e.target.value }); }) }),
         sysSel(c.systemId, guard(async (e) => { await request('PATCH', `/admin/api/campaigns/${c.id}`, { systemId: e.target.value ? Number(e.target.value) : null }); })),
         h('span', { class: 'dim' }, `${tables.filter((x) => x.campaignId === c.id).length} ${t('tables').toLowerCase()}`),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await request('DELETE', `/admin/api/campaigns/${c.id}`); reload(); }) }, '×')))),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await request('DELETE', `/admin/api/campaigns/${c.id}`); reload(); }) }, '×')))),
       h('div', { class: 'line' }, campName, h('button', { class: 'primary', onclick: addCamp }, '+ ' + t('newCampaign')))),
     h('section', { class: 'sec' }, h('h3', {}, t('systemsLib')), h('p', { class: 'hint' }, t('systemsHint')),
       !systems.length && h('p', { class: 'hint' }, t('empty')),
       h('ul', { class: 'list' }, systems.map((x) => h('li', { class: 'line card' },
         h('input', { type: 'text', class: 'grow', value: x.name, maxlength: 60, onchange: guard(async (e) => { await request('PATCH', `/admin/api/systems/${x.id}`, { name: e.target.value }); }) }),
         h('span', { class: 'dim' }, new Date(x.updated).toLocaleDateString()),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await request('DELETE', `/admin/api/systems/${x.id}`); reload(); }) }, '×'))))),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await request('DELETE', `/admin/api/systems/${x.id}`); reload(); }) }, '×'))))),
     h('section', { class: 'sec' }, h('h3', {}, t('mapLibrary')), h('p', { class: 'hint' }, t('mapHint')),
       h('ul', { class: 'list' }, scenes.map((m) => h('li', { class: 'line card' },
         h('a', { class: 'grow', href: '/admin?map=' + m.id }, h('b', {}, m.name), m.width > 0 && h('span', { class: 'dim' }, ` ${m.width}×${m.height}`)),
         copySel(m),
         h('a', { class: 'button', href: '/admin?map=' + m.id }, t('editMap')),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await request('DELETE', `/admin/api/library/scenes/${m.id}`); reload(); }) }, '×')))),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await request('DELETE', `/admin/api/library/scenes/${m.id}`); reload(); }) }, '×')))),
       h('div', { class: 'line' }, mapName, mapFile, h('button', { class: 'primary', onclick: newMap }, '+ ' + t('newMap'))))));
 }
 
@@ -202,13 +208,13 @@ function onEvent(ev) {
   if (type === 'left') { es?.close(); return location.reload(); } // "switch player" in another tab of this browser
   if (type === 'table') { // renamed, or moved to a new address
     if (data.slug !== S.table.slug) return location.assign((isGM() ? '/admin/' : '/') + data.slug);
-    S.table = data; document.title = `${S.table.name} · Foxyverse VTT`; if (S.tab === 'table') renderPanel(); return;
+    S.table = data; document.title = `${S.table.name} · Foxyverse VTT`; if (shown('table')) renderPanel('table'); return;
   }
   if (type === 'refresh') return loadState().then(renderAll);
-  if (type === 'user') { upsert(S.users, data); if (S.tab === 'table') renderPanel(); return; }
+  if (type === 'user') { upsert(S.users, data); if (shown('table')) renderPanel('table'); return; }
   if (type === 'scene') {
     if (editsPending) return; // our own queued edits are newer than this echo
-    replaceScene(data); if (S.tab === 'table') renderPanel(); return;
+    replaceScene(data); if (shown('table')) renderPanel('table'); return;
   }
   if (type === 'token') {
     if (by === CLIENT_ID) return; // this page is the source; its local copy is authoritative
@@ -217,28 +223,29 @@ function onEvent(ev) {
   }
   if (type === 'sound') {
     if (op === 'delete') remove(S.sounds, data.id); else { upsert(S.sounds, data); audio.update(data); }
-    if (S.tab === 'sound') renderPanel(); return;
+    if (shown('sound')) renderPanel('sound'); return;
   }
   if (type === 'audio') {
     audio.apply(ev, S.sounds);
     if (op === 'play') { remove(S.playing, ev.id); S.playing.push({ id: ev.id, startedAt: ev.startedAt }); } else if (op === 'stop') remove(S.playing, ev.id); else S.playing = [];
-    if (S.tab === 'sound') renderPanel(); return;
+    if (shown('sound')) renderPanel('sound'); return;
   }
   if (type === 'journal') {
     if (op === 'delete') { remove(S.journals, data.id); if (S.journalId === data.id) S.journalId = null; } else upsert(S.journals, data);
-    if (S.tab === 'journal' && !S.journalEdit) renderPanel(); return;
+    if (shown('journal') && !S.journalEdit) renderPanel('journal'); return;
   }
   if (type === 'show') { S.modal = ev.id; renderModal(); return; }
+  if (type === 'explored') { if (explored?.sceneId === ev.sceneId) { explored = null; exploredKey = null; syncExplored(); } return; } // the GM reset it
   if (type === 'comp') {
     if (op === 'delete') remove(S.compendium, data.id); else upsert(S.compendium, data);
-    if (S.tab === 'comp' && !compEditing()) renderPanel(); return;
+    if (shown('comp') && !compEditing()) renderPanel('comp'); return;
   }
-  if (type === 'npcs') { S.npcs = data; if (S.tab === 'comp' && !compEditing()) renderPanel(); return; }
+  if (type === 'npcs') { S.npcs = data; if (shown('comp') && !compEditing()) renderPanel('comp'); return; }
   if (type === 'actor') {
     if (op === 'delete') { remove(S.actors, data.id); if (S.sheetId === data.id) S.sheetId = null; renderAll(); return; }
     if (by === CLIENT_ID && pending.has(data.id)) return;
     const had = actorById(data.id);
-    const typing = S.tab === 'sheets' && S.sheetId === data.id && panelEl.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+    const typing = shown('sheets') && S.sheetId === data.id && inPanels(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
     if (had && typing) {
       // Someone else changed this character (damage, healing, a cast) while the sheet is being edited: keep our local copy, but take the live
       // resources so that our next save cannot write the old HP / mana / favors back.
@@ -248,7 +255,7 @@ function onEvent(ev) {
     upsert(S.actors, data);
     if (!had) { if (!S.actorId) S.actorId = data.id; renderAll(); return; }
     map.redraw(); renderChatWho();
-    if (S.tab === 'sheets' && S.sheetId === data.id) renderPanel();
+    if (shown('sheets') && S.sheetId === data.id) renderPanel('sheets');
     return;
   }
   if (type === 'chat') {
@@ -256,7 +263,7 @@ function onEvent(ev) {
     if (op === 'delete') remove(S.chat, data.id); else upsert(S.chat, data);
     if (S.chat.length > 300) S.chat.splice(0, S.chat.length - 300);
     renderChat();
-    if (fresh) peekChat();
+    if (fresh) bubble(data);
   }
 }
 
@@ -264,31 +271,76 @@ function onEvent(ev) {
 // The GM can look at (and prepare) any scene; players only ever see the active one.
 const viewScene = () => (isGM() ? S.scenes.find((s) => s.id === S.viewId) ?? S.scene : S.scene);
 const viewTokens = () => { const sc = viewScene(); return sc ? S.tokens.filter((t) => t.sceneId === sc.id) : []; };
-const isPlayerToken = (tok) => {
-  if (tok.sight) return true; // a token the GM shares with everyone (ally, torch bearer...)
+/** Forced by the GM, else the sheet's HP when this page has it, else what the server says. */
+const tokenDead = (tok) => { const a = tok.actorId && actorById(tok.actorId); return isTokenDead(tok, a ? a.data.hp.cur : null); };
+/** Darkvision: the sheet's toggle when this page has the sheet, else what the server says. */
+const tokenDarkvision = (tok) => { const a = tok.actorId && actorById(tok.actorId); return a ? !!a.data.darkvision : !!tok.darkvision; };
+/** This page's right on a token's sheet: 'edit' | 'view' | 'none'. The GM's player view takes every player's, or one player's. */
+function permFor(tok) {
   const a = tok.actorId && actorById(tok.actorId);
-  if (!a) return false;
-  return isGM() ? Object.values(a.perms ?? {}).includes('edit') : a.perm === 'edit'; // a player's tokens: sheets they can edit
-};
-/** Whose eyes the fog uses: a player's own tokens; for the GM's "player view", all players, one player, or the selected token. */
-function viewerTokens(tokens) {
-  if (!isGM()) return tokens.filter(isPlayerToken);
-  if (S.viewAs === 'selected' && S.selected.size) return tokens.filter((x) => S.selected.has(x.id));
-  if (typeof S.viewAs === 'number') return tokens.filter((x) => x.sight || actorById(x.actorId)?.perms?.[S.viewAs] === 'edit');
-  return tokens.filter(isPlayerToken);
+  if (!a) return 'none';
+  if (!isGM()) return a.perm ?? 'none';
+  const levels = typeof S.viewAs === 'number' ? [a.perms?.[S.viewAs]] : Object.values(a.perms ?? {});
+  return levels.includes('edit') ? 'edit' : levels.includes('view') ? 'view' : 'none';
 }
+/**
+ * Whose eyes the fog uses (public/vision.js pickViewers): tokens in edit; view-only ones with the scene's "shared vision" or when the
+ * player has no living token in edit; tokens that "share their sight". Dead tokens see nothing. The GM can also look through the selection.
+ */
+function viewersOf(tokens) {
+  if (isGM() && S.viewAs === 'selected' && S.selected.size) { const sel = tokens.filter((x) => S.selected.has(x.id)); return { eyes: sel.filter((x) => !tokenDead(x)), own: sel }; }
+  return pickViewers(tokens, permFor, tokenDead, viewScene()?.sharedVision);
+}
+
+// ---- exploration memory ("dynamic fog"): what this player has seen of the scene, kept by the server per player and scene
+let explored = null, exploredKey = null, markTimer = null, sendTimer = null;
+const exploreOn = (sc) => !!sc?.fog && !!sc?.explore;
+/** Load the memory to show: the player's own, or for the GM's "view as <player>", that player's. Only when something changed. */
+const syncExplored = guard(async () => {
+  const sc = viewScene();
+  const slot = S.mapMode ? null : isGM() ? (S.playerView && typeof S.viewAs === 'number' ? S.viewAs : null) : S.me?.id;
+  const key = sc && exploreOn(sc) && slot != null ? `${sc.id}|${slot}` : null;
+  if (key === exploredKey) return;
+  exploredKey = key;
+  if (!key) { explored = null; return map?.redraw(); }
+  const r = await api('GET', `/scenes/${sc.id}/explored${isGM() ? '?slot=' + slot : ''}`);
+  if (exploredKey !== key) return; // something else was asked meanwhile
+  const dims = { cell: r.cell, cols: r.cols, rows: r.rows };
+  explored = { sceneId: sc.id, dims, bits: bitsFromBase64(r.bits, dims), color: bitsFromBase64(r.color, dims), rev: 1 };
+  map?.redraw();
+});
+/** The vision changed: mark what is seen now (a moment later, not on every frame of a drag), and send it a bit later. */
+function rememberSeen(scene, vis) {
+  if (isGM() || !explored || explored.sceneId !== scene.id || !exploreOn(scene)) return;
+  clearTimeout(markTimer);
+  markTimer = setTimeout(() => {
+    // seen at all, and seen in colour (what only darkvision showed stays black and white in the memory)
+    const seen = markSeen(explored.bits, explored.dims, vis.canSee), inColor = markSeen(explored.color, explored.dims, (x, y) => vis.canSee(x, y) && !vis.grey(x, y));
+    if (!seen && !inColor) return;
+    explored.rev++; map.redraw();
+    clearTimeout(sendTimer); sendTimer = setTimeout(sendExplored, 2000);
+  }, 250);
+}
+const exploredBody = () => ({ cols: explored.dims.cols, rows: explored.dims.rows, bits: bitsToBase64(explored.bits), color: bitsToBase64(explored.color) });
+const sendExplored = guard(async () => {
+  if (!explored || isGM()) return;
+  const mine = explored, r = await api('POST', `/scenes/${mine.sceneId}/explored`, exploredBody());
+  if (explored === mine && r.bits) { orBits(mine.bits, bitsFromBase64(r.bits, mine.dims)); orBits(mine.color, bitsFromBase64(r.color, mine.dims)); mine.rev++; map.redraw(); } // what this player saw on another device
+});
+// closing the page: send what is still waiting
+addEventListener('pagehide', () => { if (sendTimer && explored && !isGM()) { clearTimeout(sendTimer); fetch(`/api/t/${ROUTE.slug}/scenes/${explored.sceneId}/explored`, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(exploredBody()) }).catch(() => {}); } });
 let editsPending = 0;
 function replaceScene(r) {
   if (isGM()) upsert(S.scenes, r);
   if (r.active || S.scene?.id === r.id) S.scene = r;
-  map.redraw(); renderHud();
+  map.redraw(); renderHud(); if (S.picked) renderInspector(); syncExplored();
 }
 /** Optimistic scene edit: consecutive wall clicks must see each other, so apply locally first and queue the saves in order. */
 function sceneEdit(patch, { undoable = true } = {}) {
   const sc = viewScene(); if (!sc) return Promise.resolve();
   if (undoable) {
     const prev = {};
-    for (const k of ['walls', 'lights', 'reveal']) if (k in patch) prev[k] = structuredClone(sc[k] ?? []);
+    for (const k of ['walls', 'lights', 'reveal', 'tps']) if (k in patch) prev[k] = structuredClone(sc[k] ?? []);
     if (Object.keys(prev).length) { S.undo.push({ sceneId: sc.id, prev }); if (S.undo.length > 60) S.undo.shift(); }
   }
   Object.assign(sc, patch); sc._rev = (sc._rev || 0) + 1; map.redraw(); editsPending++;
@@ -297,6 +349,38 @@ function sceneEdit(patch, { undoable = true } = {}) {
     .then((r) => { if (--editsPending === 0) replaceScene(r); })
     .catch((e) => { editsPending = Math.max(0, editsPending - 1); toast(e.message); });
   return editQueue;
+}
+
+/** A door icon was clicked: the GM toggles it on the map (locked or not); a player asks the server, which refuses locked doors. */
+const toggleDoor = guard(async (w) => {
+  const sc = viewScene(); if (!sc) return;
+  if (isGM()) {
+    const i = sc.walls.indexOf(w); if (i < 0) return;
+    const walls = sc.walls.map((s) => s.slice()); walls[i][5] = walls[i][5] ? 0 : 1;
+    return sceneEdit({ walls }, { undoable: false });
+  }
+  if (w[6]) return toast(t('doorLocked'), false);
+  replaceScene(await api('POST', `/scenes/${sc.id}/door`, { at: w.slice(0, 4) }));
+});
+
+/**
+ * Arrows / WASD (ZQSD on AZERTY, by key position) move the selected tokens one cell. Players stop at tangible walls and closed
+ * doors (the server checks it too, and puts the token back if it refuses); the GM goes anywhere.
+ */
+function moveByKey(e) {
+  const step = keyStep(e), sc = viewScene();
+  if (!step || !sc || !S.selected.size || typingTarget(document.activeElement) || document.querySelector('.modal, .add-menu')) return;
+  const toks = S.tokens.filter((x) => S.selected.has(x.id) && x.sceneId === sc.id && (isGM() || (!!x.actorId && actorById(x.actorId)?.perm === 'edit')));
+  if (!toks.length) return;
+  e.preventDefault(); // arrows would scroll the page
+  for (const tok of toks) {
+    const x = tok.x + step.dx * sc.grid, y = tok.y + step.dy * sc.grid;
+    if (x < 0 || y < 0 || (sc.width && x > sc.width) || (sc.height && y > sc.height)) continue; // stays on the map
+    if (!isGM() && moveBlocked(sc.walls, tok.x, tok.y, x, y)) continue;
+    Object.assign(tok, { x, y });
+    api('PATCH', '/tokens/' + tok.id, { x, y }).catch((err) => { if (err.data?.token) { Object.assign(tok, err.data.token); map.redraw(); } });
+  }
+  map.redraw();
 }
 
 function undoSceneEdit() {
@@ -310,64 +394,87 @@ function buildShell() {
   inspectorEl = h('div', { class: 'inspector hidden' });
   hudEl = h('div', { class: 'hud' }); topEl = h('div', { class: 'hud-top' });
   fogNote = h('div', { class: 'fog-note hidden' }, isGM() ? t('noViewers') : t('noViewersPlayer'));
-  const stage = h('div', { id: 'stage' }, canvas, fogNote, inspectorEl, topEl, hudEl);
-  dockEl = h('aside', { id: 'dock' });
+  bubblesEl = h('div', { class: 'bubbles' });
+  const stage = h('div', { id: 'stage' }, canvas, fogNote, inspectorEl, topEl, hudEl, bubblesEl);
+  // Like other VTTs: tabs and panels on the left, the map in the middle, the chat on the right. Both sides can fold away.
+  dockEl = h('div', { id: 'dock', class: 'side-wrap' });
   panelEl = h('section', { id: 'panel' });
   footEl = h('div', { class: 'dock-foot' });
-  chatPane = !S.mapMode && h('aside', { id: 'chatpane' });
-  app.replaceChildren(h('div', { id: 'layout', class: S.mapMode ? 'no-chat' : '' }, chatPane, stage, dockEl));
+  dockPane = h('aside', { id: 'dockpane', class: 'side left' });
+  chatPane = !S.mapMode && h('aside', { id: 'chatpane', class: 'side right' });
+  app.replaceChildren(h('div', { id: 'layout', class: S.mapMode ? 'no-chat' : '' }, dockPane, stage, chatPane));
+  mountSide('dock');
   audio = createAudio({ getOffset: () => S.timeOffset, onBlocked: () => { if (!S.audioBlocked) { S.audioBlocked = true; renderFoot(); } } });
   document.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName ?? '') && isGM()) { e.preventDefault(); undoSceneEdit(); } });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.modal) { S.modal = null; renderModal(); } });
+  document.addEventListener('keydown', moveByKey);
   document.addEventListener('click', () => { if (S.audioBlocked) { S.audioBlocked = false; audio.unlock(); renderFoot(); } });
   map = createMap(canvas, {
     state: () => {
-      const sc = viewScene(), tokens = viewTokens(), eyes = viewerTokens(tokens);
+      const sc = viewScene(), tokens = viewTokens(), { eyes, own } = viewersOf(tokens);
+      const ghosts = sc ? ghostsOf(tokens.filter((x) => !x.hidden || isGM()), sc.tps, sc.grid) : []; // tokens on TP cells, copied on the linked cells
+      const eye = (x, at = x) => ({ x: at.x, y: at.y, vision: x.vision, darkvision: tokenDarkvision(x) });
       return {
-        scene: sc, tokens, selected: S.selected, tool: S.tool, gm: isGM(), playerView: S.playerView,
-        viewers: eyes.map((x) => ({ x: x.x, y: x.y, vision: x.vision })), viewerIds: new Set(eyes.map((x) => x.id)),
-        lights: [...(sc?.lights ?? []), ...tokens.filter((x) => x.light > 0 && !x.hidden).map((x) => ({ x: x.x, y: x.y, radius: x.light }))],
+        scene: sc, tokens, selected: S.selected, tool: S.tool, gm: isGM(), playerView: S.playerView, picked: S.picked,
+        // viewerIds: tokens always drawn for this page (its own, dead ones included); viewers: the eyes (alive only)
+        // a ghost sees what its token would see from there
+        viewers: [...eyes.map((x) => eye(x)), ...ghosts.filter((g) => eyes.includes(g.token)).map((g) => eye(g.token, g))], viewerIds: new Set(own.map((x) => x.id)), explored, ghosts,
+        // GM lights and anti-lights, plus the lights tokens carry (a player's token light can beat an anti-light that allows it)
+        lights: [...(sc?.lights ?? []).map((l) => ({ x: l.x, y: l.y, radius: l.radius, anti: l.kind === 'anti', playersWin: !!l.playersWin })),
+          ...tokens.filter((x) => x.light > 0 && !x.hidden).map((x) => ({ x: x.x, y: x.y, radius: x.light, player: !!x.pc }))],
       };
     },
     canMove: (tok) => isGM() || (!!tok.actorId && actorById(tok.actorId)?.perm === 'edit'),
     onFog: (total) => fogNote.classList.toggle('hidden', !total),
-    isDead: (tok) => { // forced by the GM, else the sheet's HP when this page has it, else what the server says
-      if (tok.life === 'dead') return true;
-      if (tok.life === 'alive') return false;
-      const a = tok.actorId && actorById(tok.actorId);
-      return a ? a.data.hp.cur <= 0 : !!tok.dead;
-    },
+    isDead: tokenDead,
     hpRatio: (tok) => { const a = tok.actorId && actorById(tok.actorId); const max = a?.computed.derived.maxhp; return max ? a.data.hp.cur / max : null; },
-    onSelect: (set) => { S.selected = set; renderInspector(); renderChat(); },
-    onMove: (tok, x, y) => { api('PATCH', '/tokens/' + tok.id, { x, y }).catch(() => {}); },
-    onOpen: (tok) => { if (tok.actorId && actorById(tok.actorId)) { S.tab = 'sheets'; S.sheetId = tok.actorId; renderAll(); } },
+    onSelect: (set) => { S.selected = set; if (set.size) S.picked = null; renderInspector(); renderChat(); },
+    newTpGroup: () => newGroup(viewScene()?.tps),
+    onMove: (tok, x, y, final, via) => { api('PATCH', '/tokens/' + tok.id, via ? { x, y, via } : { x, y }).catch((e) => { if (e.data?.token) { Object.assign(tok, e.data.token); map.redraw(); } }); }, // a wall: back to where the server has it
+    onDoor: toggleDoor,
+    onVision: rememberSeen,
+    onPick: (item) => { S.picked = item; if (item) S.selected = new Set(); renderInspector(); map.redraw(); },
+    onOpen: (tok) => { if (tok.actorId && actorById(tok.actorId)) { S.sheetId = tok.actorId; openTab('sheets'); } },
     onSceneEdit: sceneEdit,
   });
   buildChat();
-  if (chatPane) mountChat();
+  if (chatPane) mountSide('chat');
+  restoreFloats();
   renderAll();
   audio.sync(S.playing, S.sounds);
 }
-function renderAll() { renderDock(); renderChat(); renderChatWho(); renderInspector(); renderHud(); map?.redraw(); }
+function renderAll() { renderDock(); renderChat(); renderChatWho(); renderInspector(); renderHud(); map?.redraw(); syncExplored(); }
 
 const TOOL_HINT = {
-  fr: { wall: 'Clic : poser un point · clic droit ou Échap : finir · Maj ou Alt : placement libre', rect: 'Glisser : rectangle de murs · Maj : sans aimant', circle: 'Glisser du centre vers le bord : cercle de murs',
-    curve: 'Clic : départ · clic : arrivée · bouger pour courber · clic : valider · Échap : annuler', door: 'Clic : poser une porte · clic sur une porte : ouvrir / fermer', edit: 'Glisser un sommet pour déplacer les murs qui y sont reliés',
-    light: 'Clic : poser une lumière', reveal: 'Glisser : révéler une zone en permanence', erase: 'Clic : supprimer mur, lumière ou zone' },
-  en: { wall: 'Click to add points · right-click or Esc to finish · Shift or Alt: free placement', rect: 'Drag: rectangle of walls · Shift: no snapping', circle: 'Drag from the centre to the edge: circle of walls',
-    curve: 'Click: start · click: end · move to bend · click: confirm · Esc: cancel', door: 'Click to place a door · click a door to open / close it', edit: 'Drag a corner to move the walls attached to it',
-    light: 'Click to place a light', reveal: 'Drag to permanently reveal an area', erase: 'Click to delete a wall, light or area' },
+  fr: { wall: 'Mur (bloque la vue et la lumière). Clic : poser un point · clic droit ou Échap : finir · Maj ou Alt : placement libre',
+    twall: 'Mur tangible (bloque le mouvement des joueurs, pas la vue). Clic : poser un point · clic droit ou Échap : finir',
+    rect: 'Glisser : rectangle de murs · Maj : sans aimant', circle: 'Glisser du centre vers le bord : cercle de murs',
+    curve: 'Clic : départ · clic : arrivée · bouger pour courber · clic : valider · Échap : annuler', door: 'Clic : poser une porte (deux clics) · clic sur une porte : ouvrir / fermer',
+    edit: 'Glisser un nœud pour déplacer les murs qui y sont reliés · clic sur un segment : ajouter un nœud · deux nœuds fusionnent au relâchement',
+    light: 'Clic : poser une lumière · ensuite, en Sélection : la déplacer, régler le rayon avec la poignée', antilight: "Clic : poser une anti-lumière (retire la lumière sous sa zone)",
+    tp: 'Clic : poser une case de TP (elle rejoint le groupe de la case sélectionnée, sinon un nouveau groupe) · en Sélection : la glisser, changer son groupe',
+    reveal: 'Glisser : révéler une zone en permanence', erase: 'Clic : supprimer mur, lumière, case de TP ou zone',
+    select: 'Clic sur un mur, une porte ou une lumière pour la régler · glisser une lumière pour la déplacer' },
+  en: { wall: 'Wall (blocks sight and light). Click to add points · right-click or Esc to finish · Shift or Alt: free placement',
+    twall: "Tangible wall (blocks players' movement, not sight). Click to add points · right-click or Esc to finish",
+    rect: 'Drag: rectangle of walls · Shift: no snapping', circle: 'Drag from the centre to the edge: circle of walls',
+    curve: 'Click: start · click: end · move to bend · click: confirm · Esc: cancel', door: 'Click to place a door (two clicks) · click a door to open / close it',
+    edit: 'Drag a node to move the walls attached to it · click a segment: add a node · two nodes merge when you let go',
+    light: 'Click to place a light · then, with Select: drag it, set its radius with the handle', antilight: 'Click to place an anti-light (removes light under its area)',
+    tp: "Click: place a TP cell (it joins the picked cell's group, else a new group) · with Select: drag it, change its group",
+    reveal: 'Drag to permanently reveal an area', erase: 'Click to delete a wall, light, TP cell or area',
+    select: 'Click a wall, door or light to set it up · drag a light to move it' },
 };
 function renderHud() {
   hudEl.replaceChildren(h('button', { title: 'Fit', onclick: () => map.fit() }, '⤢'));
   topEl.replaceChildren();
   if (!isGM()) return;
   const sc = viewScene();
-  const sel = h('select', { title: t('scenes'), onchange: (e) => { S.viewId = Number(e.target.value); S.selected = new Set(); renderAll(); } },
+  const sel = h('select', { title: t('scenes'), onchange: (e) => { S.viewId = Number(e.target.value); S.selected = new Set(); S.picked = null; renderAll(); } },
     S.scenes.map((s) => h('option', { value: s.id }, s.name + (s.active ? ' ●' : ''))));
   sel.value = S.viewId ?? '';
   const flag = (label, checked, on) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked, onchange: (e) => on(e.target.checked) }), label);
-  const viewAs = h('select', { title: t('viewAs'), onchange: (e) => { const v = e.target.value; S.viewAs = /^\d+$/.test(v) ? Number(v) : v; map.redraw(); } },
+  const viewAs = h('select', { title: t('viewAs'), onchange: (e) => { const v = e.target.value; S.viewAs = /^\d+$/.test(v) ? Number(v) : v; map.redraw(); syncExplored(); } },
     h('option', { value: 'players' }, t('viewPlayers')), h('option', { value: 'selected' }, t('viewSelected')),
     S.users.filter((u) => u.role === 'player').map((u) => h('option', { value: u.id }, u.name)));
   viewAs.value = String(S.viewAs);
@@ -375,28 +482,34 @@ function renderHud() {
     sc && !sc.active && !S.mapMode && h('button', { class: 'primary', onclick: guard(() => api('POST', `/scenes/${sc.id}/activate`)) }, t('activate')),
     sc && flag(t('fog'), sc.fog, (v) => { sceneEdit({ fog: v }, { undoable: false }); renderHud(); }),
     sc && flag(t('dark'), sc.dark, (v) => sceneEdit({ dark: v }, { undoable: false })),
-    sc?.fog && !S.mapMode && flag(t('playerView'), S.playerView, (v) => { S.playerView = v; renderHud(); map.redraw(); }),
+    sc && h('span', { title: t('sharedVisionHint') }, flag(t('sharedVision'), sc.sharedVision, (v) => sceneEdit({ sharedVision: v }, { undoable: false }))),
+    sc?.fog && !S.mapMode && flag(t('playerView'), S.playerView, (v) => { S.playerView = v; renderHud(); map.redraw(); syncExplored(); }),
     sc?.fog && S.playerView && viewAs);
   if (!sc) return;
-  const tools = [['select', 'toolSelect'], ['wall', 'toolWall'], ['rect', 'toolRect'], ['circle', 'toolCircle'], ['curve', 'toolCurve'], ['door', 'toolDoor'], ['edit', 'toolEdit'], ['light', 'toolLight'], ['reveal', 'toolReveal'], ['erase', 'toolErase']];
+  const tools = [['select', 'toolSelect'], ['wall', 'toolWall'], ['twall', 'toolTWall'], ['rect', 'toolRect'], ['circle', 'toolCircle'], ['curve', 'toolCurve'], ['door', 'toolDoor'], ['edit', 'toolEdit'],
+    ['light', 'toolLight'], ['antilight', 'toolAntiLight'], ['tp', 'toolTp'], ['reveal', 'toolReveal'], ['erase', 'toolErase']];
   const snapSel = h('select', { title: t('snap'), onchange: (e) => { S.tool.snap = e.target.value; } },
     h('option', { value: 'grid' }, t('snapGrid')), h('option', { value: 'half' }, t('snapHalf')), h('option', { value: 'off' }, t('snapOff')));
   snapSel.value = S.tool.snap;
+  // rectangle, circle and curve draw the kind of wall chosen here (each wall can be changed afterwards in the inspector)
+  const kindSel = h('select', { title: t('wallKind'), onchange: (e) => { S.tool.wallKind = e.target.value; } },
+    h('option', { value: 'wall' }, t('toolWall')), h('option', { value: 'tangible' }, t('toolTWall')), h('option', { value: 'both' }, t('wallBoth')));
+  kindSel.value = S.tool.wallKind ?? 'wall';
   const canUndo = S.undo.some((u) => u.sceneId === sc.id);
   add(hudEl, h('div', { class: 'tools' },
     tools.map(([id, key]) => h('button', { class: S.tool.name === id ? 'on' : '', onclick: () => { S.tool.name = id; map.cancel(); renderHud(); } }, t(key))),
     S.tool.name !== 'select' && snapSel,
-    S.tool.name === 'light' && h('label', {}, t('radius'), h('input', { type: 'number', class: 'n', min: 1, max: 100, value: S.tool.radius, oninput: (e) => { S.tool.radius = Number(e.target.value) || 6; } })),
+    ['rect', 'circle', 'curve'].includes(S.tool.name) && kindSel,
+    ['light', 'antilight'].includes(S.tool.name) && h('label', {}, t('radius'), h('input', { type: 'number', class: 'n', min: 0.5, max: 100, step: 0.5, value: S.tool.radius, oninput: (e) => { S.tool.radius = Number(e.target.value) || 6; } })),
     h('button', { title: 'Ctrl+Z', disabled: !canUndo, onclick: undoSceneEdit }, t('undo'))),
     TOOL_HINT[getLang()]?.[S.tool.name] && h('div', { class: 'hint tool-hint' }, TOOL_HINT[getLang()][S.tool.name]));
 }
-
 function renderFoot() {
   fill(footEl,
     h('button', { class: 'quiet' + (audio.isMuted() ? ' on' : ''), title: t('mute'), onclick: () => { audio.setMuted(!audio.isMuted()); renderFoot(); } }, audio.isMuted() ? t('mute') : '♪'),
     h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: audio.getMaster(), title: t('volume'), oninput: (e) => audio.setMaster(Number(e.target.value)) }),
     S.audioBlocked && h('button', { class: 'primary', onclick: () => { S.audioBlocked = false; audio.unlock(); renderFoot(); } }, t('unlock')),
-    h('span', { class: 'spacer' }),
+    h('span', { class: 'spacer' }), sideToggle('dock'),
     h('button', { class: 'quiet', title: 'FR / EN', onclick: () => { setLang(getLang() === 'fr' ? 'en' : 'fr'); location.reload(); } }, getLang().toUpperCase()),
     isGM() ? gmNav() : h('button', { class: 'quiet', title: t('logout'), onclick: guard(async () => { await request('POST', `/api/t/${ROUTE.slug}/leave`); location.reload(); }) }, `${S.me.name} · ${t('logout')}`));
 }
@@ -409,18 +522,157 @@ function gmNav() {
 
 // The user's own icons (design-reference/icons) on the tabs, as in the plugin.
 const TAB_ICON = { sheets: 'bio', journal: 'notes', rules: 'stats', comp: 'inventory', table: 'tab', system: 'settings', map: 'tab' };
+const tabList = () => (S.mapMode ? [['map', t('mapLibrary')]] : [['sheets', t('sheets')], ['journal', t('journal')], ['rules', t('rules')], ['comp', t('compendium')],
+  ...(isGM() ? [['table', t('table')], ['sound', t('sound')], ['system', t('system')]] : [])]);
+const tabLabel = (id) => tabList().find(([x]) => x === id)?.[1] ?? id;
+/** What a tab needs when it comes into view. */
+function enterTab(id) { if (id === 'system') S.draft = structuredClone(S.system); if (id === 'comp') refreshComp(); }
+/** Show a tab: bring its floating window to the front, or make it the docked one. */
+function openTab(id) {
+  if (floats.has(id)) { enterTab(id); renderPanel(id); raiseFloat(id); return; }
+  S.tab = id; enterTab(id); renderDock();
+}
 function renderDock() {
-  const tabs = S.mapMode ? [['map', t('mapLibrary')]] : [['sheets', t('sheets')], ['journal', t('journal')], ['rules', t('rules')], ['comp', t('compendium')],
-    ...(isGM() ? [['table', t('table')], ['sound', t('sound')], ['system', t('system')]] : [])];
+  const tabs = tabList();
+  if (floats.has(S.tab)) S.tab = tabs.find(([id]) => !floats.has(id))?.[0] ?? S.tab; // the docked tab is never one that floats
+  // Tabs never scroll: one line for players, two for the GM. The active one can be popped out into a floating window.
   fill(dockEl,
-    h('nav', { class: 'tabs' }, tabs.map(([id, label]) => h('button', { class: S.tab === id ? 'on' : '', title: label, onclick: () => { S.tab = id; if (id === 'system') S.draft = structuredClone(S.system); if (id === 'comp') refreshComp(); renderDock(); } }, TAB_ICON[id] && icon(TAB_ICON[id], 'ico tab-ico'), h('span', { class: 'tab-label' }, label)))),
+    h('nav', { class: 'tabs', style: `--cols:${tabColumns(tabs.length)}` }, tabs.map(([id, label]) => {
+      const on = S.tab === id && !floats.has(id), floating = floats.has(id);
+      return h('div', { class: 'tab' + (on ? ' on' : '') + (floating ? ' floating' : '') },
+        h('button', { class: 'tab-main', title: floating ? `${label} (${t('floating')})` : label, onclick: () => openTab(id) }, TAB_ICON[id] && icon(TAB_ICON[id], 'ico tab-ico'), h('span', { class: 'tab-label' }, label)),
+        on && !S.mapMode && h('button', { class: 'tab-pop', title: t('popOut'), onclick: () => popOut(id) }, '⧉'));
+    })),
     panelEl, footEl);
   renderPanel(); renderFoot();
 }
-function renderPanel() {
-  const panels = { map: mapPanel, sheets: sheetsPanel, journal: journalPanel, rules: rulesPanel, table: tablePanel, sound: soundPanel, comp: compPanel, system: systemPanel };
-  panelEl.className = 'panel-' + S.tab;
-  panelEl.replaceChildren((panels[S.tab] ?? panels.chat)());
+const PANELS = () => ({ map: mapPanel, sheets: sheetsPanel, journal: journalPanel, rules: rulesPanel, table: tablePanel, sound: soundPanel, comp: compPanel, system: systemPanel });
+/** Is this tab on screen (docked or floating)? */
+const shown = (id) => (S.tab === id && !floats.has(id)) || floats.has(id);
+/** Is this element inside the docked panel or a floating window? */
+const inPanels = (el) => !!el && (panelEl.contains(el) || [...floats.values()].some((f) => f.body.contains(el)));
+const typingIn = (root) => root.contains(document.activeElement) && /INPUT|TEXTAREA/.test(document.activeElement.tagName) && document.activeElement.type !== 'checkbox';
+/**
+ * Draw the panels on screen: all of them, or only those showing tab "only". A floating window someone is typing in is left alone
+ * (its own changes go through saves), unless force is set.
+ */
+function renderPanel(only = null, { force = false } = {}) {
+  const panels = PANELS();
+  if (!only || (only === S.tab && !floats.has(S.tab))) {
+    panelEl.className = 'panel-' + S.tab;
+    panelEl.replaceChildren(floats.has(S.tab) ? h('p', { class: 'hint pad' }, t('allFloating')) : panels[S.tab]());
+  }
+  for (const [id, f] of floats) {
+    if (only && only !== id) continue;
+    if (!force && !only && typingIn(f.body)) continue;
+    const top = f.body.scrollTop;
+    f.body.className = 'float-body panel-' + id;
+    f.body.replaceChildren(panels[id]());
+    f.body.scrollTop = top;
+  }
+}
+
+// ------------------------------------------------------------------ floating tabs: any tab becomes a window (drag, resize, dock back)
+// Position and size are remembered per tab in this browser (localStorage); open windows come back after a reload.
+const floats = new Map(); // tab id -> { win, body }
+let floatZ = 15;
+const storage = () => { try { return window.localStorage; } catch { return null; } };
+const floatStore = () => readJSON(storage(), 'floatTabs', {});
+function saveFloat(id, patch) { const all = floatStore(); all[id] = { ...(all[id] ?? {}), ...patch }; writeJSON(storage(), 'floatTabs', all); }
+function raiseFloat(id) { const f = floats.get(id); if (f) f.win.style.zIndex = String(++floatZ); }
+function placeFloat(win, r) { Object.assign(win.style, { left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' }); }
+function popOut(id, { remember = true } = {}) {
+  if (floats.has(id) || !tabList().some(([x]) => x === id)) return;
+  const body = h('div', { class: 'float-body' });
+  const head = h('div', { class: 'float-head' }, TAB_ICON[id] && icon(TAB_ICON[id], 'ico tab-ico'), h('b', { class: 'grow' }, tabLabel(id)),
+    h('button', { class: 'quiet', title: t('dockBack'), onclick: () => dockBack(id) }, '⇲'));
+  const win = h('div', { class: 'float-win', role: 'dialog', 'aria-label': tabLabel(id) }, head, body);
+  const saved = floatStore()[id];
+  const r = clampRect(saved ?? { x: 80 + floats.size * 30, y: 70 + floats.size * 30, w: 400, h: 560 }, innerWidth, innerHeight);
+  placeFloat(win, r);
+  floats.set(id, { win, body });
+  document.body.append(win);
+  raiseFloat(id);
+  win.addEventListener('pointerdown', () => raiseFloat(id));
+  // drag by the title bar
+  head.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button')) return;
+    e.preventDefault(); head.setPointerCapture(e.pointerId);
+    const sx = e.clientX, sy = e.clientY, ox = win.offsetLeft, oy = win.offsetTop;
+    const move = (ev) => placeFloat(win, clampRect({ x: ox + ev.clientX - sx, y: oy + ev.clientY - sy, w: win.offsetWidth, h: win.offsetHeight }, innerWidth, innerHeight));
+    const up = () => { head.removeEventListener('pointermove', move); head.removeEventListener('pointerup', up); saveFloat(id, { x: win.offsetLeft, y: win.offsetTop }); };
+    head.addEventListener('pointermove', move); head.addEventListener('pointerup', up);
+  });
+  // resize: the bottom-right corner (CSS resize); the new size is remembered
+  new ResizeObserver(debounce(() => { if (floats.get(id)?.win === win) saveFloat(id, { w: win.offsetWidth, h: win.offsetHeight }); }, 300)).observe(win);
+  if (remember) saveFloat(id, { ...r, open: true });
+  enterTab(id);
+  renderDock();
+}
+function dockBack(id) {
+  const f = floats.get(id); if (!f) return;
+  f.win.remove(); floats.delete(id);
+  saveFloat(id, { open: false });
+  S.tab = id; enterTab(id); renderDock();
+}
+function restoreFloats() {
+  if (S.mapMode) return;
+  for (const [id, v] of Object.entries(floatStore())) if (v?.open) popOut(id, { remember: false });
+}
+addEventListener('resize', debounce(() => { for (const { win } of floats.values()) placeFloat(win, clampRect({ x: win.offsetLeft, y: win.offsetTop, w: win.offsetWidth, h: win.offsetHeight }, innerWidth, innerHeight)); }, 200));
+
+// ------------------------------------------------------------------ the two sides (tabs on the left, chat on the right)
+// "pinned": always open. "dynamic": a thin strip that opens on hover or focus (and, for the chat, shows new messages as bubbles).
+const sideModes = { chat: 'pinned', dock: 'pinned' };
+for (const k of Object.keys(sideModes)) { try { if (localStorage.getItem(k + 'Mode') === 'dynamic') sideModes[k] = 'dynamic'; } catch { /* no storage: pinned */ } }
+const paneOf = (key) => (key === 'chat' ? chatPane : dockPane);
+function sideToggle(key) {
+  const pinned = sideModes[key] === 'pinned';
+  return h('button', { class: 'quiet side-toggle', title: t(pinned ? 'paneToDynamic' : 'paneToPinned'), onclick: () => {
+    sideModes[key] = pinned ? 'dynamic' : 'pinned';
+    try { localStorage.setItem(key + 'Mode', sideModes[key]); } catch { /* private window */ }
+    mountSide(key);
+  } }, pinned ? (key === 'chat' ? '»' : '«') : '📌');
+}
+/** Something that belongs to a side lives outside it for a moment (a "+" window, a slot menu, a dialog): keep the side open. */
+const sideBusy = () => !!document.querySelector('.add-menu, .slot-menu, .modal');
+function openSide(key, on) {
+  const pane = paneOf(key); if (!pane) return;
+  pane.classList.toggle('open', on);
+  if (on && key === 'chat') { pane.querySelector('.unread')?.classList.add('hidden'); chatList.scrollTop = chatList.scrollHeight; bubbles.clear(); }
+}
+function mountSide(key) {
+  const pane = paneOf(key); if (!pane) return;
+  const dynamic = sideModes[key] === 'dynamic';
+  const strip = key === 'chat'
+    ? h('div', { class: 'strip', title: t('chat') }, h('span', { class: 'strip-icon' }, '💬'), h('span', { class: 'unread hidden' }))
+    : h('div', { class: 'strip', title: t('panels') }, tabList().map(([id]) => TAB_ICON[id] && icon(TAB_ICON[id], 'ico tab-ico')));
+  const wrap = key === 'chat' ? h('div', { class: 'chat-wrap side-wrap' }, h('div', { class: 'chat-head' }, h('b', {}, t('chat')), sideToggle('chat')), chatEl) : dockEl;
+  pane.className = `side ${key === 'chat' ? 'right' : 'left'} ${dynamic ? 'dynamic' : 'pinned'}`;
+  fill(pane, strip, wrap);
+  if (key === 'dock' && audio) renderFoot(); // its toggle lives in the footer (the first mount happens before audio exists)
+  pane.onmouseenter = () => { if (sideModes[key] === 'dynamic') openSide(key, true); };
+  pane.onmouseleave = () => { if (sideModes[key] === 'dynamic' && !pane.contains(document.activeElement) && !sideBusy()) openSide(key, false); };
+  pane.onfocusin = () => { if (sideModes[key] === 'dynamic') openSide(key, true); };
+  pane.onfocusout = () => setTimeout(() => { if (sideModes[key] === 'dynamic' && !pane.contains(document.activeElement) && !pane.matches(':hover') && !sideBusy()) openSide(key, false); }, 50);
+  if (!dynamic) bubbles.clear();
+}
+// Folded chat: each new message shows alone as a bubble for 5 s (each bubble its own timer). Hovering a bubble opens the whole chat.
+const bubbles = createBubbles({ life: 5000, onExpire: (id) => bubblesEl?.querySelector(`[data-msg="${id}"]`)?.remove() });
+function bubble(m) {
+  if (sideModes.chat !== 'dynamic' || !chatPane || chatPane.classList.contains('open')) return;
+  chatPane.querySelector('.unread')?.classList.remove('hidden');
+  bubblesEl.querySelector(`[data-msg="${m.id}"]`)?.remove();
+  add(bubblesEl, h('div', { class: 'bubble', 'data-msg': m.id, onmouseenter: peekChat }, msgNode(m)));
+  bubbles.add(m.id);
+}
+/** Open the folded chat for as long as the pointer (or the focus) stays on it. Bubbles sit where the opened chat covers the map. */
+function peekChat() {
+  openSide('chat', true);
+  const check = setInterval(() => {
+    if (!chatPane.classList.contains('open')) return clearInterval(check);
+    if (sideModes.chat === 'dynamic' && !chatPane.matches(':hover') && !chatPane.contains(document.activeElement) && !sideBusy()) { openSide('chat', false); clearInterval(check); }
+  }, 700);
 }
 
 // ------------------------------------------------------------------ chat
@@ -435,7 +687,9 @@ function buildChat() {
   const mention = () => { const pos = chatInput.selectionStart, m = /(^|\s)@([^@\n]{0,40})$/.exec(chatInput.value.slice(0, pos)); return m ? { start: pos - m[2].length - 1, end: pos, q: m[2].toLowerCase() } : null; };
   const showSugg = () => {
     const mq = isGM() && mention();
-    opts = mq ? [{ name: 'mj', label: t('narrator') }, ...S.actors.map((a) => ({ name: a.name, avatar: a.data.token || a.data.portrait }))].filter((o) => o.name.toLowerCase().startsWith(mq.q)).slice(0, 8) : [];
+    // a sheet is mentioned by its alias (no spaces); typing part of its name finds it too
+    opts = mq ? [{ name: 'mj', label: t('narrator') }, ...S.actors.filter((a) => a.alias).map((a) => ({ name: a.alias, label: a.name !== a.alias ? a.name : '', avatar: a.data.token || a.data.portrait }))]
+      .filter((o) => o.name.toLowerCase().startsWith(mq.q) || (o.label && matchesSearch(o.label, mq.q))).slice(0, 8) : [];
     active = Math.min(active, Math.max(0, opts.length - 1));
     sugg.classList.toggle('hidden', !opts.length);
     fill(sugg, opts.map((o, i) => h('button', { type: 'button', class: i === active ? 'on' : '', onmousedown: (e) => { e.preventDefault(); pick(o); } },
@@ -462,32 +716,6 @@ function buildChat() {
     await doRoll(text);
   });
   chatEl = h('div', { class: 'chat' }, chatList, h('div', { class: 'chat-bar' }, sugg, chatWho, chatInput));
-}
-/** The chat lives left of the map, outside the tabs: pinned open, or "dynamic" (a thin strip that opens on hover, focus or a new message). */
-let chatMode = (() => { try { return localStorage.getItem('chatMode') === 'dynamic' ? 'dynamic' : 'pinned'; } catch { return 'pinned'; } })();
-let chatPeek = null;
-function mountChat() {
-  const toggle = h('button', { class: 'quiet', title: t(chatMode === 'pinned' ? 'chatToDynamic' : 'chatToPinned'), onclick: () => {
-    chatMode = chatMode === 'pinned' ? 'dynamic' : 'pinned';
-    try { localStorage.setItem('chatMode', chatMode); } catch { /* private window */ }
-    mountChat(); setTimeout(() => map?.resize?.(), 0);
-  } }, chatMode === 'pinned' ? '⇤' : '📌');
-  const wrap = h('div', { class: 'chat-wrap' }, h('div', { class: 'chat-head' }, h('b', {}, t('chat')), toggle), chatEl);
-  const strip = h('div', { class: 'strip', title: t('chat') }, h('span', { class: 'strip-icon' }, '💬'), h('span', { class: 'unread hidden' }));
-  chatPane.className = chatMode;
-  fill(chatPane, strip, wrap);
-  const open = (on) => { chatPane.classList.toggle('open', on); if (on) { strip.querySelector('.unread').classList.add('hidden'); chatList.scrollTop = chatList.scrollHeight; } };
-  chatPane.onmouseenter = () => { if (chatMode === 'dynamic') open(true); };
-  chatPane.onmouseleave = () => { if (chatMode === 'dynamic' && !chatPane.contains(document.activeElement)) open(false); };
-  chatPane.onfocusin = () => { if (chatMode === 'dynamic') open(true); };
-  chatPane.onfocusout = () => setTimeout(() => { if (chatMode === 'dynamic' && !chatPane.contains(document.activeElement) && !chatPane.matches(':hover')) open(false); }, 50);
-}
-/** Dynamic mode: a new message opens the chat for a few seconds. */
-function peekChat() {
-  if (chatMode !== 'dynamic' || !chatPane || chatPane.classList.contains('open')) return;
-  chatPane.classList.add('open');
-  clearTimeout(chatPeek);
-  chatPeek = setTimeout(() => { if (!chatPane.matches(':hover') && !chatPane.contains(document.activeElement)) chatPane.classList.remove('open'); }, 4000);
 }
 function renderChatWho() {
   chatWho.replaceChildren(h('option', { value: '' }, t('noChar')), ...S.actors.filter((a) => a.perm === 'edit').map((a) => h('option', { value: a.id }, a.name)));
@@ -532,23 +760,29 @@ function rollCard(m, b, del) {
       h('span', { class: 'total' }, r.total),
       r.target != null && h('span', { class: 'target' }, (check ? '≤ ' : '/ ') + r.target),
       r.outcome && h('span', { class: 'badge ' + r.outcome }, t(r.outcome)))),
-    b.talents && h('div', { class: 'formula' }, `${t('talents')} : ${b.talents.names.join(', ')} (${b.talents.total < 0 ? '+' : '−'}${Math.abs(b.talents.total)})`),
+    b.talents && h('div', { class: 'formula' }, `${t('talents')} : ${b.talents.names.join(', ')} (${signed(b.talents.total)})`),
     b.count > 1 && h('div', { class: 'sum' }, 'Σ ', b.sum),
     h('div', { class: 'roll-actions' },
       (mine || isGM()) && h('button', { onclick: guard(() => api('POST', `/chat/${m.id}/reroll`)) }, '↻ ' + t('reroll')),
-      ['damage', 'heal', 'theal', 'mana'].includes(b.kind) && (isGM() || (ownsActor && b.kind !== 'damage')) && h('button', { class: 'primary', onclick: applyRoll(m) }, t('apply') + (S.selected.size && isGM() ? ` (${S.selected.size})` : ''))),
+      ['damage', 'heal', 'theal', 'mana'].includes(b.kind) && (isGM() || canTargetSelection() || (ownsActor && b.kind !== 'damage')) &&
+        h('button', { class: 'primary', onclick: applyRoll(m) }, t('apply') + (S.selected.size ? ` (${S.selected.size})` : ''))),
     (b.applied ?? []).map((a) => h('div', { class: 'applied' + (a.undone ? ' undone' : '') }, `${a.name}: `, appliedText(a),
-      a.id && !a.undone && (isGM() || (b.kind !== 'damage' && actorById(a.actorId)?.perm === 'edit')) &&
+      a.id && !a.undone && actorById(a.actorId)?.perm === 'edit' && // the server checks it too: players undo on their own sheets only
         h('button', { class: 'undo', title: t('undoApply'), onclick: guard(() => api('POST', `/chat/${m.id}/undo`, { entryId: a.id })) }, '↶'))));
 }
+/** Players apply to the selected tokens only when every one of them is theirs (edit right on the linked sheet). */
+const canTargetSelection = () => S.selected.size > 0 && [...S.selected].every((id) => { const tk = S.tokens.find((x) => x.id === id); return tk?.actorId && actorById(tk.actorId)?.perm === 'edit'; });
 const applyRoll = (m) => guard(async () => {
-  const tokenIds = isGM() ? [...S.selected] : [];
-  if (isGM() && !tokenIds.length && !(m.body.kind !== 'damage' && m.actorId)) return toast(t('noTarget'), false);
+  const tokenIds = [...S.selected];
+  if (!tokenIds.length && !(m.body.kind !== 'damage' && m.actorId)) return toast(t('noTarget'), false);
   await api('POST', `/chat/${m.id}/apply`, { tokenIds });
 });
 function appliedText(a) {
   if (a.note) return a.note;
-  if (a.kind === 'damage') return `−${a.dealt} ${t('hp')}${a.tempLost ? ` (${a.tempLost} ${t('temp').toLowerCase()})` : ''}${a.mpLost ? `, −${a.mpLost} ${t('mp')}` : ''}${a.ko ? ' · KO' : ''}`;
+  if (a.kind === 'damage') {
+    // "took 25 damage (20−5 + 15−5)": the total, then each roll and the armor taken off it
+    return `${damageText(a, (n) => t('tookDamage').replace('{n}', n))}${a.tempLost ? ` (${a.tempLost} ${t('temp').toLowerCase()})` : ''}${a.mpLost ? `, −${a.mpLost} ${t('mp')}` : ''}${a.ko ? ' · KO' : ''}`;
+  }
   if (a.kind === 'heal') return `+${a.healed} ${t('hp')}`;
   if (a.kind === 'theal') return `+ ${t('temp')} → ${a.temp}`;
   return `+${a.restored} ${t('mp')}`;
@@ -568,16 +802,17 @@ const sendSave = guard(async (a) => {
   for (const k of ['hp', 'mp', 'fav']) {
     if (a.data[k].cur !== sent[k] || res.data[k].cur === sent[k]) continue;
     a.data[k].cur = res.data[k].cur;
-    const input = $(`[data-r="${k}"]`, panelEl);
+    const input = $(`[data-r="${k}"]`);
     if (input && document.activeElement !== input) input.value = res.data[k].cur;
   }
   for (const k of ['talents', 'spells', 'items']) a.data[k].forEach((x, i) => { if (!x.id) x.id = res.data[k][i]?.id ?? ''; });
   a.data.items.forEach((x) => { if (x._k && x.id && S.openItems.has(x._k)) S.openItems.add(x.id); }); // a new card stays open once it has its real id
+  if (res.alias !== undefined) a.alias = res.alias; // a rename moves an automatic alias
   a.computed = res.computed; pending.delete(a.id); patchComputed(a); map.redraw(); renderChatWho();
 });
 const cget = (a, path) => path.split('.').reduce((o, k) => o?.[k], a.computed);
 function patchComputed(a) {
-  $$('[data-c]', panelEl).forEach((el) => {
+  $$('[data-c]').forEach((el) => {
     el.textContent = cget(a, el.dataset.c) ?? 0;
     if (el.dataset.c === 'points.spent') el.classList.toggle('over', a.computed.points.spent > a.computed.points.budget);
   });
@@ -605,12 +840,35 @@ function sheetsPanel() {
 }
 
 const compBtn = () => null; // every named item / spell enters the compendium by itself
-function compPick(kind, onPick) {
-  const list = S.compendium.filter((c) => c.kind === kind);
-  if (!list.length) return null;
-  const sel = h('select', { class: 'comp-pick', onchange: (e) => { const c = list.find((x) => x.id === Number(e.target.value)); if (c) onPick(structuredClone(c.data)); } },
-    h('option', { value: '' }, t('fromComp')), list.map((c) => h('option', { value: c.id }, c.name)));
-  return sel;
+/**
+ * The "+" of a sheet list: a small window with "New" and a searchable list of compendium entries.
+ * anchor: the button; kind: 'item' | 'spell'; category: an item type to list (the section's), or null; onNew(); onPick(entryData).
+ */
+function addMenu(anchor, kind, category, onNew, onPick) {
+  $('.add-menu')?.remove();
+  const list = S.compendium.filter((c) => c.kind === kind && (!category || c.category === category));
+  let q = '';
+  const results = h('div', { class: 'add-results' });
+  const close = () => { menu.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', esc); };
+  const draw = () => {
+    const hits = list.filter((c) => matchesSearch(c.name, q)).slice(0, 40);
+    fill(results, hits.length ? hits.map((c) => h('button', { type: 'button', onclick: () => { close(); onPick(structuredClone(c.data)); } }, h('b', {}, c.name), h('span', { class: 'dim' }, ' ' + entrySummary(c))))
+      : h('p', { class: 'hint' }, list.length ? t('noMatch') : t('compEmpty')));
+  };
+  const menu = h('div', { class: 'add-menu', role: 'dialog' },
+    h('button', { type: 'button', class: 'primary', onclick: () => { close(); onNew(); } }, '+ ' + t('newOne')),
+    h('div', { class: 'add-menu-title' }, t('fromCompendium')),
+    list.length > 3 && h('input', { type: 'search', class: 'search', placeholder: '🔍 ' + t('search'), oninput: (e) => { q = e.target.value; draw(); } }),
+    results);
+  draw();
+  document.body.append(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = Math.max(8, Math.min(innerWidth - menu.offsetWidth - 8, r.right - menu.offsetWidth)) + 'px';
+  menu.style.top = Math.max(8, Math.min(innerHeight - menu.offsetHeight - 8, r.bottom + 4)) + 'px';
+  const outside = (e) => { if (!menu.contains(e.target)) close(); };
+  const esc = (e) => { if (e.key === 'Escape') close(); };
+  setTimeout(() => { document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', esc); }, 0);
+  $('input', menu)?.focus();
 }
 function sheetView(a) {
   const sys = S.system, d = a.data, idx = statIndex();
@@ -627,7 +885,10 @@ function sheetView(a) {
     h('div', { class: 'grid2' },
       h('label', {}, t('cls'), field(a, d.bio, 'class')), h('label', {}, t('element'), field(a, d.bio, 'element')),
       h('label', {}, t('level'), field(a, d.bio, 'level', 'int', { min: 1, class: 'n' })),
-      h('label', { class: 'check' }, field(a, d, 'elemental', 'bool'), t('elemental'))));
+      h('label', { class: 'check' }, field(a, d, 'elemental', 'bool'), t('elemental')),
+      h('label', { class: 'check', title: t('darkvisionHint') }, field(a, d, 'darkvision', 'bool'), t('darkvision')),
+      isGM() && h('label', { title: t('aliasHint') }, t('alias'), h('input', { type: 'text', class: 'code', value: a.alias ?? '', maxlength: 40, placeholder: t('aliasAuto'),
+        onchange: guard(async (e) => { if (pending.has(a.id)) await saveNow(a); const r = await api('PATCH', '/actors/' + a.id, { alias: e.target.value }); a.alias = r.alias; e.target.value = r.alias; }) }))));
 
   const res = section(t('hp') + ' / ' + t('mp') + ' / ' + t('fav'), h('div', { class: 'res-grid' },
     h('label', {}, t('hp'), field(a, d.hp, 'cur', 'int', { min: -9999, class: 'n', 'data-r': 'hp' }), ' / ', C(a, 'derived.maxhp')),
@@ -647,11 +908,10 @@ function sheetView(a) {
     h('div', { class: 'quick' }, sys.quickRolls.map((q) => rollBtn(q.id, q.label, 'roll wide')),
       h('label', {}, t('actions') + ' +', num(d, 'bonact', -99)), h('label', {}, '+', num(d, 'bonspe', -999)))));
 
-  // Tiers in roll terms (T2 = -3 on the die); shown as the bonus they are on a roll-under check ("+3").
+  // Tiers in roll terms, shown signed as they act on the die: T2 "-3" (a roll-under check gets easier). Display only.
   const tierMod = (n) => Number(sys.knowledgeTiers[n] ?? 0);
-  const tierLabel = (n) => `T${n} ${tierMod(n) > 0 ? '−' : '+'}${Math.abs(tierMod(n))}`;
   const tierKeys = [...new Set(['0', ...Object.keys(sys.knowledgeTiers)])].sort((x, y) => x - y);
-  const activeBonus = -d.talents.filter((tl) => tl.enabled).reduce((n, tl) => n + tierMod(tl.tier), 0);
+  const activeBonus = d.talents.filter((tl) => tl.enabled).reduce((n, tl) => n + tierMod(tl.tier), 0);
   const talents = section(t('talents'), h('div', {},
     d.talents.map((tl, i) => {
       const open = openTalents.has(tl);
@@ -659,12 +919,12 @@ function sheetView(a) {
         h('div', { class: 'line' },
           h('input', { type: 'checkbox', title: t('talentActive'), checked: tl.enabled, onchange: (e) => { tl.enabled = e.target.checked; saveActor(a); renderPanel(); } }),
           field(a, tl, 'name', 'text', { class: 'grow', placeholder: t('name') }),
-          (() => { const sel = h('select', { onchange: (e) => { tl.tier = Number(e.target.value); saveActor(a); renderPanel(); } }, tierKeys.map((k) => h('option', { value: k }, tierLabel(k)))); sel.value = tl.tier; return sel; })(),
+          (() => { const sel = h('select', { onchange: (e) => { tl.tier = Number(e.target.value); saveActor(a); renderPanel(); } }, tierKeys.map((k) => h('option', { value: k }, tierLabel(sys.knowledgeTiers, k)))); sel.value = tl.tier; return sel; })(),
           h('button', { class: 'x', title: t('description'), onclick: () => { if (open) openTalents.delete(tl); else openTalents.add(tl); renderPanel(); } }, open ? '▴' : '▾'),
           h('button', { class: 'x', title: t('del'), onclick: () => { d.talents.splice(i, 1); saveActor(a); renderPanel(); } }, '×')),
         open && field(a, tl, 'description', 'area', { rows: 3, placeholder: t('description') }));
     }),
-    h('p', { class: 'hint' }, activeBonus ? `${t('talentsOn')} : ${activeBonus > 0 ? '+' : ''}${activeBonus}` : t('talentHint'))),
+    h('p', { class: 'hint' }, activeBonus ? `${t('talentsOn')} : ${signed(activeBonus)}` : t('talentHint'))),
   h('div', { class: 'addrow' }, h('button', { class: 'add', onclick: () => { const tl = { id: '', name: '', tier: 0, enabled: false, description: '' }; d.talents.push(tl); openTalents.add(tl); saveActor(a); renderPanel(); } }, '+ ' + t('add'))));
 
   const spells = section(t('spells'), h('div', {}, d.spells.map((sp, i) => h('div', { class: 'spell' },
@@ -680,15 +940,17 @@ function sheetView(a) {
     h('div', { class: 'spell-effect' + (sp.locked ? ' locked' : '') },
       field(a, sp, 'effect', 'area', { rows: 2, placeholder: t('effect'), readonly: sp.locked }),
       h('button', { class: 'quiet', title: sp.locked ? t('unlockText') : t('lockText'), onclick: () => { sp.locked = !sp.locked; saveActor(a); renderPanel(); } }, sp.locked ? '✎ ' + t('edit') : '🔒 ' + t('save')))))),
-  h('div', { class: 'addrow' }, h('button', { class: 'add', onclick: () => { d.spells.push({ id: '', name: '', effect: '', cost: 1, costType: 'mp', armed: false, continuous: false, locked: false }); saveActor(a); renderPanel(); } }, '+ ' + t('add')), compPick('spell', (e) => { d.spells.push({ ...e, id: '' }); saveActor(a); renderPanel(); })));
+  h('div', { class: 'addrow' }, h('button', { class: 'add', onclick: (e) => addMenu(e.currentTarget, 'spell', null,
+    () => { d.spells.push({ id: '', name: '', effect: '', cost: 1, costType: 'mp', armed: false, continuous: false, locked: false }); saveActor(a); renderPanel(); },
+    (entry) => { d.spells.push({ ...entry, id: '' }); saveActor(a); renderPanel(); }) }, '+ ' + t('add'))));
 
-  const items = inventoryView({ a, S, field, saveActor, rerender: renderPanel, compBtn, compPick });
+  const items = inventoryView({ a, S, field, saveActor, rerender: renderPanel, compBtn, addMenu, rollButtons: (text) => inline(text, (c) => doRoll(c, a.id)) });
   const money = section(t('currency'), h('div', { class: 'line' }, ['pc', 'pa', 'po'].map((k) => h('label', {}, k.toUpperCase(), field(a, d.currency, k, 'int', { min: 0, class: 'n wide' })))));
   const notes = section(t('notes'), field(a, d, 'notes', 'area', { rows: 6 }));
   const gm = isGM() && section('GM', h('div', { class: 'line' },
     viewScene() && h('button', { onclick: guard(async () => { const c = map.viewCenter(); await api('POST', '/tokens', { sceneId: viewScene().id, actorId: a.id, name: a.name, x: Math.round(c.x), y: Math.round(c.y) }); toast(t('saved'), false); await loadState(); renderAll(); }) }, t('placeToken')),
     h('label', { class: 'check', title: t('npcHint') }, h('input', { type: 'checkbox', checked: a.shown, onchange: guard(async (e) => { Object.assign(a, await api('PATCH', '/actors/' + a.id, { shown: e.target.checked })); }) }), t('shownToPlayers')),
-    h('button', { class: 'danger', onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await api('DELETE', '/actors/' + a.id); }) }, t('del'))));
+    h('button', { class: 'danger', onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await api('DELETE', '/actors/' + a.id); }) }, t('del'))));
   const perms = isGM() && section(t('perms'), permsEditor(a));
   if (a.perm === 'view') return h('div', { class: 'sheet pad' }, // everything visible, nothing editable
     h('button', { class: 'quiet', onclick: () => { S.sheetId = null; renderPanel(); } }, '← ' + t('back')), h('p', { class: 'hint' }, t('viewOnly')),
@@ -745,13 +1007,26 @@ function imageSize(file) {
   return new Promise((res, rej) => { const u = URL.createObjectURL(file), i = new Image(); i.onload = () => { res({ w: i.naturalWidth, h: i.naturalHeight }); URL.revokeObjectURL(u); }; i.onerror = rej; i.src = u; });
 }
 const sceneField = (sc, key, label) => h('label', {}, label, h('input', { type: 'number', class: 'n', value: sc[key], onchange: (e) => sceneEdit({ [key]: Number(e.target.value) }) }));
+/** Exploration memory of a table scene: on / off, and the GM's reset (one player or everyone). */
+function exploreSettings(sc) {
+  const reset = h('select', { title: t('resetExplore'), onchange: guard(async (e) => {
+    const v = e.target.value; e.target.value = '';
+    if (!v || !(await ask(t('confirmResetExplore')))) return;
+    await api('DELETE', `/scenes/${sc.id}/explored${v === 'all' ? '' : '?slot=' + v}`);
+    exploredKey = null; syncExplored(); toast(t('saved'), false);
+  }) }, h('option', { value: '' }, t('resetExplore')), h('option', { value: 'all' }, t('everyone')), S.users.map((u) => h('option', { value: u.id }, u.name)));
+  return h('div', { class: 'line' },
+    h('label', { class: 'check', title: t('exploreHint') }, h('input', { type: 'checkbox', checked: sc.explore, onchange: (e) => { sceneEdit({ explore: e.target.checked }, { undoable: false }); } }), t('exploreMemory')),
+    reset);
+}
 /** Grid, offset, image and clean-up of the scene being viewed (a table scene or a library map). */
 function sceneSettings(sc) {
   return [
     h('div', { class: 'line' }, sceneField(sc, 'grid', t('grid')), sceneField(sc, 'ox', 'X'), sceneField(sc, 'oy', 'Y')),
+    !S.mapMode && exploreSettings(sc),
     h('div', { class: 'line' },
-      h('button', { onclick: () => confirm(t('confirmDel')) && sceneEdit({ walls: [] }) }, t('clearWalls')),
-      h('button', { onclick: () => confirm(t('confirmDel')) && sceneEdit({ lights: [] }) }, t('clearLights')),
+      h('button', { onclick: guard(async () => (await ask(t('confirmDel'))) && sceneEdit({ walls: [] })) }, t('clearWalls')),
+      h('button', { onclick: guard(async () => (await ask(t('confirmDel'))) && sceneEdit({ lights: [] })) }, t('clearLights')),
       h('button', { onclick: () => sceneEdit({ reveal: [] }) }, t('clearReveal'))),
     h('label', {}, t('mapImage'), h('input', { type: 'file', accept: 'image/*', onchange: guard(async (e) => { const f = e.target.files[0]; if (!f) return; const [url, dim] = await Promise.all([upload(f), imageSize(f)]); sceneEdit({ image: url, width: dim.w, height: dim.h }); }) })),
   ];
@@ -793,14 +1068,14 @@ function tablePanel() {
         h('input', { type: 'text', class: 'grow', value: u.name, maxlength: 40, onchange: guard(async (e) => upsert(S.users, await api('PATCH', `/slots/${u.id}`, { name: e.target.value }))) }),
         h('input', { type: 'color', value: u.color, onchange: guard(async (e) => upsert(S.users, await api('PATCH', `/slots/${u.id}`, { color: e.target.value }))) }),
         u.online && h('button', { onclick: guard(() => api('POST', `/slots/${u.id}/kick`)) }, t('kick')),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) await api('DELETE', `/slots/${u.id}`); }) }, '×'))),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if ((await ask(t('confirmDel')))) await api('DELETE', `/slots/${u.id}`); }) }, '×'))),
       h('div', { class: 'line' }, slotName, h('button', { class: 'primary', onclick: addSlot }, '+ ' + t('addPlayer')))),
     h('section', { class: 'sec' }, h('h3', {}, t('scenes')),
       h('ul', { class: 'list' }, S.scenes.map((x) => h('li', { class: 'line' },
         h('button', { class: 'row grow' + (x.id === S.viewId ? ' on' : ''), title: t('view'), onclick: () => { S.viewId = x.id; S.selected = new Set(); renderAll(); } }, h('b', {}, x.name)),
         x.active ? h('span', { class: 'badge success' }, t('active')) : h('button', { onclick: guard(() => api('POST', `/scenes/${x.id}/activate`)) }, t('activate')),
         h('button', { class: 'x', title: t('toLibrary'), onclick: guard(async () => { await request('POST', `/admin/api/scenes/${x.id}/copy`, { table: null }); toast(t('saved'), false); }) }, '⇪'),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) await api('DELETE', '/scenes/' + x.id); }) }, '×')))),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if ((await ask(t('confirmDel')))) await api('DELETE', '/scenes/' + x.id); }) }, '×')))),
       h('div', { class: 'line' }, nameIn, fileIn),
       h('div', { class: 'line' }, h('button', { class: 'primary', onclick: create }, '+ ' + t('newScene')), libraryPicker())),
     sc && h('section', { class: 'sec' }, h('h3', {}, sc.name), sceneSettings(sc),
@@ -836,7 +1111,42 @@ function mapPanel() {
 }
 
 // ------------------------------------------------------------------ token inspector (GM)
+/** GM: the picked wall / door or light, with its properties (presets only set the starting values). */
+function itemInspector(sc) {
+  const p = S.picked, row = (label, control, title) => [h('span', { class: 'k', title }, label), control];
+  const close = () => { S.picked = null; renderInspector(); map.redraw(); };
+  const head = (title) => h('div', { class: 'insp-head' }, h('b', { class: 'grow' }, title), h('button', { class: 'x', title: t('close'), onclick: close }, '×'));
+  if (p.kind === 'wall') {
+    const w = sc.walls[p.index]; if (!w) return null;
+    const set = (k, v) => { const walls = sc.walls.map((s) => s.slice()); walls[p.index][k] = v ? 1 : 0; sceneEdit({ walls }); renderInspector(); };
+    const box = (k) => h('input', { type: 'checkbox', checked: !!w[k], onchange: (e) => set(k, e.target.checked) });
+    return [head(w[4] ? t('toolDoor') : t('wallTitle')),
+      h('div', { class: 'insp-grid' },
+        row(t('isDoor'), box(4)),
+        w[4] ? [row(t('doorOpen'), box(5)), row(t('doorLocked'), box(6), t('doorLockedHint'))]
+          : [row(t('blocksMove'), box(7), t('blocksMoveHint')), row(t('blocksSight'), box(8))]),
+      h('button', { class: 'danger', onclick: () => { sceneEdit({ walls: sc.walls.filter((_, i) => i !== p.index) }); close(); } }, t('del'))];
+  }
+  if (p.kind === 'tp') {
+    const c = (sc.tps ?? []).find((x) => x.id === p.id); if (!c) return null;
+    const set = (group) => { sceneEdit({ tps: sc.tps.map((x) => (x.id === c.id ? { ...x, group } : x)) }); renderInspector(); map.redraw(); };
+    const sel = h('select', { onchange: (e) => set(e.target.value === '+' ? newGroup(sc.tps) : e.target.value) },
+      tpGroups(sc.tps).map(([g, cells]) => h('option', { value: g }, `${t('tpGroup')} ${g} (${cells.length})`)), h('option', { value: '+' }, t('tpNewGroup')));
+    sel.value = c.group;
+    return [head(t('toolTp')), h('p', { class: 'hint' }, t('tpHint')), h('div', { class: 'insp-grid' }, row(t('tpLinked'), sel)),
+      h('button', { class: 'danger', onclick: () => { sceneEdit({ tps: sc.tps.filter((x) => x.id !== c.id) }); close(); } }, t('del'))];
+  }
+  const l = (sc.lights ?? []).find((x) => x.id === p.id); if (!l) return null;
+  const set = (patch) => { sceneEdit({ lights: sc.lights.map((x) => (x.id === l.id ? { ...x, ...patch } : x)) }); renderInspector(); };
+  return [head(l.kind === 'anti' ? t('toolAntiLight') : t('toolLight')),
+    h('div', { class: 'insp-grid' },
+      row(t('radius'), h('input', { type: 'number', class: 'n', min: 0, max: 100, step: 0.5, value: l.radius, onchange: (e) => set({ radius: radiusStep(e.target.value) }) })),
+      l.kind === 'anti' && row(t('playersWin'), h('input', { type: 'checkbox', checked: !!l.playersWin, onchange: (e) => set({ playersWin: e.target.checked }) }), t('playersWinHint'))),
+    h('button', { class: 'danger', onclick: () => { sceneEdit({ lights: sc.lights.filter((x) => x.id !== l.id) }); close(); } }, t('del'))];
+}
 function renderInspector() {
+  const sc = viewScene(), item = isGM() && S.picked && sc ? itemInspector(sc) : null;
+  if (item) { inspectorEl.classList.remove('hidden'); return fill(inspectorEl, item); }
   const tok = isGM() && S.selected.size === 1 ? S.tokens.find((x) => x.id === [...S.selected][0]) : null;
   inspectorEl.classList.toggle('hidden', !tok);
   if (!tok) return inspectorEl.replaceChildren();
@@ -857,7 +1167,7 @@ function renderInspector() {
       row(t('hidden'), flag('hidden')), row(t('sight'), flag('sight'), t('sightHint')),
       row(t('color'), h('input', { type: 'color', value: tok.color, onchange: (e) => patch({ color: e.target.value }) })),
       row(t('tokenImage'), h('label', { class: 'filebtn' }, t('choose'), h('input', { type: 'file', accept: 'image/*', hidden: true, onchange: guard(async (e) => { const f = e.target.files[0]; if (f) patch({ image: await upload(f) }); }) })))),
-    h('button', { class: 'danger', onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await api('DELETE', '/tokens/' + tok.id); remove(S.tokens, tok.id); S.selected = new Set(); renderInspector(); map.redraw(); }) }, t('del')));
+    h('button', { class: 'danger', onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await api('DELETE', '/tokens/' + tok.id); remove(S.tokens, tok.id); S.selected = new Set(); renderInspector(); map.redraw(); }) }, t('del')));
 }
 
 // ------------------------------------------------------------------ journal & handouts
@@ -881,7 +1191,7 @@ function journalView(j) {
     isGM() && h('div', { class: 'line' },
       h('button', { onclick: () => { S.journalEdit = true; renderPanel(); } }, t('edit')),
       h('button', { class: 'primary', onclick: guard(() => api('POST', `/journals/${j.id}/show`)) }, t('showPlayers')),
-      h('button', { class: 'danger', onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await api('DELETE', '/journals/' + j.id); S.journalId = null; }) }, t('del'))),
+      h('button', { class: 'danger', onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await api('DELETE', '/journals/' + j.id); S.journalId = null; }) }, t('del'))),
     journalBody(j));
 }
 function journalForm(j) {
@@ -923,7 +1233,7 @@ function soundPanel() {
     !S.sounds.length && h('p', { class: 'hint' }, t('empty')),
     S.sounds.map((s) => h('div', { class: 'sound' + (isOn(s) ? ' on' : '') },
       h('div', { class: 'line' }, h('input', { type: 'text', class: 'grow', value: s.name, onchange: guard((e) => api('PATCH', '/sounds/' + s.id, { name: e.target.value })) }),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) await api('DELETE', '/sounds/' + s.id); }) }, '×')),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if ((await ask(t('confirmDel')))) await api('DELETE', '/sounds/' + s.id); }) }, '×')),
       h('div', { class: 'line' },
         h('button', { class: 'primary', onclick: guard(() => api('POST', `/sounds/${s.id}/play`)) }, '▶ ' + t('play')),
         h('button', { onclick: guard(() => api('POST', `/sounds/${s.id}/stop`)) }, t('stop')),
@@ -934,12 +1244,12 @@ function soundPanel() {
 // ------------------------------------------------------------------ compendium (GM)
 const CATS = () => [['weapon', t('invWeapons')], ['armor', t('invArmor')], ['consumable', t('invConsumable')], ['bag', t('invBag')], ['other', t('invOther')]];
 let compOpen = new Set(); // ids of entries whose editor is open
-const compEditing = () => compOpen.size > 0 && panelEl.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+const compEditing = () => inPanels(document.activeElement) && (!!document.activeElement.dataset.search || (compOpen.size > 0 && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)));
 /** Players: what their sheets carry changes all the time, so the tab asks the server each time it opens. */
 const refreshComp = guard(async () => {
   if (isGM() && S.compView === 'global') { S.compGlobal = await request('GET', '/admin/api/compendium'); }
   else { const r = await api('GET', '/compendium'); S.compendium = r.entries; S.npcs = r.npcs; }
-  if (S.tab === 'comp') renderPanel();
+  if (shown('comp')) renderPanel('comp');
 });
 const bonusText = (d) => Object.entries(d.bonuses ?? {}).map(([k, v]) => `${S.system?.stats.find((x) => x.id === k)?.label ?? k} ${v > 0 ? '+' : ''}${v}`).join(', ');
 /** One line of facts about an entry (players read it, the GM sees it above the editor). */
@@ -963,6 +1273,7 @@ function entryEditor(e, save) {
         (() => { const sel = h('select', { onchange: (ev) => { d.type = ev.target.value; } }, CATS().map(([k, l]) => h('option', { value: k }, l))); sel.value = d.type ?? 'other'; return sel; })(),
         h('label', {}, t('defP'), num('pdef')), h('label', {}, t('defM'), num('mdef'))),
       h('label', {}, t('slotsExpr'), txt('equipExpr', { class: 'code' })),
+      h('label', {}, t('damage'), txt('damage', { class: 'code grow', placeholder: '[pdmg 2d30 | physique]' })),
       S.system && h('div', { class: 'line' }, S.system.stats.map((st) => h('label', {}, st.label, h('input', { type: 'number', class: 'n', value: d.bonuses?.[st.id] ?? 0,
         oninput: (ev) => { const v = Number(ev.target.value) || 0; d.bonuses ??= {}; if (v) d.bonuses[st.id] = v; else delete d.bonuses[st.id]; } })))),
       h('textarea', { rows: 3, placeholder: t('notes'), oninput: (ev) => { d.notes = ev.target.value; } }, d.notes ?? '')];
@@ -970,23 +1281,35 @@ function entryEditor(e, save) {
     h('input', { type: 'text', class: 'title', value: name, maxlength: 80, oninput: (ev) => { name = ev.target.value; } }),
     fields, h('div', { class: 'line' }, h('button', { class: 'primary', onclick: guard(async () => { await save({ name, data: { ...d, name } }); compOpen.delete(e.id); toast(t('saved'), false); renderPanel(); }) }, t('save'))));
 }
+/** Live name filter shared by every compendium view; keeps the caret where it was across re-renders. */
+let compSearch = '';
+const found = (list) => list.filter((x) => matchesSearch(x.name, compSearch));
+function searchBox() {
+  return h('input', { type: 'search', class: 'search', placeholder: '🔍 ' + t('search'), value: compSearch, 'data-search': '1', oninput: (e) => {
+    compSearch = e.target.value; const pos = e.target.selectionStart;
+    renderPanel('comp', { force: true });
+    const box = $('[data-search]'); if (box) { box.focus(); box.setSelectionRange(pos, pos); }
+  } });
+}
 const byCategory = (entries) => CATS().map(([k, label]) => [label, entries.filter((e) => e.kind === 'item' && e.category === k)]).filter(([, list]) => list.length);
 function compPanel() {
   if (!isGM()) return playerCompendium();
   const sw = h('div', { class: 'line seg' },
     ['table', 'global'].map((v) => h('button', { class: S.compView === v ? 'on' : '', onclick: () => { S.compView = v; compOpen = new Set(); refreshComp(); renderPanel(); } }, v === 'table' ? t('compThis') : t('compGlobal'))));
-  return h('div', { class: 'pad' }, sw, S.compView === 'global' ? globalCompendium() : tableCompendium());
+  return h('div', { class: 'pad' }, sw, searchBox(), S.compView === 'global' ? globalCompendium() : tableCompendium());
 }
 /** Players: items by category, spells, NPCs (name and picture only). Read-only. */
 function playerCompendium() {
   const entry = (e) => h('details', { class: 'entry' }, h('summary', {}, h('b', {}, e.name), h('span', { class: 'dim' }, ' ' + entrySummary(e))),
     e.data.notes && h('p', {}, e.data.notes), e.data.effect && h('p', {}, e.data.effect));
-  const items = byCategory(S.compendium), spells = S.compendium.filter((e) => e.kind === 'spell');
+  const all = found(S.compendium), npcs = found(S.npcs);
+  const items = byCategory(all), spells = all.filter((e) => e.kind === 'spell');
   return h('div', { class: 'pad' },
+    (S.compendium.length > 0 || S.npcs.length > 0) && searchBox(),
     !S.compendium.length && !S.npcs.length && h('p', { class: 'hint' }, t('compPlayerHint')),
     items.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('items')), items.map(([label, list]) => [h('h4', {}, label), list.map(entry)])),
     spells.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('spells')), spells.map(entry)),
-    S.npcs.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('npcs')), h('div', { class: 'npcs' }, S.npcs.map((n) => h('div', { class: 'npc' }, n.portrait ? h('img', { src: n.portrait, alt: '' }) : h('span', { class: 'avatar' }, '?'), h('b', {}, n.name))))));
+    npcs.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('npcs')), h('div', { class: 'npcs' }, npcs.map((n) => h('div', { class: 'npc' }, n.portrait ? h('img', { src: n.portrait, alt: '' }) : h('span', { class: 'avatar' }, '?'), h('b', {}, n.name))))));
 }
 /** GM, this table: edit in place, show to players, update copies whose original changed, NPC list. */
 function tableCompendium() {
@@ -998,14 +1321,14 @@ function tableCompendium() {
         e.auto && h('span', { class: 'badge', title: t('autoHint') }, 'auto'),
         e.source?.stale && h('button', { class: 'primary', title: t('staleCopy'), onclick: guard(async () => { upsert(S.compendium, await api('POST', `/compendium/${e.id}/refresh`)); renderPanel(); }) }, '↻ ' + t('updateCopy')),
         h('label', { class: 'check', title: t('visibleToPlayers') }, h('input', { type: 'checkbox', checked: e.visible, onchange: guard(async (ev) => { upsert(S.compendium, await api('PATCH', '/compendium/' + e.id, { visible: ev.target.checked })); }) }), '👁'),
-        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) { await api('DELETE', '/compendium/' + e.id); remove(S.compendium, e.id); renderPanel(); } }) }, '×')),
+        h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if ((await ask(t('confirmDel')))) { await api('DELETE', '/compendium/' + e.id); remove(S.compendium, e.id); renderPanel(); } }) }, '×')),
       open && entryEditor(e, async (body) => upsert(S.compendium, await api('PATCH', '/compendium/' + e.id, body))));
   };
   const create = (kind, type) => guard(async () => {
     const r = await api('POST', '/compendium', { kind, name: kind === 'spell' ? t('newSpell') : t('newItem'), data: type ? { type } : {} });
     upsert(S.compendium, r); compOpen.add(r.id); renderPanel();
   });
-  const items = S.compendium.filter((e) => e.kind === 'item'), spells = S.compendium.filter((e) => e.kind === 'spell');
+  const items = found(S.compendium).filter((e) => e.kind === 'item'), spells = found(S.compendium).filter((e) => e.kind === 'spell');
   return [
     h('p', { class: 'hint' }, t('compGmHint')),
     h('section', { class: 'sec' }, h('h3', {}, t('items'), h('button', { class: 'quiet', onclick: create('item', 'other') }, '+ ' + t('newItem'))),
@@ -1014,7 +1337,7 @@ function tableCompendium() {
     h('section', { class: 'sec' }, h('h3', {}, t('spells'), h('button', { class: 'quiet', onclick: create('spell') }, '+ ' + t('newSpell'))),
       !spells.length && h('p', { class: 'hint' }, t('empty')), spells.map(row)),
     h('section', { class: 'sec' }, h('h3', {}, t('npcs')), h('p', { class: 'hint' }, t('npcHint')),
-      S.actors.map((a) => h('label', { class: 'line check' }, h('input', { type: 'checkbox', checked: a.shown, onchange: guard(async (ev) => { Object.assign(a, await api('PATCH', '/actors/' + a.id, { shown: ev.target.checked })); }) }),
+      found(S.actors).map((a) => h('label', { class: 'line check' }, h('input', { type: 'checkbox', checked: a.shown, onchange: guard(async (ev) => { Object.assign(a, await api('PATCH', '/actors/' + a.id, { shown: ev.target.checked })); }) }),
         h('b', { class: 'grow' }, a.name), h('span', { class: 'dim' }, `${t('level')} ${a.data.bio.level}`)))),
   ];
 }
@@ -1046,10 +1369,10 @@ function globalCompendium() {
       h('div', { class: 'line' },
         h('button', { class: 'row grow', onclick: () => { if (!outside) return; if (open) compOpen.delete(e.id); else compOpen.add(e.id); renderPanel(); } }, h('b', {}, e.name), tag(e)),
         addHere('/compendium/import', e),
-        outside && h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (confirm(t('confirmDel'))) { await request('DELETE', '/admin/api/compendium/' + e.id); await refreshComp(); } }) }, '×')),
+        outside && h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if ((await ask(t('confirmDel')))) { await request('DELETE', '/admin/api/compendium/' + e.id); await refreshComp(); } }) }, '×')),
       open && entryEditor(e, async (body) => { await request('PATCH', '/admin/api/compendium/' + e.id, { ...body, table: S.table.slug }); await refreshComp(); }));
   };
-  const entries = g.entries.filter(keep), npcs = g.npcs.filter(keep);
+  const entries = found(g.entries.filter(keep)), npcs = found(g.npcs.filter(keep));
   const newCamp = h('select', {}, h('option', { value: '' }, t('noCampaign')), g.campaigns.map((c) => h('option', { value: c.id }, c.name)));
   const create = (kind) => guard(async () => {
     const r = await request('POST', '/admin/api/compendium', { kind, name: kind === 'spell' ? t('newSpell') : t('newItem'), table: S.table.slug, campaignId: newCamp.value ? Number(newCamp.value) : null });
@@ -1089,8 +1412,8 @@ function systemLibrary() {
     h('option', { value: '' }, label), S.savedSystems.map((x) => h('option', { value: x.id }, x.name)));
   const reloadLib = async () => { S.savedSystems = (await request('GET', '/admin/api/systems')).systems; renderPanel(); };
   return h('section', { class: 'sec' }, h('h3', {}, t('systemsLib')), h('div', { class: 'line' },
-    h('button', { onclick: guard(async () => { const name = prompt(t('systemName'), S.system.name); if (!name) return; await request('POST', '/admin/api/systems', { name, table: S.table.slug }); await reloadLib(); toast(t('saved'), false); }) }, t('saveSystemAs')),
-    S.savedSystems.length > 0 && pick(t('updateSystem'), guard(async (id) => { if (!confirm(t('confirmOverwrite'))) return; await request('PATCH', `/admin/api/systems/${id}`, { table: S.table.slug }); await reloadLib(); toast(t('saved'), false); })),
+    h('button', { onclick: guard(async () => { const name = await ask(t('systemName'), { input: S.system.name }); if (!name) return; await request('POST', '/admin/api/systems', { name, table: S.table.slug }); await reloadLib(); toast(t('saved'), false); }) }, t('saveSystemAs')),
+    S.savedSystems.length > 0 && pick(t('updateSystem'), guard(async (id) => { if (!(await ask(t('confirmOverwrite')))) return; await request('PATCH', `/admin/api/systems/${id}`, { table: S.table.slug }); await reloadLib(); toast(t('saved'), false); })),
     S.savedSystems.length > 0 && pick(t('applySystem'), (id) => previewSystem(id))));
 }
 
@@ -1126,7 +1449,7 @@ function systemPanel() {
     h('button', { class: 'x', onclick: () => { delete draft.knowledgeTiers[k]; renderPanel(); } }, '×')));
   return h('div', { class: 'pad' }, systemLibrary(),
     h('div', { class: 'line' }, h('button', { class: 'primary', onclick: save }, t('save')),
-      h('button', { onclick: guard(async () => { if (!confirm(t('confirmDel'))) return; await api('POST', '/system/reset'); S.draft = null; await loadState(); renderAll(); }) }, t('reset')),
+      h('button', { onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await api('POST', '/system/reset'); S.draft = null; await loadState(); renderAll(); }) }, t('reset')),
       h('button', { onclick: () => { const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(draft, null, 2)], { type: 'application/json' })), download: `${draft.id || 'system'}.json` }); a.click(); } }, t('export')),
       h('label', { class: 'filebtn' }, t('import'), h('input', { type: 'file', accept: '.json,application/json', hidden: true, onchange: guard(async (e) => { S.draft = JSON.parse(await e.target.files[0].text()); renderPanel(); }) }))),
     sec(t('formulaTest'), tester),

@@ -59,17 +59,18 @@ test('full session: table, player slot, sheet rights, rolls, apply, undo, favor,
   const tok = await gm('POST', '/tokens', { sceneId: scene.body.id, actorId: hero.body.id, x: 100, y: 100 });
   const dmg = await gm('POST', '/chat', { text: '/tdmg 7' });
   assert.equal(dmg.body.userName, 'MJ');
-  assert.equal((await pip('POST', `/chat/${dmg.body.id}/apply`, { tokenIds: [tok.body.id] })).status, 403);
+  const own = await pip('POST', `/chat/${dmg.body.id}/apply`, { tokenIds: [tok.body.id] }); // the player's own token (edit right)
+  assert.equal(own.status, 200);
+  assert.equal((await pip('POST', `/chat/${dmg.body.id}/undo`, { entryId: own.body.body.applied[0].id })).status, 200);
   const applied = await gm('POST', `/chat/${dmg.body.id}/apply`, { tokenIds: [tok.body.id] });
   assert.equal(applied.body.body.applied[0].dealt, 7);
   const again = await gm('POST', `/chat/${dmg.body.id}/apply`, { tokenIds: [tok.body.id] });
-  assert.equal(again.body.body.applied.length, 2); assert.equal(again.body.body.applied[1].dealt, 7);
+  assert.equal(again.body.body.applied.length, 3); assert.equal(again.body.body.applied[2].dealt, 7);
   const hpOf = async () => (await gm('GET', '/state')).body.actors.find((a) => a.id === hero.body.id).data.hp.cur;
   assert.equal(await hpOf(), 46);
-  const first = again.body.body.applied[0];
-  assert.equal((await pip('POST', `/chat/${dmg.body.id}/undo`, { entryId: first.id })).status, 403); // players cannot undo damage
+  const first = again.body.body.applied[1];
   const undone = await gm('POST', `/chat/${dmg.body.id}/undo`, { entryId: first.id });
-  assert.equal(undone.body.body.applied[0].undone, true); assert.ok(!undone.body.body.applied[1].undone);
+  assert.equal(undone.body.body.applied[1].undone, true); assert.ok(!undone.body.body.applied[2].undone);
   assert.equal(await hpOf(), 53); // only that application is given back
   assert.equal((await gm('POST', `/chat/${dmg.body.id}/undo`, { entryId: first.id })).status, 400); // once
   assert.equal((await gm('POST', `/chat/${dmg.body.id}/undo`, { entryId: 'nope' })).status, 404);
@@ -125,7 +126,7 @@ test('chat: avatars next to names; GM narration with @mentions in one message; p
   const rolled = await pip('POST', '/chat', { text: '/con', actorId: gwen.id });
   assert.equal(rolled.body.body.avatar, up.url);
   assert.equal((await pip('POST', '/chat', { text: '@mj I narrate' })).body.body.t, 'text'); // players: plain text
-  const n = await gm('POST', '/chat', { text: 'Listen.\n@Gwen Hi!\n@Dawn Upper Hello back\n@mj Silence falls.', actorId: dawn.id });
+  const n = await gm('POST', '/chat', { text: 'Listen.\n@Gwen Hi!\n@DawnUpper Hello back\n@mj Silence falls.', actorId: dawn.id });
   assert.equal(n.body.body.t, 'narration');
   assert.deepEqual(n.body.body.parts, [
     { actorId: dawn.id, name: 'Dawn Upper', avatar: null, text: 'Listen.' }, // before any @: the identity chosen in the selector

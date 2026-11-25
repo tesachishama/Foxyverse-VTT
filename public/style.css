@@ -55,7 +55,7 @@ fieldset.readonly { border: 0; padding: 0; margin: 0; min-width: 0; }
 fieldset.readonly .sheet-head > .quiet { display: none; } /* its own back button would be disabled too: a live one sits above */
 
 /* layout */
-#layout { display: grid; grid-template-columns: auto 1fr minmax(320px, 420px); height: 100dvh; } #layout.no-chat { grid-template-columns: 1fr minmax(320px, 420px); }
+#layout { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; height: 100dvh; } #layout.no-chat { grid-template-columns: auto minmax(0, 1fr); }
 #stage { position: relative; min-width: 0; overflow: hidden; }
 #map { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
 .hud { position: absolute; left: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
@@ -72,7 +72,7 @@ fieldset.readonly .sheet-head > .quiet { display: none; } /* its own back button
 .insp-grid .k { color: var(--lilac); font-size: 12px; } .insp-grid select, .insp-grid input[type=text] { width: 100%; box-sizing: border-box; }
 .insp-grid input[type=checkbox], .insp-grid input[type=color] { justify-self: start; } .insp-grid .filebtn { justify-self: start; }
 .sheet-head > button.quiet { justify-self: start; padding-left: 0; }
-#dock { background: var(--plum); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+#dock { background: var(--plum); display: flex; flex-direction: column; min-height: 0; }
 .tabs { display: flex; align-items: center; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--line); }
 .tabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 7px 8px; color: var(--lilac); white-space: nowrap; }
 .tabs button.quiet { padding: 7px 5px; font-size: 12px; }
@@ -92,7 +92,9 @@ fieldset.readonly .sheet-head > .quiet { display: none; } /* its own back button
 .msg.roll { background: var(--void); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; }
 .roll-head { font-family: var(--serif); font-size: 15px; } .formula { color: var(--lilac); font-size: 12px; }
 .res { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; }
-.dice { display: inline-flex; flex-wrap: wrap; gap: 4px; } .dgroup { display: inline-flex; gap: 2px; }
+/* long rolls (30d6...) wrap onto new lines instead of running out of the chat */
+.dice { display: inline-flex; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; } .dgroup { display: inline-flex; flex-wrap: wrap; gap: 2px; min-width: 0; max-width: 100%; }
+.formula, .applied { overflow-wrap: anywhere; } .msg.roll > *, .chat-list > * { min-width: 0; }
 .die { min-width: 22px; text-align: center; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; }
 .die.nat1 { border-color: var(--gold); color: var(--gold); } .die.nat20 { border-color: var(--bad); color: var(--bad); }
 .total { font: 600 26px/1 var(--serif); } .target { color: var(--lilac); }
@@ -128,13 +130,13 @@ details { border-bottom: 1px solid var(--line); padding: 6px 0; } summary { curs
 
 @media (max-width: 760px) {
   #layout, #layout.no-chat { grid-template-columns: 1fr; grid-template-rows: 40dvh 30dvh 1fr; }
-  #chatpane, #chatpane.dynamic { width: auto; order: 2; border-right: 0; border-top: 1px solid var(--line); } #stage { order: 1; } #dock { order: 3; }
-  #chatpane.dynamic .chat-wrap { position: static; transform: none; width: auto; } #chatpane .strip { display: none !important; }
-  #dock { border-left: 0; border-top: 1px solid var(--line); }
+  .side, .side.dynamic { width: auto !important; border: 0 !important; border-top: 1px solid var(--line) !important; }
+  #chatpane { order: 2; } #stage { order: 1; } #dockpane { order: 3; }
+  .side.dynamic .side-wrap { position: static; transform: none; width: auto; } .side .strip { display: none !important; }
 }
 
 /* v2 additions */
-.tabs { overflow-x: auto; scrollbar-width: thin; } .tabs button { flex: none; }
+
 .dock-foot { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--line); }
 .dock-foot input[type=range] { width: 90px; accent-color: var(--ember); } .dock-foot .spacer { flex: 1; }
 button.on { outline: 1px solid var(--ember); } .row.on b { color: var(--ember); }
@@ -213,13 +215,16 @@ button.avatar { padding: 0; }
 .filebtn.primary { background: var(--ember); border-color: var(--ember); color: #2a0019; font-weight: 600; }
 .modal-card.crop { max-width: 380px; display: grid; gap: 8px; justify-items: center; } .crop-canvas { cursor: grab; touch-action: none; }
 
-/* chat pane (left of the map) */
-#chatpane { position: relative; width: 340px; background: var(--plum); border-right: 2px solid var(--line); display: flex; flex-direction: column; min-height: 0; z-index: 5; }
-#chatpane .chat-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--plum); }
-#chatpane.dynamic { width: 44px; }
-#chatpane.dynamic .chat-wrap { position: absolute; left: 0; top: 0; bottom: 0; width: 340px; border-right: 2px solid var(--lilac); box-shadow: 6px 0 18px rgba(0, 0, 0, .45); transform: translateX(-105%); transition: transform .18s ease; }
-#chatpane.dynamic.open .chat-wrap { transform: none; }
-#chatpane .strip { display: none; } #chatpane.dynamic .strip { display: flex; flex-direction: column; align-items: center; padding-top: 12px; gap: 8px; height: 100%; cursor: pointer; }
+/* the two sides: tabs + panels on the left, chat on the right. Pinned, or "dynamic": a strip that opens over the map on hover / focus */
+.side { position: relative; background: var(--plum); display: flex; flex-direction: column; min-height: 0; z-index: 5; }
+#dockpane { width: 400px; border-right: 2px solid var(--line); } #chatpane { width: 340px; border-left: 2px solid var(--line); }
+.side-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--plum); }
+.side.dynamic { width: 44px !important; }
+.side.dynamic .side-wrap { position: absolute; top: 0; bottom: 0; transition: transform .18s ease; box-shadow: 0 0 18px rgba(0, 0, 0, .45); }
+.side.left.dynamic .side-wrap { left: 0; width: 400px; border-right: 2px solid var(--lilac); transform: translateX(-105%); }
+.side.right.dynamic .side-wrap { right: 0; width: 340px; border-left: 2px solid var(--lilac); transform: translateX(105%); }
+.side.dynamic.open .side-wrap { transform: none; }
+.side .strip { display: none; } .side.dynamic .strip { display: flex; flex-direction: column; align-items: center; padding-top: 12px; gap: 10px; height: 100%; cursor: pointer; color: var(--lilac); }
 .chat-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .chat-bar { position: relative; display: grid; gap: 6px; } .chat-bar .who { max-width: none; }
 textarea.chat-input { resize: none; min-height: 34px; max-height: 180px; line-height: 1.35; }
@@ -281,3 +286,39 @@ button.on { outline: 0; background: var(--blush); border-color: var(--blush); co
 .tools button.on, .seg button.on { background: var(--blush); border-color: var(--blush); color: var(--plum); }
 .row.on b { color: var(--blush); } .sound.on, .inv-item.on { border-color: var(--lilac); box-shadow: inset 3px 0 0 var(--lilac); }
 .suggest button.on { background: var(--raised); color: var(--blush); border: 0; }
+
+/* ROADMAP 2 — sheet "+" window, compendium search, weapon damage line */
+.add-menu { position: fixed; z-index: 31; width: 290px; max-height: 60vh; overflow-y: auto; background: var(--plum); border: 2px solid var(--lilac); border-radius: 16px;
+  padding: 8px; display: grid; gap: 6px; box-shadow: 0 6px 24px rgba(0, 0, 0, .5); }
+.add-menu-title { font: 600 14px var(--serif); color: var(--lilac); text-align: center; margin-top: 2px; }
+.add-results { display: grid; gap: 4px; } .add-results button { text-align: left; border-radius: 12px; font-weight: 400; overflow-wrap: anywhere; }
+.add-results .hint { margin: 2px 4px; font-size: 12px; }
+input.search { width: 100%; margin: 0 0 8px; }
+.inv-damage { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0 0 26px; }
+.inv-damage-edit { display: flex; gap: 6px; }
+
+/* ROADMAP 2 — tabs on one or two lines (never scrolling), each a rounded-top box; the active one can pop out (⧉) */
+.tabs { display: grid; grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr)); gap: 4px 4px; overflow: visible; padding: 8px 8px 0; }
+.tabs .tab { display: flex; align-items: stretch; min-width: 0; border: 2px solid var(--lilac); border-bottom: 0; border-radius: 14px 14px 0 0; color: var(--lilac); }
+.tabs .tab button { background: transparent; border: 0; border-radius: 12px 12px 0 0; color: inherit; font-weight: 600; padding: 4px 6px; min-width: 0; }
+.tabs .tab .tab-main { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; overflow: hidden; }
+.tabs .tab .tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tabs .tab:hover { background: var(--raised); color: var(--blush); }
+.tabs .tab.on { background: var(--blush); border-color: var(--blush); color: var(--plum); }
+.tabs .tab.floating { border-style: dashed; opacity: .75; }
+.tabs .tab .tab-pop { flex: none; padding: 0 7px; font-size: 13px; opacity: .8; } .tabs .tab .tab-pop:hover { opacity: 1; background: rgba(75, 0, 44, .15); }
+.dock-foot .side-toggle, .chat-head .side-toggle { padding: 0 8px; font-size: 15px; }
+
+/* floating tab windows: drag by the title bar, resize from the corner */
+.float-win { position: fixed; z-index: 15; display: flex; flex-direction: column; min-width: 260px; min-height: 180px; background: var(--plum);
+  border: 2px solid var(--lilac); border-radius: 16px; box-shadow: 0 10px 32px rgba(0, 0, 0, .55); resize: both; overflow: hidden; }
+.float-head { display: flex; align-items: center; gap: 6px; padding: 5px 8px 5px 12px; border-bottom: 2px solid var(--lilac); cursor: move; user-select: none; touch-action: none; color: var(--blush); }
+.float-body { flex: 1; min-height: 0; overflow-y: auto; }
+
+/* folded chat: new messages show alone as bubbles over the map, right side, under where the chat opens */
+.bubbles { position: absolute; right: 10px; bottom: 16px; width: 280px; max-width: calc(100% - 20px); display: flex; flex-direction: column; gap: 6px; z-index: 6; pointer-events: none; }
+.bubble { pointer-events: auto; background: var(--plum); border: 2px solid var(--lilac); border-radius: 16px; padding: 4px; box-shadow: 0 4px 16px rgba(0, 0, 0, .5); animation: bubble-in .18s ease; }
+.bubble .msg { border: 0; } .bubble .msg .x { display: none; }
+@keyframes bubble-in { from { opacity: 0; transform: translateY(8px); } }
+/* the inspector sits on the right of the map, under the scene bar, so it never hides what it edits near the tools */
+.inspector { left: auto; right: 10px; top: 64px; }
