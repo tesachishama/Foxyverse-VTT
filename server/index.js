@@ -5,11 +5,11 @@
 //   /admin/api/...  the GM: every table (/admin/api/t/<slug>/...), the map library, table management.
 // The app has no GM accounts: whoever reaches /admin is the GM. ADMIN_SECRET makes sure nobody reaches it around the proxy.
 import { createServer } from 'node:http';
-import { existsSync, writeFileSync, createReadStream, statSync, readdirSync } from 'node:fs';
+import { existsSync, writeFileSync, createReadStream, createWriteStream, statSync, readdirSync, readFileSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { join, dirname, extname, sep, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
-import { db, UPLOAD_DIR, getSystem, setSystem, forgetSystem, loadDefaultSystem } from './db.js';
+import { db, UPLOAD_DIR, DATA_DIR, getSystem, setSystem, forgetSystem, loadDefaultSystem } from './db.js';
 import { parseCommand, evaluate, evaluateStatic, FormulaError } from './engine.js';
 import { validateSystem, defaultActorData, sanitizeActorData, actorContext, pointBudget, executeRoll, applyRoll, castSpell, undoApply, tokenImage, resourceMaxes, followMax, fillResources } from './rules.js';
 import { logServerError } from './log.js';
@@ -20,6 +20,7 @@ import { exploreDims } from '../public/vision.js';
 import { ghostStart } from '../public/tp.js';
 import { youtubeId, youtubeUrl } from '../public/media.js';
 import { cleanGroup, cleanTags } from '../public/sounds.js';
+import { zipWriter, openZip, ZipError } from './zip.js';
 
 const PORT = process.env.PORT === '0' ? 0 : Number(process.env.PORT) || 3000; // 0: any free port (tests)
 const HOST = process.env.HOST || '0.0.0.0';
@@ -209,7 +210,7 @@ const isAdminPath = (p) => p === '/admin' || p.startsWith('/admin/');
 const routes = [];
 function addRoute(method, pattern, scope, handler) {
   const keys = []; const re = new RegExp('^' + pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return '([^/]+)'; }) + '$');
-  routes.push({ method, re, keys, scope, handler, raw: pattern.endsWith('/upload') });
+  routes.push({ method, re, keys, scope, handler, raw: pattern.endsWith('/upload') || pattern.endsWith('/archive') }); // raw: the body is a file, read by the handler
 }
 const pub = (m, p, fn) => addRoute(m, '/api' + p, 'public', fn);
 const admin = (m, p, fn) => addRoute(m, '/admin/api' + p, 'admin', fn);
@@ -1115,6 +1116,289 @@ tbl('GET', '/system/diff/:id', 'gm', ({ table, params }) => {
 tbl('POST', '/system/apply/:id', 'gm', ({ table, params }) => {
   let sys; try { sys = validateSystem(jparse(savedSystem(params.id).data, {})); } catch (e) { throw bad(e.message); }
   return changeSystem(table, sys);
+});
+
+// ------------------------------------------------------------------ ROADMAP 3 §5: table backups and campaign packs
+// One ZIP file (server/zip.js), read and written in streams:
+//   manifest.json  { format: "foxyverse-vtt", formatVersion, kind: "table" | "pack", name, created, appVersion }
+//   data.json      everything else (see tableData / packData)
+//   files/<sha256>.<ext>  every uploaded file the data points to (maps, portraits, tokens, handouts, sounds)
+// formatVersion goes up when the content changes in a way an older server cannot read: a newer file is refused with a clear message.
+const FORMAT = 'foxyverse-vtt', FORMAT_VERSION = 1;
+const APP_VERSION = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8')).version;
+const TMP_DIR = join(DATA_DIR, 'tmp');
+const MAX_IMPORT = (Number(process.env.IMPORT_MAX_MB) || 4096) * 1024 * 1024;
+const UPLOAD_FILE = /^[a-f0-9]{64}\.(png|jpg|webp|gif|mp3|ogg|wav|m4a|flac|webm)$/;
+/** The uploaded files a piece of data points to. */
+const filesIn = (obj) => [...new Set([...JSON.stringify(obj).matchAll(/\/uploads\/([a-f0-9]{64}\.(?:png|jpg|webp|gif|mp3|ogg|wav|m4a|flac|webm))/g)].map((m) => m[1]))];
+/** fn(), or fallback when it throws (one bad field never stops an import). */
+const safe = (fn, fallback = null) => { try { return fn(); } catch { return fallback; } };
+const campaignRefs = (ids) => [...new Set(ids.filter((x) => x != null))].map((id) => getRow('campaigns', id)).filter(Boolean).map((c) => ({ id: c.id, name: c.name }));
+
+async function sendArchive(res, filename, kind, name, data) {
+  res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${filename.replace(/[^\w.-]/g, '_')}"`, 'Cache-Control': 'no-store' });
+  const z = zipWriter(res);
+  await z.add('manifest.json', Buffer.from(JSON.stringify({ format: FORMAT, formatVersion: FORMAT_VERSION, kind, name, created: new Date().toISOString(), appVersion: APP_VERSION }, null, 2)));
+  await z.add('data.json', Buffer.from(JSON.stringify(data)));
+  for (const f of filesIn(data)) if (existsSync(join(UPLOAD_DIR, f))) await z.addFile('files/' + f, join(UPLOAD_DIR, f), { level: 1 });
+  await z.finish();
+  res.end();
+  return STREAM;
+}
+/** The request body, streamed into a temporary file (an archive can hold big maps and sounds). */
+function receiveArchive(req) {
+  mkdirSync(TMP_DIR, { recursive: true });
+  const path = join(TMP_DIR, randomBytes(8).toString('hex') + '.zip');
+  return new Promise((resolve, reject) => {
+    const out = createWriteStream(path); let size = 0, failed = false;
+    const fail = (e) => { if (failed) return; failed = true; out.destroy(); rmSync(path, { force: true }); reject(e); };
+    req.on('data', (c) => { size += c.length; if (size > MAX_IMPORT) { fail(Object.assign(new HttpError(413, 'File too large'), { cut: true })); req.destroy(); } });
+    req.on('error', fail); out.on('error', fail);
+    req.pipe(out);
+    out.on('finish', () => { if (!failed) resolve(path); });
+  });
+}
+/** Open, check and unpack an archive: the files go to the uploads (each checked against its name's hash and type). Returns data.json. */
+async function readArchive(path, kind) {
+  let zip;
+  try { zip = await openZip(path); } catch (e) { throw bad(e instanceof ZipError ? 'This file is not a Foxyverse VTT archive (or it is damaged)' : e.message); }
+  try {
+    if (!zip.has('manifest.json')) throw bad('This file is not a Foxyverse VTT archive (no manifest)');
+    let m; try { m = JSON.parse((await zip.buffer('manifest.json', 64 * 1024)).toString('utf8')); } catch { throw bad('Damaged archive: unreadable manifest'); }
+    if (m?.format !== FORMAT) throw bad('This file is not a Foxyverse VTT archive');
+    if (!Number.isInteger(m.formatVersion) || m.formatVersion < 1) throw bad('Damaged archive: unknown format version');
+    if (m.formatVersion > FORMAT_VERSION) throw bad(`This file was made by a newer Foxyverse VTT (format ${m.formatVersion}; this server reads up to ${FORMAT_VERSION}). Update the server first.`);
+    if (m.kind !== kind) throw bad(kind === 'table' ? 'This is a campaign pack, not a table backup: import it from a table (Table tab)' : 'This is a table backup, not a campaign pack: import it from the GM home');
+    let data; try { data = JSON.parse((await zip.buffer('data.json')).toString('utf8')); } catch (e) { throw e instanceof ZipError ? e : bad('Damaged archive: unreadable data'); }
+    if (!data || typeof data !== 'object') throw bad('Damaged archive: no data');
+    for (const name of zip.names) {
+      const f = name.startsWith('files/') ? name.slice(6) : null; if (!f || !UPLOAD_FILE.test(f)) continue;
+      const dest = join(UPLOAD_DIR, f); if (existsSync(dest)) continue; // the same content is already here
+      const tmp = `${dest}.part-${randomBytes(4).toString('hex')}`, hash = createHash('sha256'); let head = null;
+      try {
+        await zip.extract(name, tmp, { max: Math.max(MAX_UPLOAD, MAX_AUDIO), onChunk: (c) => { hash.update(c); head ??= c; } });
+        const ext = f.split('.')[1];
+        if (hash.digest('hex') !== f.slice(0, 64) || !head || !SNIFF[ext](head)) throw new ZipError(`${f} does not match its name or type`);
+        renameSync(tmp, dest);
+      } finally { rmSync(tmp, { force: true }); }
+    }
+    return { manifest: m, data };
+  } catch (e) {
+    if (e instanceof ZipError) throw bad('Damaged archive: ' + e.message);
+    throw e;
+  } finally { await zip.close(); }
+}
+/** Campaigns of an archive, matched by name with this server's (created when missing). Returns old id -> local id. */
+function mapCampaigns(refs) {
+  const map = new Map();
+  for (const c of Array.isArray(refs) ? refs : []) {
+    const name = campaignName(c?.name, ''); if (!name) continue;
+    const found = db.prepare('SELECT id FROM campaigns WHERE lower(name) = lower(?)').get(name);
+    map.set(c.id, found?.id ?? Number(db.prepare('INSERT INTO campaigns (name, created) VALUES (?,?)').run(name, now()).lastInsertRowid));
+  }
+  return map;
+}
+/** A free address and name for an imported table: "-2", "(2)"... when taken. */
+function freeSlug(want) {
+  let base = String(want ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 34) || 'table';
+  if (RESERVED.has(base)) base += '-t';
+  if (!tableBySlug(base)) return base;
+  for (let n = 2; ; n++) if (!tableBySlug(`${base}-${n}`)) return `${base}-${n}`;
+}
+function freeTableName(want) {
+  const base = tableName(want, 'Table'), taken = (n) => !!db.prepare('SELECT 1 FROM game_tables WHERE lower(name) = lower(?)').get(n);
+  if (!taken(base)) return base;
+  for (let n = 2; ; n++) { const x = `${base.slice(0, 54)} (${n})`; if (!taken(x)) return x; }
+}
+const soundSource = (url) => { const yt = youtubeId(url); return yt ? youtubeUrl(yt) : audioUrl(url); };
+
+/** Everything of a table (a full backup). Exploration memories and who is connected are not part of it. */
+function tableData(table) {
+  const all = (sql) => db.prepare(sql).all(table.id);
+  const actors = all('SELECT * FROM actors WHERE table_id = ? ORDER BY id'), journals = all('SELECT * FROM journals WHERE table_id = ? ORDER BY id');
+  const comp = all('SELECT * FROM compendium WHERE table_id = ? ORDER BY id');
+  return {
+    table: { name: table.name, slug: table.slug, listed: !!table.listed, campaignId: table.campaign_id ?? null },
+    campaigns: campaignRefs([table.campaign_id, ...actors.map((a) => a.campaign_id), ...journals.map((j) => j.campaign_id), ...comp.map((c) => c.campaign_id)]),
+    system: getSystem(table.id),
+    slots: slotsOf(table.id).map((s) => ({ id: s.id, name: s.name, color: s.color })),
+    scenes: all('SELECT * FROM scenes WHERE table_id = ? ORDER BY id').map(sceneView),
+    tokens: all('SELECT t.* FROM tokens t JOIN scenes s ON s.id = t.scene_id WHERE s.table_id = ? ORDER BY t.id').map((t) => ({ id: t.id, sceneId: t.scene_id, actorId: t.actor_id, name: t.name, x: t.x, y: t.y, size: t.size,
+      image: t.image, color: t.color, hidden: !!t.hidden, vision: t.vision, light: t.light, sight: !!t.sight, life: t.life ?? 'auto' })),
+    actors: actors.map((a) => ({ id: a.id, name: a.name, data: jparse(a.data, {}), alias: a.alias, aliasAuto: !!a.alias_auto, shown: !!a.shown, campaignId: a.campaign_id ?? null, perms: permsOf(a.id) })),
+    chat: all('SELECT * FROM chat WHERE table_id = ? ORDER BY id').map((m) => ({ userId: m.user_id, userName: m.user_name, actorId: m.actor_id, whisper: m.whisper, body: jparse(m.body, {}), ts: m.ts })),
+    journals: journals.map((j) => ({ id: j.id, title: j.title, body: j.body, image: j.image, visibility: jparse(j.visibility, 'gm'), campaignId: j.campaign_id ?? null, created: j.created, updated: j.updated })),
+    compendium: comp.map((c) => ({ id: c.id, kind: c.kind, name: c.name, data: jparse(c.data, {}), visible: !!c.visible, auto: !!c.auto, campaignId: c.campaign_id ?? null, sourceId: c.source_id, sourceUpdated: c.source_updated, created: c.created, updated: c.updated })),
+    sounds: all('SELECT * FROM sounds WHERE table_id = ? ORDER BY id').map((s) => ({ name: s.name, url: s.url, loop: !!s.loop, volume: s.volume, group: s.grp ?? '', subgroup: s.subgrp ?? '', tags: jparse(s.tags, []), created: s.created })),
+  };
+}
+const list = (v) => (Array.isArray(v) ? v : []);
+/** Sheets of an archive into a table: sanitised, with fresh unique aliases. Returns old id -> new id. */
+function insertActors(tableId, sys, actors, campOf, { keepShown = true } = {}) {
+  const map = new Map(), t = now();
+  for (const a of list(actors)) {
+    const name = String(a?.name ?? 'Character').slice(0, 80) || 'Character', data = sanitizeActorData(a?.data, sys);
+    const r = db.prepare('INSERT INTO actors (table_id, name, owner_id, data, created, updated, campaign_id, alias, alias_auto, shown) VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .run(tableId, name, null, JSON.stringify(data), t, t, campOf(a?.campaignId), uniqueAlias(aliasFrom(a?.alias ?? '') || name, aliasesOf(tableId)), a?.aliasAuto === false ? 0 : 1, keepShown && a?.shown ? 1 : 0);
+    map.set(a?.id, Number(r.lastInsertRowid));
+  }
+  return map;
+}
+function insertJournal(tableId, j, visibility, campaign) {
+  const t = now();
+  db.prepare('INSERT INTO journals (table_id, title, body, image, visibility, created, updated, campaign_id) VALUES (?,?,?,?,?,?,?,?)')
+    .run(tableId, String(j?.title ?? 'Untitled').slice(0, 120) || 'Untitled', String(j?.body ?? '').slice(0, 50000), safe(() => imgUrl(j?.image)), JSON.stringify(visibility), Number(j?.created) || t, Number(j?.updated) || t, campaign);
+}
+function insertSound(tableId, s) {
+  const url = safe(() => soundSource(s?.url)); if (!url) return;
+  const grp = cleanGroup(s?.group);
+  db.prepare('INSERT INTO sounds (table_id, name, url, loop, volume, created, grp, subgrp, tags) VALUES (?,?,?,?,?,?,?,?,?)').run(tableId, String(s?.name ?? 'Sound').slice(0, 80) || 'Sound', url, s?.loop ? 1 : 0,
+    Math.min(1, Math.max(0, num(s?.volume, 1))), Number(s?.created) || now(), grp, grp ? cleanGroup(s?.subgroup) : '', JSON.stringify(cleanTags(s?.tags)));
+}
+/** A compendium entry's original, when it exists on this server (same kind and name): the copy remembers it. */
+const localSource = (id, kind, name) => { const src = id != null ? getRow('compendium', id) : null; return src && src.kind === kind && compKey(src.name) === compKey(name) ? src : null; };
+
+/** A table backup into a new table; every id is remapped (slots, scenes, sheets, tokens, chat, journal visibility). */
+function importTable(d, { name, slug }) {
+  let sys; try { sys = validateSystem(d.system); } catch (e) { throw bad('Damaged archive: invalid rules (' + e.message + ')'); }
+  db.exec('BEGIN');
+  try {
+    const campMap = mapCampaigns(d.campaigns), campOf = (id) => campMap.get(id) ?? null;
+    const tSlug = freeSlug(slug || d.table?.slug), tName = freeTableName(name || d.table?.name || tSlug);
+    const tableId = Number(db.prepare('INSERT INTO game_tables (slug, name, listed, system, created, campaign_id) VALUES (?,?,?,?,?,?)').run(tSlug, tName, d.table?.listed === false ? 0 : 1, JSON.stringify(sys), now(), campOf(d.table?.campaignId)).lastInsertRowid);
+    const slotMap = new Map();
+    for (const s of list(d.slots)) slotMap.set(s?.id, Number(db.prepare('INSERT INTO slots (table_id, name, color, created) VALUES (?,?,?,?)').run(tableId, slotName(s?.name, 'Player'), color(s?.color), now()).lastInsertRowid));
+    const sceneMap = new Map();
+    for (const s of list(d.scenes)) {
+      const f = sceneFields({ ...s, image: safe(() => imgUrl(s?.image)) });
+      const r = db.prepare('INSERT INTO scenes (table_id, name, image, width, height, grid, ox, oy, active, created, fog, dark, walls, lights, reveal, shared, explore, tps) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(tableId, f.name, f.image, f.width, f.height, f.grid, f.ox, f.oy, s?.active ? 1 : 0, now(), f.fog, f.dark, f.walls, f.lights, f.reveal, f.shared, f.explore, f.tps);
+      sceneMap.set(s?.id, Number(r.lastInsertRowid));
+    }
+    if (sceneMap.size && !db.prepare('SELECT 1 FROM scenes WHERE table_id = ? AND active = 1').get(tableId)) db.prepare('UPDATE scenes SET active = 1 WHERE id = ?').run([...sceneMap.values()][0]);
+    const actorMap = insertActors(tableId, sys, d.actors, campOf);
+    for (const a of list(d.actors)) for (const [sid, lvl] of Object.entries(a?.perms ?? {})) {
+      const slot = slotMap.get(Number(sid)), actor = actorMap.get(a?.id);
+      if (slot && actor && PERM_LEVELS.includes(lvl)) db.prepare('INSERT OR IGNORE INTO actor_perms (actor_id, slot_id, level) VALUES (?,?,?)').run(actor, slot, lvl);
+    }
+    for (const t of list(d.tokens)) {
+      const scene = sceneMap.get(t?.sceneId); if (!scene) continue;
+      db.prepare('INSERT INTO tokens (scene_id, name, x, y, size, image, color, actor_id, hidden, vision, light, sight, life) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(scene, String(t?.name ?? 'Token').slice(0, 60), num(t?.x), num(t?.y),
+        Math.min(10, Math.max(0.25, num(t?.size, 1))), safe(() => imgUrl(t?.image)), color(t?.color), actorMap.get(t?.actorId) ?? null, t?.hidden ? 1 : 0,
+        Math.min(100, Math.max(0, num(t?.vision, 100))), Math.min(100, Math.max(0, num(t?.light, 0))), t?.sight ? 1 : 0, ['dead', 'alive'].includes(t?.life) ? t.life : 'auto');
+    }
+    const remapActor = (id) => (id == null ? null : actorMap.get(id) ?? null);
+    for (const m of list(d.chat).slice(-5000)) {
+      const body = m?.body && typeof m.body === 'object' ? structuredClone(m.body) : { t: 'info', text: '' };
+      for (const p of list(body.parts)) if (p && 'actorId' in p) p.actorId = remapActor(p.actorId);
+      for (const a of list(body.applied)) if (a && 'actorId' in a) a.actorId = remapActor(a.actorId);
+      const text = JSON.stringify(body); if (text.length > 200_000) continue;
+      const user = m?.userId === 0 ? 0 : slotMap.get(m?.userId) ?? null;
+      db.prepare('INSERT INTO chat (table_id, user_id, user_name, actor_id, whisper, body, ts) VALUES (?,?,?,?,?,?,?)').run(tableId, user, String(m?.userName ?? '?').slice(0, 60), remapActor(m?.actorId), m?.whisper === 'gm' ? 'gm' : null, text, Number(m?.ts) || now());
+    }
+    for (const j of list(d.journals)) {
+      const v = cleanVis(j?.visibility);
+      insertJournal(tableId, j, Array.isArray(v) ? v.map((id) => slotMap.get(id)).filter(Boolean) : v, campOf(j?.campaignId));
+    }
+    const seen = new Set();
+    for (const c of list(d.compendium)) {
+      const data = safe(() => cleanComp(sys, c?.kind, c?.data)); if (!data) continue;
+      const cname = compName(c?.name, 'Entry'), key = `${c.kind}:${compKey(cname)}`; if (seen.has(key)) continue; seen.add(key);
+      const src = c?.sourceId != null ? localSource(c.sourceId, c.kind, cname) : null;
+      insertComp(tableId, c.kind, cname, data, { visible: c?.visible, auto: c?.auto, campaignId: campOf(c?.campaignId), sourceId: src?.id ?? null, sourceUpdated: src ? Number(c?.sourceUpdated) || null : null });
+    }
+    for (const s of list(d.sounds)) insertSound(tableId, s);
+    db.exec('COMMIT');
+    return adminTableView(getRow('game_tables', tableId));
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+}
+admin('GET', '/tables/:slug/archive', ({ res, params }) => {
+  const t = tableBySlug(params.slug); if (!t) throw notFound();
+  return sendArchive(res, `${t.slug}-${new Date().toISOString().slice(0, 10)}.zip`, 'table', t.name, tableData(t));
+});
+admin('POST', '/tables/archive', async ({ req, url }) => {
+  const path = await receiveArchive(req);
+  try {
+    const { data } = await readArchive(path, 'table');
+    const made = importTable(data, { name: url.searchParams.get('name'), slug: url.searchParams.get('slug') });
+    syncCompendium(tableBySlug(made.slug));
+    return made;
+  } finally { rmSync(path, { force: true }); }
+});
+
+// ---- campaign packs: the GM picks what goes in among what the campaign holds; imported into a table, everything is copied there
+const ids = (v) => new Set(list(v).map(idOf));
+function campaignContents(c) {
+  const tables = db.prepare('SELECT id, slug, name FROM game_tables WHERE campaign_id = ?').all(c.id), tIds = tables.map((t) => t.id);
+  const inT = (sql) => (tIds.length ? db.prepare(sql.replace('(?)', `(${tIds.map(() => '?').join(',')})`)).all(...tIds) : []);
+  const sys = c.system_id ? getRow('systems', c.system_id) : null;
+  const comp = db.prepare('SELECT * FROM compendium WHERE campaign_id = ? ORDER BY kind, name COLLATE NOCASE').all(c.id);
+  return {
+    campaign: campaignView(c), system: sys ? { id: sys.id, name: sys.name } : null,
+    items: comp.filter((x) => x.kind === 'item'), spells: comp.filter((x) => x.kind === 'spell'),
+    actors: db.prepare('SELECT * FROM actors WHERE campaign_id = ? ORDER BY name COLLATE NOCASE').all(c.id),
+    scenes: inT('SELECT * FROM scenes WHERE table_id IN (?) ORDER BY name COLLATE NOCASE'),
+    journals: db.prepare('SELECT * FROM journals WHERE campaign_id = ? ORDER BY title COLLATE NOCASE').all(c.id),
+    sounds: inT('SELECT * FROM sounds WHERE table_id IN (?) ORDER BY name COLLATE NOCASE'),
+  };
+}
+const brief = (rows, label = (r) => r.name) => rows.map((r) => ({ id: r.id, name: label(r), table: slugOf(r.table_id) }));
+admin('GET', '/campaigns/:id/contents', ({ params }) => {
+  const c = getRow('campaigns', params.id); if (!c) throw notFound();
+  const x = campaignContents(c);
+  return { campaign: x.campaign, system: x.system, items: brief(x.items), spells: brief(x.spells), actors: brief(x.actors), scenes: brief(x.scenes), journals: brief(x.journals, (j) => j.title), sounds: brief(x.sounds) };
+});
+admin('POST', '/packs', ({ res, body }) => {
+  const c = getRow('campaigns', body.campaignId); if (!c) throw bad('Unknown campaign');
+  const x = campaignContents(c), pick = (rows, key) => { const want = ids(body[key]); return rows.filter((r) => want.has(r.id)); };
+  const sys = body.system && x.system ? safe(() => validateSystem(jparse(getRow('systems', x.system.id).data, {}))) : null;
+  const scenes = pick(x.scenes, 'scenes'), comp = [...pick(x.items, 'items'), ...pick(x.spells, 'spells')];
+  const data = {
+    name: String(body.name ?? c.name).slice(0, 60) || c.name, campaign: { name: c.name }, system: sys, // a pack never holds chat or player slots
+    compendium: comp.map((e) => ({ id: e.id, kind: e.kind, name: e.name, data: jparse(e.data, {}), updated: e.updated })),
+    actors: pick(x.actors, 'actors').map((a) => ({ id: a.id, name: a.name, data: jparse(a.data, {}), alias: a.alias, aliasAuto: !!a.alias_auto })),
+    scenes: scenes.map((s) => { const { id, active, ...v } = sceneView(s); return v; }), // eslint-disable-line no-unused-vars
+    journals: pick(x.journals, 'journals').map((j) => ({ title: j.title, body: j.body, image: j.image })),
+    sounds: pick(x.sounds, 'sounds').map((s) => ({ name: s.name, url: s.url, loop: !!s.loop, volume: s.volume, group: s.grp ?? '', subgroup: s.subgrp ?? '', tags: jparse(s.tags, []) })),
+  };
+  return sendArchive(res, `${data.name}.pack.zip`, 'pack', data.name, data);
+});
+/** A pack into a table: copies, tagged with the pack's campaign; compendium copies remember their original (when it is on this server). */
+function importPack(table, d, { applySystem = false } = {}) {
+  const sys = getSystem(table.id), counts = { items: 0, spells: 0, actors: 0, scenes: 0, journals: 0, sounds: 0, system: false };
+  let packSys = null;
+  if (d.system) { try { packSys = validateSystem(d.system); } catch (e) { throw bad('Damaged pack: invalid rules (' + e.message + ')'); } }
+  db.exec('BEGIN');
+  try {
+    const camp = d.campaign?.name ? mapCampaigns([{ id: 'pack', name: d.campaign.name }]).get('pack') : table.campaign_id ?? null;
+    for (const c of list(d.compendium)) {
+      const data = safe(() => cleanComp(sys, c?.kind, c?.data)); if (!data) continue;
+      const cname = compName(c?.name, 'Entry'), src = localSource(c?.id, c.kind, cname), same = compInTableByName(table.id, c.kind, cname);
+      if (same) db.prepare('UPDATE compendium SET name = ?, data = ?, auto = 0, campaign_id = ?, source_id = ?, source_updated = ?, updated = ? WHERE id = ?').run(cname, JSON.stringify(data), camp, src?.id ?? null, src ? src.updated : null, now(), same.id);
+      else insertComp(table.id, c.kind, cname, data, { campaignId: camp, sourceId: src?.id ?? null, sourceUpdated: src ? src.updated : null });
+      counts[c.kind === 'spell' ? 'spells' : 'items']++;
+    }
+    counts.actors = insertActors(table.id, sys, d.actors, () => camp, { keepShown: false }).size;
+    for (const s of list(d.scenes)) { insertScene(table.id, sceneFields({ ...s, image: safe(() => imgUrl(s?.image)) })); counts.scenes++; }
+    for (const j of list(d.journals)) { insertJournal(table.id, j, 'gm', camp); counts.journals++; }
+    for (const s of list(d.sounds)) { insertSound(table.id, s); counts.sounds++; }
+    if (packSys) { // kept in the system library; linked to the campaign if it has none; applied to this table only when asked
+      const t = now(), sid = Number(db.prepare('INSERT INTO systems (name, data, created, updated) VALUES (?,?,?,?)').run(systemName(`${d.name || d.campaign?.name || 'Pack'} (pack)`), JSON.stringify(packSys), t, t).lastInsertRowid);
+      if (camp) db.prepare('UPDATE campaigns SET system_id = ? WHERE id = ? AND system_id IS NULL').run(sid, camp);
+      counts.system = true;
+    }
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  if (packSys && applySystem) changeSystem(table, packSys); else broadcast(table.id, { type: 'refresh' });
+  syncCompendium(table);
+  return counts;
+}
+tbl('POST', '/packs/archive', 'gm', async ({ req, url, table }) => {
+  const path = await receiveArchive(req);
+  try {
+    const { data } = await readArchive(path, 'pack');
+    return importPack(table, data, { applySystem: url.searchParams.get('applySystem') === '1' });
+  } finally { rmSync(path, { force: true }); }
 });
 
 // ------------------------------------------------------------------ server

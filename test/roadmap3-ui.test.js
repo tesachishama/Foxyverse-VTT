@@ -241,3 +241,5 @@ test('4.2 group names and tags are cleaned', () => {
   assert.deepEqual(cleanTags(' calme, Calme ,, foule '), ['calme', 'foule']);
   assert.equal(cleanTags(Array.from({ length: 30 }, (_, i) => 't' + i)).length, 20);
 });
+test('5 the backup and pack buttons have their FR/EN texts', () => bothLangs(['exportTable', 'exportTableHint', 'importTable', 'importTableHint', 'importing', 'imported', 'makePack', 'makePackHint', 'packSystem', 'download',
+  'packs', 'importPack', 'importPackHint', 'applyPackSystem', 'applyPackSystemHint', ...['items', 'spells', 'actors', 'scenes', 'journals', 'sounds'].map((k) => 'pack_' + k)]));

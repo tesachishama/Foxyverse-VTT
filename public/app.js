@@ -141,17 +141,25 @@ async function adminHome() {
           h('span', { class: 'dim' }, ` /${x.slug} · ${x.players} ${t('playersShort')}, ${x.online} ${t('online')}${x.campaignId ? ' · ' + (campaigns.find((c) => c.id === x.campaignId)?.name ?? '') : ''}`)),
         h('label', { class: 'check', title: t('listed') }, h('input', { type: 'checkbox', checked: x.listed, onchange: guard(async (e) => { await request('PATCH', `/admin/api/tables/${x.slug}`, { listed: e.target.checked }); reload(); }) }), t('listedShort')),
         h('button', { title: t('playerLink'), onclick: () => copyText(`${location.origin}/${x.slug}`) }, t('copyLink')),
+        h('a', { class: 'button', href: `/admin/api/tables/${x.slug}/archive`, download: '', title: t('exportTableHint') }, '⇩ ' + t('exportTable')),
         h('a', { class: 'button primary', href: '/admin/' + x.slug }, t('openTable')),
         h('button', { class: 'x', title: t('del'), onclick: guard(async () => {
           if ((await ask(`${t('confirmTable')} ${x.slug}`, { input: '' })) !== x.slug) return;
           await request('DELETE', `/admin/api/tables/${x.slug}`); reload();
         }) }, '×')))),
-      h('div', { class: 'line' }, name, slug, newCamp, h('label', { class: 'check' }, listed, t('listed')), h('button', { class: 'primary', onclick: create }, '+ ' + t('newTable')))),
+      h('div', { class: 'line' }, name, slug, newCamp, h('label', { class: 'check' }, listed, t('listed')), h('button', { class: 'primary', onclick: create }, '+ ' + t('newTable'))),
+      h('div', { class: 'line', title: t('importTableHint') }, h('label', { class: 'filebtn' }, '⇧ ' + t('importTable'), h('input', { type: 'file', accept: '.zip,application/zip', hidden: true, onchange: guard(async (e) => {
+        const f = e.target.files[0]; if (!f) return;
+        toast(t('importing'), false);
+        const r = await sendArchive('/admin/api/tables/archive', f);
+        toast(`${t('imported')} : ${r.name} (/${r.slug})`, false); reload();
+      }) })))),
     h('section', { class: 'sec' }, h('h3', {}, t('campaigns')), h('p', { class: 'hint' }, t('campaignHint')),
       h('ul', { class: 'list' }, campaigns.map((c) => h('li', { class: 'line card' },
         h('input', { type: 'text', class: 'grow', value: c.name, maxlength: 60, onchange: guard(async (e) => { await request('PATCH', `/admin/api/campaigns/${c.id}`, { name: e.target.value }); }) }),
         sysSel(c.systemId, guard(async (e) => { await request('PATCH', `/admin/api/campaigns/${c.id}`, { systemId: e.target.value ? Number(e.target.value) : null }); })),
         h('span', { class: 'dim' }, `${tables.filter((x) => x.campaignId === c.id).length} ${t('tables').toLowerCase()}`),
+        h('button', { title: t('makePackHint'), onclick: () => packDialog(c) }, '⇩ ' + t('makePack')),
         h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await request('DELETE', `/admin/api/campaigns/${c.id}`); reload(); }) }, '×')))),
       h('div', { class: 'line' }, campName, h('button', { class: 'primary', onclick: addCamp }, '+ ' + t('newCampaign')))),
     h('section', { class: 'sec' }, h('h3', {}, t('systemsLib')), h('p', { class: 'hint' }, t('systemsHint')),
@@ -169,6 +177,32 @@ async function adminHome() {
       h('div', { class: 'line' }, mapName, mapFile, h('button', { class: 'primary', onclick: newMap }, '+ ' + t('newMap'))))));
 }
 
+/** Send an archive file as it is (streamed by the browser); errors come back as a message. */
+async function sendArchive(url, file) {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: file });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+/** A campaign pack: tick what goes in among what the campaign holds, then download it. */
+const packDialog = guard(async (c) => {
+  const x = await request('GET', `/admin/api/campaigns/${c.id}/contents`);
+  const chosen = {}, KINDS = ['items', 'spells', 'actors', 'scenes', 'journals', 'sounds'];
+  const where = (e) => (e.table ? ` · /${e.table}` : ` · ${t('outside')}`);
+  const groups = KINDS.filter((k) => x[k].length).map((k) => { chosen[k] = new Set(x[k].map((e) => e.id));
+    return h('details', { class: 'multi', open: true }, h('summary', {}, `${t('pack_' + k)} (${x[k].length})`),
+      x[k].map((e) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: true, onchange: (ev) => { if (ev.target.checked) chosen[k].add(e.id); else chosen[k].delete(e.id); } }), e.name, h('span', { class: 'dim' }, where(e))))); });
+  let withSystem = !!x.system;
+  dialog(`${t('makePack')} : ${c.name}`, h('div', { class: 'pack-dialog' }, h('p', { class: 'hint' }, t('makePackHint')),
+    !groups.length && !x.system && h('p', { class: 'hint' }, t('empty')), groups,
+    x.system && h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: true, onchange: (e) => { withSystem = e.target.checked; } }), `${t('packSystem')} : ${x.system.name}`)),
+  [[t('download'), async () => {
+    const body = { campaignId: c.id, system: withSystem, ...Object.fromEntries(Object.entries(chosen).map(([k, v]) => [k, [...v]])) };
+    const res = await fetch('/admin/api/packs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    const a = h('a', { href: URL.createObjectURL(await res.blob()), download: `${c.name}.pack.zip` }); document.body.append(a); a.click(); a.remove();
+  }, true], [t('cancel'), () => {}]]);
+});
 /** "/admin?map=<id>": the map editor of the library (walls, lights...), without the game tools. */
 async function mapEditor(id) {
   setApiBase('/admin/api/library', '/admin/api/upload');
@@ -1215,6 +1249,17 @@ function tablePanel() {
       h('div', { class: 'line' }, h('button', { class: 'primary', onclick: create }, '+ ' + t('newScene')), libraryPicker())),
     sc && h('section', { class: 'sec' }, h('h3', {}, sc.name), sceneSettings(sc),
       h('div', { class: 'line' }, tokName, h('button', { onclick: guard(async () => { const c = map.viewCenter(); await api('POST', '/tokens', { sceneId: sc.id, name: tokName.value || 'Token', x: Math.round(c.x), y: Math.round(c.y) }); await loadState(); map.redraw(); }) }, t('addToken')))),
+    h('section', { class: 'sec' }, h('h3', {}, t('packs')), h('p', { class: 'hint' }, t('importPackHint')),
+      (() => {
+        const apply = h('input', { type: 'checkbox' });
+        return h('div', { class: 'line' }, h('label', { class: 'filebtn' }, '⇧ ' + t('importPack'), h('input', { type: 'file', accept: '.zip,application/zip', hidden: true, onchange: guard(async (e) => {
+          const f = e.target.files[0]; if (!f) return;
+          toast(t('importing'), false);
+          const r = await sendArchive(`/admin/api/t/${S.table.slug}/packs/archive${apply.checked ? '?applySystem=1' : ''}`, f);
+          toast(`${t('imported')} : ${['items', 'spells', 'actors', 'scenes', 'journals', 'sounds'].filter((k) => r[k]).map((k) => `${r[k]} ${t('pack_' + k)}`).join(', ') || '—'}`, false);
+          await loadState(); renderAll();
+        }) })), h('label', { class: 'check', title: t('applyPackSystemHint') }, apply, t('applyPackSystem')));
+      })()),
     h('section', { class: 'sec' }, h('h3', {}, t('tableSettings')),
       h('label', {}, t('tableName'), h('input', { type: 'text', value: S.table.name, maxlength: 60, onchange: (e) => patchTable({ name: e.target.value }) })),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: S.table.listed, onchange: (e) => patchTable({ listed: e.target.checked }) }), t('listed')),

@@ -368,3 +368,4 @@ h4.fold-head { display: flex; }
 .sound-group > h3 { font-size: 15px; } .sound-sub { margin: 8px 0 4px; color: var(--lilac); font-size: 13px; }
 .sound .tags { display: flex; gap: 4px; flex-wrap: wrap; margin: 2px 0; } .sound .tags .chip { cursor: pointer; font-size: 11px; }
 .sound-edit { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; margin: 4px 0; } .sound-edit label:last-child { grid-column: 1 / -1; }
+.pack-dialog { display: grid; gap: 6px; max-height: 60vh; overflow-y: auto; } .pack-dialog details label { display: flex; gap: 6px; }
