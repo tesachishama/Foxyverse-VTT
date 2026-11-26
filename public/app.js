@@ -7,7 +7,7 @@ import { signed, tierLabel, damageText, matchesSearch } from './format.js';
 import { isTokenDead, pickViewers, markSeen, orBits, bitsToBase64, bitsFromBase64 } from './vision.js';
 import { radiusStep, moveBlocked } from './walls.js';
 import { ghostsOf, ghostLights, newGroup, tpGroups } from './tp.js';
-import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget, mapShortcut } from './layout.js';
+import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget, mapShortcut, toggleFold, sizeToSave } from './layout.js';
 import { TOOLS, TOOL_BUTTONS, REVEAL_MODES, WALL_SHAPES, WALL_FLAGS, iconUrl } from './tools.js';
 import { defaultFilter, SELECT_KINDS, deleteItems, liveItems } from './select.js';
 
@@ -646,10 +646,16 @@ function placeFloat(win, r) { Object.assign(win.style, { left: r.x + 'px', top: 
 function popOut(id, { remember = true } = {}) {
   if (floats.has(id) || !tabList().some(([x]) => x === id)) return;
   const body = h('div', { class: 'float-body' });
-  const head = h('div', { class: 'float-head' }, TAB_ICON[id] && icon(TAB_ICON[id], 'ico tab-ico'), h('b', { class: 'grow' }, tabLabel(id)),
+  const head = h('div', { class: 'float-head', title: t('foldHint') }, TAB_ICON[id] && icon(TAB_ICON[id], 'ico tab-ico'), h('b', { class: 'grow' }, tabLabel(id)),
     h('button', { class: 'quiet', title: t('dockBack'), onclick: () => dockBack(id) }, '⇲'));
   const win = h('div', { class: 'float-win', role: 'dialog', 'aria-label': tabLabel(id) }, head, body);
   const saved = floatStore()[id];
+  win.classList.toggle('folded', !!saved?.folded);
+  // double click on the title bar: fold to the title bar only, and back
+  head.addEventListener('dblclick', (e) => {
+    if (e.target.closest('button')) return;
+    const next = toggleFold(floatStore()[id]); saveFloat(id, { folded: next.folded }); win.classList.toggle('folded', next.folded);
+  });
   const r = clampRect(saved ?? { x: 80 + floats.size * 30, y: 70 + floats.size * 30, w: 400, h: 560 }, innerWidth, innerHeight);
   placeFloat(win, r);
   floats.set(id, { win, body });
@@ -666,7 +672,7 @@ function popOut(id, { remember = true } = {}) {
     head.addEventListener('pointermove', move); head.addEventListener('pointerup', up);
   });
   // resize: the bottom-right corner (CSS resize); the new size is remembered
-  new ResizeObserver(debounce(() => { if (floats.get(id)?.win === win) saveFloat(id, { w: win.offsetWidth, h: win.offsetHeight }); }, 300)).observe(win);
+  new ResizeObserver(debounce(() => { const size = sizeToSave(win.classList.contains('folded'), win.offsetWidth, win.offsetHeight); if (size && floats.get(id)?.win === win) saveFloat(id, size); }, 300)).observe(win);
   if (remember) saveFloat(id, { ...r, open: true });
   enterTab(id);
   renderDock();

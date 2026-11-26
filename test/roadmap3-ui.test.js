@@ -133,3 +133,16 @@ test('1.5 Delete (or Backspace) deletes the selection, Ctrl/Cmd+Z undoes; other 
   assert.equal(mapShortcut({ key: 'z' }), null);
 });
 test('1.7 the free reroll button has its FR/EN name', () => bothLangs(['freeReroll', 'freeRerollHint']));
+
+// ---------------------------------------------------------------- 1.8 fold a floating window
+import { toggleFold, sizeToSave } from '../public/layout.js';
+test('1.8 a double click on a floating window\'s title folds it and back; it unfolds to its size (not saved while folded)', () => {
+  const open = { x: 10, y: 20, w: 400, h: 500, open: true };
+  const folded = toggleFold(open);
+  assert.equal(folded.folded, true); assert.equal(folded.h, 500); assert.equal(folded.w, 400);
+  assert.equal(toggleFold(folded).folded, false);
+  assert.equal(toggleFold(undefined).folded, true);
+  assert.equal(sizeToSave(true, 400, 32), null);
+  assert.deepEqual(sizeToSave(false, 400, 500), { w: 400, h: 500 });
+  bothLangs(['foldHint']);
+});

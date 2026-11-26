@@ -333,3 +333,6 @@ input.search { width: 100%; margin: 0 0 8px; }
 .wall-flag { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; }
 .wall-flag.off { opacity: .45; }
 .sel-filter summary { cursor: pointer; }
+.float-win.folded { height: auto !important; min-height: 0 !important; resize: none; }
+.float-win.folded > .float-body { display: none; }
+.float-head { user-select: none; }

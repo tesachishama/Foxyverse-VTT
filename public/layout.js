@@ -12,6 +12,14 @@ export function clampRect(r, vw, vh, min = { w: 260, h: 180 }) {
   return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
 }
 
+/**
+ * A floating window folded to its title bar (double click on the title, ROADMAP 3 §1.8) and back. Its saved size is kept as it
+ * was, so it unfolds to the same size. Returns the new saved entry.
+ */
+export const toggleFold = (saved) => ({ ...(saved ?? {}), folded: !saved?.folded });
+/** The size to remember after a resize: none while folded (the window is only its title bar then). */
+export const sizeToSave = (folded, w, h) => (folded ? null : { w, h });
+
 /** Browser storage can be missing or throw (private window, blocked site data): reads fall back, writes are best effort. */
 export function readJSON(storage, key, fallback) {
   try { const v = storage?.getItem(key); return v == null ? fallback : JSON.parse(v) ?? fallback; } catch { return fallback; }
