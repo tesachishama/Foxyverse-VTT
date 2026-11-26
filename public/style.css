@@ -177,7 +177,7 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 .chev { background: transparent; border: 0; padding: 0 4px; color: var(--lilac); font-size: 18px; transition: transform .12s; } .chev.open { transform: rotate(90deg); }
 .qty { display: inline-flex; align-items: center; gap: 2px; } .qty .x { font-size: 16px; padding: 0 5px; }
 .inv-body { display: grid; gap: 6px; margin-top: 6px; }
-.strip { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; } .strip label { display: grid; gap: 1px; justify-items: center; font-size: 11px; } .strip input.n { width: 100%; text-align: center; padding: 2px; }
+.bonus-strip { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; } .bonus-strip label { display: grid; gap: 1px; justify-items: center; font-size: 11px; } .bonus-strip input.n { width: 100%; text-align: center; padding: 2px; }
 .expr label { display: flex; gap: 6px; align-items: center; } .expr-msg { font-size: 12px; margin-top: 2px; } .expr-msg.ok { color: var(--ok); } .expr-msg.err { color: var(--bad); }
 
 /* v3 additions */

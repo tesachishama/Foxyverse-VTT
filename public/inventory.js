@@ -107,7 +107,7 @@ export function inventoryView(env) {
     h('button', { class: 'x', type: 'button', onclick: () => { it.qty = Math.max(0, (it.qty || 0) - 1); saveActor(a); rerender(); } }, '−'),
     h('b', {}, it.qty ?? 1),
     h('button', { class: 'x', type: 'button', onclick: () => { it.qty = (it.qty || 0) + 1; saveActor(a); rerender(); } }, '+'));
-  const statStrip = (it) => h('div', { class: 'strip' }, sys.stats.map((s) => h('label', {}, h('span', { class: 'dim' }, (s.aliases[0] || s.label.slice(0, 3)).toUpperCase()),
+  const statStrip = (it) => h('div', { class: 'bonus-strip' }, sys.stats.map((s) => h('label', {}, h('span', { class: 'dim' }, (s.aliases[0] || s.label.slice(0, 3)).toUpperCase()),
     h('input', { type: 'number', class: 'n', value: it.bonuses?.[s.id] ?? 0, oninput: (e) => { const v = Number(e.target.value) || 0; it.bonuses ??= {}; if (v) it.bonuses[s.id] = v; else delete it.bonuses[s.id]; saveActor(a); } }))));
   const exprRow = (it) => {
     const msg = h('div', { class: 'expr-msg' });

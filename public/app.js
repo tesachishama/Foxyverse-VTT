@@ -10,6 +10,7 @@ import { ghostsOf, ghostLights, newGroup, tpGroups } from './tp.js';
 import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget, mapShortcut, toggleFold, sizeToSave } from './layout.js';
 import { TOOLS, TOOL_BUTTONS, REVEAL_MODES, WALL_SHAPES, WALL_FLAGS, iconUrl } from './tools.js';
 import { defaultFilter, SELECT_KINDS, deleteItems, liveItems } from './select.js';
+import { splitSheets } from './sheets.js';
 
 const S = {
   me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], table: null, allTables: [], mapMode: false,
@@ -903,9 +904,18 @@ function sheetsPanel() {
   return h('div', { class: 'pad' },
     isGM() && h('button', { class: 'primary wide', onclick: guard(async () => { const r = await api('POST', '/actors', { name: t('newChar') }); upsert(S.actors, r); S.actorId = r.id; S.sheetId = r.id; renderAll(); }) }, '+ ' + t('newChar')),
     !S.actors.length && h('p', { class: 'hint' }, t('empty')),
-    h('ul', { class: 'list' }, S.actors.map((x) => h('li', {}, h('button', { class: 'row', onclick: () => { S.sheetId = x.id; renderPanel(); } },
+    isGM() ? (() => { // the GM: two automatic sections, player characters (a player can edit the sheet) and NPCs (the others)
+      const { pcs, npcs } = splitSheets(S.actors);
+      return [[t('pcs'), pcs], [t('npcs'), npcs]].map(([title, list]) => list.length > 0 && h('section', { class: 'sec' }, h('h3', {}, `${title} (${list.length})`), sheetRows(list)));
+    })() : sheetRows(S.actors));
+}
+/** One line per sheet: open it; the GM can also put down a token of it (it follows the pointer until a click). */
+function sheetRows(list) {
+  return h('ul', { class: 'list' }, list.map((x) => h('li', { class: 'line sheet-row' },
+    h('button', { class: 'row grow', onclick: () => { S.sheetId = x.id; renderPanel(); } },
       h('b', {}, x.name), h('span', { class: 'dim' }, ` ${t('level')} ${x.data.bio.level}${isGM() ? ' · ' + permSummary(x) : x.perm === 'view' ? ' · ' + t('permView') : ''}`),
-      h('span', { class: 'dim right' }, `${x.data.hp.cur}/${x.computed.derived.maxhp} ${t('hp')}`))))));
+      h('span', { class: 'dim right' }, `${x.data.hp.cur}/${x.computed.derived.maxhp} ${t('hp')}`)),
+    isGM() && viewScene() && h('button', { class: 'quiet', title: t('placeTokenHint'), 'aria-label': t('placeToken'), onclick: () => placeToken(x) }, '⊕ ' + t('tokenShort')))));
 }
 
 const compBtn = () => null; // every named item / spell enters the compendium by itself

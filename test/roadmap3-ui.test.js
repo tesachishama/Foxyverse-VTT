@@ -160,3 +160,13 @@ test('2.5 a token being placed lands on the grid by the snapping mode (cell cent
   assert.deepEqual(placeAt({ grid: 50, ox: 10, oy: 0 }, 1, 61, 140, 'grid'), { x: 85, y: 125 });
   bothLangs(['placeToken', 'placeTokenHint']);
 });
+
+// ---------------------------------------------------------------- 2.6 PC / NPC sections
+import { splitSheets, isPC } from '../public/sheets.js';
+test('2.6 the GM\'s sheets split by themselves: PC = a player can edit it, NPC = the others (view only does not make a PC)', () => {
+  const actors = [{ id: 1, name: 'zed', perms: { 3: 'view' } }, { id: 2, name: 'Ann', perms: { 3: 'edit' } }, { id: 3, name: 'bob', perms: {} }, { id: 4, name: 'Cid', perms: { 3: 'view', 4: 'edit' } }];
+  const { pcs, npcs } = splitSheets(actors);
+  assert.deepEqual(pcs.map((a) => a.id), [2, 4]); assert.deepEqual(npcs.map((a) => a.id), [3, 1]); // by name, case-insensitive
+  assert.equal(isPC({}), false);
+  bothLangs(['pcs', 'npcs', 'tokenShort']);
+});
