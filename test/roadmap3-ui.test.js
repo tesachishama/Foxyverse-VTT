@@ -183,3 +183,16 @@ test('2.7 a sheet opens in its own window (several at once): window ids tell she
 });
 test('2.8 the bio label editor has its FR/EN texts', () => bothLangs(['race', 'cls', 'element', 'level', 'bioLabels', 'bioLabelsHint']));
 test('3.2 the journal group texts exist in FR/EN', () => bothLangs(['journal', 'openJournal', 'journalVisibleHint']));
+
+// ---------------------------------------------------------------- 3.3 folding groups
+import { isGroupOpen, toggleGroup } from '../public/layout.js';
+test('3.3 compendium groups are folded by default, a click opens / closes one, a search opens them all', () => {
+  let st = {};
+  assert.equal(isGroupOpen(st, 'cat:weapon'), false);
+  st = toggleGroup(st, 'cat:weapon');
+  assert.equal(isGroupOpen(st, 'cat:weapon'), true); assert.equal(isGroupOpen(st, 'npcs'), false);
+  assert.equal(isGroupOpen(st, 'npcs', true), true);
+  st = toggleGroup(st, 'cat:weapon');
+  assert.deepEqual(st, {});
+  assert.equal(isGroupOpen(null, 'x'), false);
+});

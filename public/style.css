@@ -346,3 +346,10 @@ fieldset.inv-body.locked input, fieldset.inv-body.locked textarea, fieldset.inv-
 .inv-name { cursor: pointer; padding: 4px 0; }
 .lock-line { justify-content: flex-end; }
 .bio-labels { display: grid; grid-template-columns: auto 1fr 1fr; gap: 4px 8px; align-items: center; }
+/* ROADMAP 3 §3.3: folding compendium groups */
+.fold-head { cursor: pointer; user-select: none; justify-content: flex-start !important; gap: 6px; align-items: center; }
+.fold-head > .quiet, .fold-head > button { margin-left: auto; }
+.fold-head .chev { display: inline-block; transition: transform .15s; color: var(--lilac); }
+.fold-head .chev.open { transform: rotate(90deg); }
+.sec.fold:not(.open) { margin-bottom: 6px; }
+h4.fold-head { display: flex; }

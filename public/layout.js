@@ -26,6 +26,13 @@ export function floatTarget(id) {
 /** The size to remember after a resize: none while folded (the window is only its title bar then). */
 export const sizeToSave = (folded, w, h) => (folded ? null : { w, h });
 
+/**
+ * Folding groups of the compendium (ROADMAP 3 §3.3): folded by default; the open ones are remembered in this browser.
+ * While searching, every group opens so the results show.
+ */
+export const isGroupOpen = (state, key, searching = false) => searching || state?.[key] === true;
+export const toggleGroup = (state, key) => { const next = { ...(state ?? {}) }; if (next[key]) delete next[key]; else next[key] = true; return next; };
+
 /** Browser storage can be missing or throw (private window, blocked site data): reads fall back, writes are best effort. */
 export function readJSON(storage, key, fallback) {
   try { const v = storage?.getItem(key); return v == null ? fallback : JSON.parse(v) ?? fallback; } catch { return fallback; }

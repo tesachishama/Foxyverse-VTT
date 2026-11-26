@@ -7,7 +7,7 @@ import { signed, tierLabel, damageText, matchesSearch } from './format.js';
 import { isTokenDead, pickViewers, markSeen, orBits, bitsToBase64, bitsFromBase64 } from './vision.js';
 import { radiusStep, moveBlocked } from './walls.js';
 import { ghostsOf, ghostLights, newGroup, tpGroups } from './tp.js';
-import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget, mapShortcut, toggleFold, sizeToSave, sheetFloatId, floatTarget } from './layout.js';
+import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget, mapShortcut, toggleFold, sizeToSave, sheetFloatId, floatTarget, isGroupOpen, toggleGroup } from './layout.js';
 import { TOOLS, TOOL_BUTTONS, REVEAL_MODES, WALL_SHAPES, WALL_FLAGS, iconUrl } from './tools.js';
 import { defaultFilter, SELECT_KINDS, deleteItems, liveItems } from './select.js';
 import { splitSheets } from './sheets.js';
@@ -1433,7 +1433,19 @@ function searchBox() {
     const box = $('[data-search]'); if (box) { box.focus(); box.setSelectionRange(pos, pos); }
   } });
 }
-const byCategory = (entries) => CATS().map(([k, label]) => [label, entries.filter((e) => e.kind === 'item' && e.category === k)]).filter(([, list]) => list.length);
+const byCategory = (entries) => CATS().map(([k, label]) => [label, entries.filter((e) => e.kind === 'item' && e.category === k), k]).filter(([, list]) => list.length);
+/** A group of the compendium that folds when its title is clicked (buttons and boxes in the title still work). */
+const compGroups = () => readJSON(storage(), 'compGroups', {});
+function fold(key, head, ...kids) {
+  const open = isGroupOpen(compGroups(), key, !!compSearch.trim());
+  head.classList.add('fold-head');
+  head.prepend(h('span', { class: 'chev' + (open ? ' open' : '') }, '›'));
+  head.addEventListener('click', (e) => {
+    if (e.target.closest('button, input, label, select, a')) return;
+    writeJSON(storage(), 'compGroups', toggleGroup(compGroups(), key)); renderPanel('comp', { force: true });
+  });
+  return h('section', { class: 'sec fold' + (open ? ' open' : '') }, head, open && kids);
+}
 function compPanel() {
   if (!isGM()) return playerCompendium();
   const sw = h('div', { class: 'line seg' },
@@ -1449,10 +1461,10 @@ function playerCompendium() {
   return h('div', { class: 'pad' },
     (S.compendium.length > 0 || S.npcs.length > 0 || S.journals.length > 0) && searchBox(),
     !S.compendium.length && !S.npcs.length && !S.journals.length && h('p', { class: 'hint' }, t('compPlayerHint')),
-    items.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('items')), items.map(([label, list]) => [h('h4', {}, label), list.map(entry)])),
-    spells.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('spells')), spells.map(entry)),
-    journals.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('journal')), journals.map((j) => h('details', { class: 'entry' }, h('summary', {}, h('b', {}, j.title)), journalBody(j)))),
-    npcs.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('npcs')), h('div', { class: 'npcs' }, npcs.map((n) => h('div', { class: 'npc' }, n.portrait ? h('img', { src: n.portrait, alt: '' }) : h('span', { class: 'avatar' }, '?'), h('b', {}, n.name))))));
+    items.length > 0 && h('section', { class: 'sec' }, h('h3', {}, t('items')), items.map(([label, list, k]) => fold('cat:' + k, h('h4', {}, label), list.map(entry)))),
+    spells.length > 0 && fold('spells', h('h3', {}, t('spells')), spells.map(entry)),
+    journals.length > 0 && fold('journal', h('h3', {}, t('journal')), journals.map((j) => h('details', { class: 'entry' }, h('summary', {}, h('b', {}, j.title)), journalBody(j)))),
+    npcs.length > 0 && fold('npcs', h('h3', {}, t('npcs')), h('div', { class: 'npcs' }, npcs.map((n) => h('div', { class: 'npc' }, n.portrait ? h('img', { src: n.portrait, alt: '' }) : h('span', { class: 'avatar' }, '?'), h('b', {}, n.name))))));
 }
 /** GM, this table: edit in place, show to players, update copies whose original changed, NPC list. */
 function tableCompendium() {
@@ -1476,15 +1488,15 @@ function tableCompendium() {
     h('p', { class: 'hint' }, t('compGmHint')),
     h('section', { class: 'sec' }, h('h3', {}, t('items'), h('button', { class: 'quiet', onclick: create('item', 'other') }, '+ ' + t('newItem'))),
       !items.length && h('p', { class: 'hint' }, t('empty')),
-      CATS().map(([k, label]) => { const list = items.filter((e) => e.category === k); return list.length > 0 && [h('h4', {}, label), list.map(row)]; })),
-    h('section', { class: 'sec' }, h('h3', {}, t('spells'), h('button', { class: 'quiet', onclick: create('spell') }, '+ ' + t('newSpell'))),
+      CATS().map(([k, label]) => { const list = items.filter((e) => e.category === k); return list.length > 0 && fold('cat:' + k, h('h4', {}, label), list.map(row)); })),
+    fold('spells', h('h3', {}, t('spells'), h('button', { class: 'quiet', onclick: create('spell') }, '+ ' + t('newSpell'))),
       !spells.length && h('p', { class: 'hint' }, t('empty')), spells.map(row)),
-    h('section', { class: 'sec' }, h('h3', {}, t('journal')),
+    fold('journal', h('h3', {}, t('journal')),
       !S.journals.length && h('p', { class: 'hint' }, t('empty')),
       S.journals.filter((j) => matchesSearch(j.title, compSearch)).map((j) => h('div', { class: 'entry' }, h('div', { class: 'line' },
         h('button', { class: 'row grow', title: t('openJournal'), onclick: () => { S.journalId = j.id; S.journalEdit = false; openTab('journal'); } }, h('b', {}, j.title), h('span', { class: 'dim' }, ' ' + visLabel(j))),
         h('label', { class: 'check', title: t('journalVisibleHint') }, h('input', { type: 'checkbox', checked: j.visibility === 'all', onchange: guard(async (ev) => { upsert(S.journals, await api('PATCH', '/journals/' + j.id, { visibility: ev.target.checked ? 'all' : 'gm' })); renderPanel(); }) }), '👁'))))),
-    h('section', { class: 'sec' }, h('h3', {}, t('npcs')), h('p', { class: 'hint' }, t('npcHint')),
+    fold('npcs', h('h3', {}, t('npcs')), h('p', { class: 'hint' }, t('npcHint')),
       found(S.actors).map((a) => h('label', { class: 'line check' }, h('input', { type: 'checkbox', checked: a.shown, onchange: guard(async (ev) => { Object.assign(a, await api('PATCH', '/actors/' + a.id, { shown: ev.target.checked })); }) }),
         h('b', { class: 'grow' }, a.name), h('span', { class: 'dim' }, `${t('level')} ${a.data.bio.level}`)))),
   ];
@@ -1529,9 +1541,9 @@ function globalCompendium() {
   return [
     h('div', { class: 'line' }, multiPick(t('tables'), tableOpts, f.tables, (v) => { f.tables = v; renderPanel(); }), multiPick(t('campaigns'), campOpts, f.campaigns, (v) => { f.campaigns = v; renderPanel(); })),
     h('div', { class: 'line' }, h('span', { class: 'dim' }, t('outside') + ' :'), newCamp, h('button', { onclick: create('item') }, '+ ' + t('newItem')), h('button', { onclick: create('spell') }, '+ ' + t('newSpell'))),
-    h('section', { class: 'sec' }, h('h3', {}, t('items')), byCategory(entries).map(([label, list]) => [h('h4', {}, label), list.map(row)]), !entries.some((e) => e.kind === 'item') && h('p', { class: 'hint' }, t('empty'))),
-    h('section', { class: 'sec' }, h('h3', {}, t('spells')), entries.filter((e) => e.kind === 'spell').map(row), !entries.some((e) => e.kind === 'spell') && h('p', { class: 'hint' }, t('empty'))),
-    h('section', { class: 'sec' }, h('h3', {}, t('journal'), h('button', { class: 'quiet', onclick: guard(async () => { const r = await request('POST', '/admin/api/journals', { title: t('newEntry'), campaignId: newCamp.value ? Number(newCamp.value) : null }); compOpen.add('j' + r.id); await refreshComp(); }) }, '+ ' + t('newEntry'))),
+    h('section', { class: 'sec' }, h('h3', {}, t('items')), byCategory(entries).map(([label, list, k]) => fold('cat:' + k, h('h4', {}, label), list.map(row))), !entries.some((e) => e.kind === 'item') && h('p', { class: 'hint' }, t('empty'))),
+    fold('spells', h('h3', {}, t('spells')), entries.filter((e) => e.kind === 'spell').map(row), !entries.some((e) => e.kind === 'spell') && h('p', { class: 'hint' }, t('empty'))),
+    fold('journal', h('h3', {}, t('journal'), h('button', { class: 'quiet', onclick: guard(async () => { const r = await request('POST', '/admin/api/journals', { title: t('newEntry'), campaignId: newCamp.value ? Number(newCamp.value) : null }); compOpen.add('j' + r.id); await refreshComp(); }) }, '+ ' + t('newEntry'))),
       journals.map((j) => { const open = compOpen.has('j' + j.id), outside = !j.table, d = { title: j.title, body: j.body };
         return h('div', { class: 'entry' + (open ? ' open' : '') },
           h('div', { class: 'line' }, h('button', { class: 'row grow', onclick: () => { if (!outside) return; if (open) compOpen.delete('j' + j.id); else compOpen.add('j' + j.id); renderPanel(); } }, h('b', {}, j.title), tag(j)),
@@ -1541,7 +1553,7 @@ function globalCompendium() {
             h('textarea', { rows: 6, oninput: (ev) => { d.body = ev.target.value; } }, d.body),
             h('button', { class: 'primary', onclick: guard(async () => { await request('PATCH', '/admin/api/journals/' + j.id, d); compOpen.delete('j' + j.id); toast(t('saved'), false); await refreshComp(); }) }, t('save'))));
       }), !journals.length && h('p', { class: 'hint' }, t('empty'))),
-    h('section', { class: 'sec' }, h('h3', {}, t('npcs')), npcs.map((n) => h('div', { class: 'line entry' }, h('span', { class: 'row grow' }, h('b', {}, n.name), h('span', { class: 'dim' }, ` ${t('level')} ${n.level}`), tag(n)), addHere('/actors/import', n))),
+    fold('npcs', h('h3', {}, t('npcs')), npcs.map((n) => h('div', { class: 'line entry' }, h('span', { class: 'row grow' }, h('b', {}, n.name), h('span', { class: 'dim' }, ` ${t('level')} ${n.level}`), tag(n)), addHere('/actors/import', n))),
       !npcs.length && h('p', { class: 'hint' }, t('empty'))),
   ];
 }
