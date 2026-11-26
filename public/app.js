@@ -975,6 +975,9 @@ function addMenu(anchor, kind, category, onNew, onPick) {
   setTimeout(() => { document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', esc); }, 0);
   $('input', menu)?.focus();
 }
+/** A bio label as the system names it in this language (system editor), else the app's own word. */
+const BIO_KEYS = { race: 'race', class: 'cls', element: 'element', level: 'level' };
+const bioLabel = (f) => S.system?.labels?.bio?.[f]?.[getLang()] || t(BIO_KEYS[f]);
 function sheetView(a, { floating = false } = {}) {
   const sys = S.system, d = a.data, idx = statIndex();
   const modInput = h('input', { type: 'text', class: 'mod', placeholder: '+0', value: S.rollMod, oninput: (e) => { S.rollMod = e.target.value.trim(); } });
@@ -989,9 +992,10 @@ function sheetView(a, { floating = false } = {}) {
       h('button', { class: 'avatar', title: t('picture'), onclick: () => pictureDialog(a) }, (d.token || d.portrait) ? h('img', { src: d.token || d.portrait, alt: '' }) : '+'),
       field(a, a, 'name', 'text', { class: 'title grow' })),
     h('div', { class: 'grid2' },
-      h('label', {}, t('cls'), field(a, d.bio, 'class')), h('label', {}, t('element'), field(a, d.bio, 'element')),
-      h('label', {}, t('level'), field(a, d.bio, 'level', 'int', { min: 1, class: 'n' })),
-      h('label', { class: 'check', title: t('darkvisionHint') }, field(a, d, 'darkvision', 'bool'), t('darkvision')),
+      h('label', {}, bioLabel('class'), field(a, d.bio, 'class')), h('label', {}, bioLabel('element'), field(a, d.bio, 'element')),
+      h('label', {}, bioLabel('level'), field(a, d.bio, 'level', 'int', { min: 1, class: 'n' })),
+      h('label', { class: 'check', title: t('darkvisionHint') }, field(a, d, 'darkvision', 'bool'), t('darkvision')), // where "elemental" was
+      h('label', {}, bioLabel('race'), field(a, d.bio, 'race')),
       isGM() && h('label', { title: t('aliasHint') }, t('alias'), h('input', { type: 'text', class: 'code', value: a.alias ?? '', maxlength: 40, placeholder: t('aliasAuto'),
         onchange: guard(async (e) => { if (pending.has(a.id)) await saveNow(a); const r = await api('PATCH', '/actors/' + a.id, { alias: e.target.value }); a.alias = r.alias; e.target.value = r.alias; }) }))));
 
@@ -1591,6 +1595,10 @@ function systemPanel() {
     sec(t('statsEditor'), h('p', { class: 'hint' }, t('idHint')),
       draft.stats.map((s, i) => h('div', { class: 'formula-row' }, h('div', { class: 'line' }, txt(s, 'label', { class: 'grow' }), txt(s, 'id', { class: 'code idf' }), delBtn(draft.stats, i, draft.stats.length < 2)), aliasField(s))),
       addBtn(draft.stats, { id: 'new_stat', label: 'Stat', aliases: [] })),
+    sec(t('bioLabels'), h('p', { class: 'hint' }, t('bioLabelsHint')),
+      h('div', { class: 'bio-labels' }, h('span'), h('b', {}, 'FR'), h('b', {}, 'EN'),
+        Object.keys(BIO_KEYS).map((f) => { draft.labels ??= {}; draft.labels.bio ??= {}; const lb = draft.labels.bio[f] ??= {};
+          return [h('span', { class: 'dim' }, t(BIO_KEYS[f])), txt(lb, 'fr', { maxlength: 40, placeholder: t(BIO_KEYS[f]) }), txt(lb, 'en', { maxlength: 40 })]; }))),
     sec(t('charRules'), h('div', { class: 'line' }, h('label', {}, t('baseStat'), numf(draft.character, 'baseStat')), h('label', {}, t('startPoints'), numf(draft.character, 'startPoints')), h('label', {}, t('startMax'), numf(draft.character, 'startMaxStat'))),
       h('div', { class: 'line' }, t('spellStats'), txt(draft.spells, 'armedStat', { class: 'code idf' }), txt(draft.spells, 'unarmedStat', { class: 'code idf' }))),
     sec(t('derived'), draft.derived.map((d, i) => formulaRow(draft.derived, d, i, false, REQUIRED.includes(d.id))), addBtn(draft.derived, { id: 'new_value', label: 'Value', aliases: [], formula: '0' })),

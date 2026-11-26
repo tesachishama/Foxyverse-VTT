@@ -124,3 +124,30 @@ test('2.7 a sheet window shows what the server sends: a view-only player gets th
   assert.equal(st.actors.find((a) => a.id === hidden.id), undefined);
   assert.equal((await pip('PATCH', `/actors/${seen.id}`, { name: 'Renamed' })).status, 403);
 });
+
+test('2.8 bio labels are renamed per language in the system (defaults for old systems); the sheet has a race field', async () => {
+  const sys = (await gm('GET', '/system')).body;
+  assert.deepEqual(sys.labels.bio.element, { fr: 'Élément', en: 'Element' });
+  const { labels, ...old } = sys; // a system saved before labels existed
+  const put = await gm('PUT', '/system', { ...old, labels: { bio: { element: { fr: '  Affinité ', en: 'x'.repeat(99) }, race: { fr: '' } } } });
+  assert.equal(put.status, 200);
+  assert.deepEqual(put.body.labels.bio.element, { fr: 'Affinité', en: 'x'.repeat(40) });
+  assert.deepEqual(put.body.labels.bio.race, { fr: 'Race', en: 'Race' }); // empty = default
+  assert.deepEqual((await gm('PUT', '/system', old)).body.labels.bio.level, { fr: 'Niveau', en: 'Level' });
+  const a = (await gm('POST', '/actors', { name: 'Elf', data: { bio: { race: 'Elfe'.repeat(30), level: 2 } } })).body;
+  assert.equal(a.data.bio.race.length, 60); assert.equal(a.data.bio.level, 2);
+  assert.equal((await pip('GET', '/system')).body.labels.bio.element.fr, 'Élément'); // players read the labels too
+});
+
+test('2.8 a table whose rules were saved before the labels existed still gets the default labels', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { join } = await import('node:path');
+  await srv.call('POST', '/admin/api/tables', { slug: 'oldlabels' });
+  const db = new DatabaseSync(join(srv.dataDir, 'foxy.db'));
+  const row = db.prepare("SELECT id, system FROM game_tables WHERE slug = 'oldlabels'").get();
+  const { labels, ...old } = JSON.parse(row.system);
+  db.prepare('UPDATE game_tables SET system = ? WHERE id = ?').run(JSON.stringify(old), row.id);
+  db.close();
+  // the server caches rules per table: this table's were never read yet, so they are read from the database now
+  assert.deepEqual((await srv.call('GET', '/admin/api/t/oldlabels/system')).body.labels.bio.class, { fr: 'Classe', en: 'Class' });
+});

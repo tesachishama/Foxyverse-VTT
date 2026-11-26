@@ -172,7 +172,10 @@ const systems = new Map(); // table id -> parsed system (cache)
 export function getSystem(tableId) {
   if (!systems.has(tableId)) {
     const row = db.prepare('SELECT system FROM game_tables WHERE id = ?').get(tableId);
-    systems.set(tableId, row ? JSON.parse(row.system) : loadDefaultSystem());
+    // validated on load: fields added since the system was saved get their defaults (e.g. the bio labels, ROADMAP 3 §2.8)
+    let sys = row ? JSON.parse(row.system) : loadDefaultSystem();
+    try { sys = validateSystem(sys); } catch { /* keep it as it was stored */ }
+    systems.set(tableId, sys);
   }
   return systems.get(tableId);
 }

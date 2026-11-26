@@ -14,6 +14,14 @@ const BUILTIN = {
   curmp: ['curmp', 'mpcur', 'pmact', 'actpm'], curfav: ['curfav', 'favcur', 'favact', 'actfav'],
 };
 const REQUIRED_DERIVED = ['maxhp', 'maxmp', 'maxfav', 'act'];
+/** The bio part of a sheet and its labels, renamed per language in the system editor (ROADMAP 3 §2.8). */
+export const BIO_FIELDS = ['race', 'class', 'element', 'level'];
+export const BIO_LABELS = { race: { fr: 'Race', en: 'Race' }, class: { fr: 'Classe', en: 'Class' }, element: { fr: 'Élément', en: 'Element' }, level: { fr: 'Niveau', en: 'Level' } };
+function cleanLabels(raw) {
+  const bio = {};
+  for (const f of BIO_FIELDS) bio[f] = Object.fromEntries(['fr', 'en'].map((l) => [l, str(raw?.bio?.[f]?.[l], 40).trim() || BIO_LABELS[f][l]]));
+  return { bio };
+}
 /**
  * The GM's manual mode (ROADMAP 3 §2.3): per sheet, typed values win over the formulas. null = the formula.
  * Speed is already free (bonspe) and stats are typed anyway.
@@ -100,14 +108,14 @@ export function validateSystem(raw) {
   const spellStat = (v, fallback) => { const n = norm(v ?? fallback); if (!statNames.has(n)) throw new Error(`spells: "${n}" is not a stat id or alias`); return n; };
   const spells = { armedStat: spellStat(raw.spells?.armedStat, 'foc'), unarmedStat: spellStat(raw.spells?.unarmedStat, 'int') };
   const rules = (raw.rules ?? []).slice(0, 100).map((r) => ({ title: str(r.title, 100), body: str(r.body, 20000) }));
-  return { id: norm(raw.id || 'custom'), name: str(raw.name || 'Custom system', 60), version: int(raw.version ?? 1, 0, 1e6), stats, character, spells, derived, quickRolls, rollTypes, knowledgeTiers: tiers, rules };
+  return { id: norm(raw.id || 'custom'), name: str(raw.name || 'Custom system', 60), version: int(raw.version ?? 1, 0, 1e6), stats, character, spells, derived, quickRolls, rollTypes, knowledgeTiers: tiers, rules, labels: cleanLabels(raw.labels) };
 }
 
 // ---------------------------------------------------------------- actors
 export function defaultActorData(sys) {
   const stats = {};
   sys.stats.forEach((s) => { stats[s.id] = { base: sys.character.baseStat, passive: 0 }; });
-  const data = { bio: { class: '', element: '', level: 1 }, stats, hp: { cur: 0, temp: 0 }, mp: { cur: 0 }, fav: { cur: 0 },
+  const data = { bio: { race: '', class: '', element: '', level: 1 }, stats, hp: { cur: 0, temp: 0 }, mp: { cur: 0 }, fav: { cur: 0 },
     bonact: 0, bonspe: 0, darkvision: false, talents: [], spells: [], items: [], currency: { pc: 0, pa: 0, po: 0 }, notes: '' };
   return fillResources(sys, data);
 }
@@ -148,7 +156,7 @@ export function sanitizeActorData(raw, sys) {
   const list = (a, fn) => (Array.isArray(a) ? a.slice(0, 200).map(fn) : []);
   const statIds = new Set(sys.stats.map((s) => s.id));
   return {
-    bio: { class: str(r.bio?.class, 60), element: str(r.bio?.element, 60), level: int(r.bio?.level ?? 1, 1, 999) },
+    bio: { race: str(r.bio?.race, 60), class: str(r.bio?.class, 60), element: str(r.bio?.element, 60), level: int(r.bio?.level ?? 1, 1, 999) },
     portrait: /^\/uploads\/[a-f0-9]{64}\.(png|jpg|webp|gif)$/.test(r.portrait ?? '') ? r.portrait : '',
     token: /^\/uploads\/[a-f0-9]{64}\.(png|jpg|webp|gif)$/.test(r.token ?? '') ? r.token : '', // round framed picture for the map and chat (default: cropped from the portrait)
     stats,

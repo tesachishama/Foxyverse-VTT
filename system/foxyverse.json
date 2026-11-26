@@ -170,6 +170,14 @@
       ]
     }
   ],
+  "labels": {
+    "bio": {
+      "race": { "fr": "Race", "en": "Race" },
+      "class": { "fr": "Classe", "en": "Class" },
+      "element": { "fr": "Élément", "en": "Element" },
+      "level": { "fr": "Niveau", "en": "Level" }
+    }
+  },
   "knowledgeTiers": {
     "1": -1,
     "2": -3,

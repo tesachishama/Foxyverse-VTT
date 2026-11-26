@@ -181,3 +181,4 @@ test('2.7 a sheet opens in its own window (several at once): window ids tell she
   assert.notEqual(sheetFloatId(1), sheetFloatId(2));
   bothLangs(['popOutSheet']);
 });
+test('2.8 the bio label editor has its FR/EN texts', () => bothLangs(['race', 'cls', 'element', 'level', 'bioLabels', 'bioLabelsHint']));
