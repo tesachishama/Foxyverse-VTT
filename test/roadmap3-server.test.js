@@ -171,3 +171,18 @@ test('3.1 journal entries belong to a table (or none) and to a campaign; players
   assert.equal((await srv.call('PATCH', `/admin/api/journals/${out.id}`, { body: 'edited' })).body.body, 'edited');
   assert.equal((await srv.call('DELETE', `/admin/api/journals/${out.id}`)).status, 200);
 });
+
+test('3.2 the compendium\'s "show" box on a journal entry: players get it (state and live), and lose it when unticked', async () => {
+  const j = (await gm('POST', '/journals', { title: 'Handout', body: 'The map is in the well' })).body;
+  const ev = await srv.events('/api/t/r3/events', pip.cookie);
+  try {
+    await gm('PATCH', `/journals/${j.id}`, { visibility: 'all' });
+    const up = await ev.next((e) => e.type === 'journal');
+    assert.equal(up.op, 'upsert'); assert.equal(up.data.body, 'The map is in the well'); assert.equal(up.data.campaignId, undefined);
+    assert.ok((await pip('GET', '/state')).body.journals.some((x) => x.id === j.id));
+    await gm('PATCH', `/journals/${j.id}`, { visibility: 'gm' });
+    const gone = await ev.next((e) => e.type === 'journal');
+    assert.deepEqual([gone.op, gone.data], ['delete', { id: j.id }]);
+    assert.ok(!(await pip('GET', '/state')).body.journals.some((x) => x.id === j.id));
+  } finally { ev.close(); }
+});

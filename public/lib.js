@@ -146,6 +146,8 @@ const DICT = {
     resetExplore: 'Réinitialiser l’exploration…', everyone: 'Tous les joueurs', confirmResetExplore: 'Effacer ce qui a été exploré sur cette scène ?',
     playersWin: 'La lumière des joueurs l’emporte', playersWinHint: 'Les lumières portées par les tokens des joueurs ne sont pas éteintes par cette zone.',
     // ROADMAP 3 (fr)
+    openJournal: "Ouvrir dans le journal",
+    journalVisibleHint: "Montrer aux joueurs dans leur compendium",
     race: "Race",
     bioLabels: "Libellés de la bio",
     bioLabelsHint: "Le nom des champs de la bio sur les fiches, dans chaque langue. Vide = le nom par défaut.",
@@ -260,6 +262,8 @@ const DICT = {
     resetExplore: 'Reset exploration…', everyone: 'All players', confirmResetExplore: 'Erase what was explored on this scene?',
     playersWin: "Players' light wins", playersWinHint: "Lights carried by players' tokens are not put out by this area.",
     // ROADMAP 3 (en)
+    openJournal: "Open in the journal",
+    journalVisibleHint: "Show to players in their compendium",
     race: "Race",
     bioLabels: "Bio labels",
     bioLabelsHint: "The names of the sheet's bio fields, in each language. Empty = the default name.",
