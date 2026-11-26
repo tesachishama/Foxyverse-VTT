@@ -186,3 +186,40 @@ test('3.2 the compendium\'s "show" box on a journal entry: players get it (state
     assert.ok(!(await pip('GET', '/state')).body.journals.some((x) => x.id === j.id));
   } finally { ev.close(); }
 });
+
+test('3.4 the eye: a journal entry pops up for the chosen players only; the others never receive its content', async () => {
+  const beaSlot = await T.slot('Bea'), bea = await T.join(beaSlot.id);
+  const j = (await gm('POST', '/journals', { title: 'Secret letter', body: 'TOP-SECRET-CONTENT' })).body;
+  const evPip = await srv.events('/api/t/r3/events', pip.cookie), evBea = await srv.events('/api/t/r3/events', bea.cookie);
+  try {
+    const r = await gm('POST', `/journals/${j.id}/show`, { slots: [beaSlot.id, 99999] });
+    assert.deepEqual(r.body.shownTo, [beaSlot.id]);
+    const got = await evBea.next((e) => e.type === 'show');
+    assert.equal(got.kind, 'journal'); assert.equal(got.data.body, 'TOP-SECRET-CONTENT'); assert.equal(got.data.campaignId, undefined);
+    await gm('POST', '/chat', { text: 'marker' }); // everyone gets this; Pip must get it with nothing secret before it
+    const pipSaw = [];
+    await evPip.next((e) => { pipSaw.push(JSON.stringify(e)); return e.type === 'chat'; });
+    assert.ok(!pipSaw.some((e) => e.includes('TOP-SECRET-CONTENT') || e.includes('"show"')), pipSaw.join('\n'));
+    // nothing is kept: the entry is still the GM's, nobody gets it from the state
+    assert.equal((await bea('GET', '/state')).body.journals.some((x) => x.id === j.id), false);
+    // "make it visible in the compendium": now everyone has it
+    await gm('POST', `/journals/${j.id}/show`, { slots: 'all', reveal: true });
+    assert.equal((await pip('GET', '/state')).body.journals.some((x) => x.id === j.id), true);
+    assert.equal((await pip('POST', `/journals/${j.id}/show`, { slots: 'all' })).status, 404); // players cannot show anything
+  } finally { evPip.close(); evBea.close(); }
+});
+
+test('3.4 the eye on an NPC sends only its portrait and name to the chosen players; "reveal" lists it in the compendium', async () => {
+  const npc = (await gm('POST', '/actors', { name: 'Mysterious stranger', data: { notes: 'NPC-SECRET-NOTES' } })).body;
+  const ev = await srv.events('/api/t/r3/events', pip.cookie);
+  try {
+    const r = await gm('POST', `/actors/${npc.id}/show`, { slots: [pipSlot.id] });
+    assert.equal(r.body.shown, false);
+    const got = await ev.next((e) => e.type === 'show');
+    assert.deepEqual(got, { type: 'show', kind: 'npc', data: { id: npc.id, name: 'Mysterious stranger', portrait: null } });
+    assert.ok(!(await pip('GET', '/state')).body.npcs.some((n) => n.id === npc.id)); // nothing kept
+    assert.equal((await gm('POST', `/actors/${npc.id}/show`, { slots: [], reveal: true })).body.shown, true);
+    assert.ok((await pip('GET', '/state')).body.npcs.some((n) => n.id === npc.id));
+    assert.equal((await pip('POST', `/actors/${npc.id}/show`, { slots: 'all' })).status, 404);
+  } finally { ev.close(); }
+});

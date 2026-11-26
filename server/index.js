@@ -901,12 +901,32 @@ tbl('DELETE', '/journals/:id', 'gm', ({ table, params }) => {
   broadcast(table.id, { type: 'journal', op: 'delete', data: { id } });
   return { ok: true };
 });
-tbl('POST', '/journals/:id/show', 'gm', ({ table, params }) => {
+// ---- the GM's "eye" (ROADMAP 3 §3.4): show a journal entry or an NPC to chosen players, as a pop-up they close themselves.
+// The event goes to the chosen players' pages ONLY (never broadcast and filtered on the page); nothing is kept, so a reload forgets it.
+// "reveal" also makes it visible in the players' compendium for good.
+/** The player slots of this table a "show" goes to: "all", or a list of slot ids (unknown ones are dropped). */
+function showTargets(table, slots) {
+  const ids = slotsOf(table.id).map((s) => s.id);
+  if (slots === 'all') return new Set(ids);
+  return new Set((Array.isArray(slots) ? slots : []).map(idOf).filter((id) => ids.includes(id)));
+}
+const showTo = (table, targets, ev) => broadcast(table.id, ev, (u) => u.role === 'player' && targets.has(u.id));
+tbl('POST', '/journals/:id/show', 'gm', ({ table, params, body }) => {
   let row = journalIn(table, params.id);
-  if (jparse(row.visibility, 'gm') === 'gm') { db.prepare('UPDATE journals SET visibility = ? WHERE id = ?').run('"all"', row.id); row = getRow('journals', row.id); }
-  pushJournal(row);
-  broadcast(table.id, { type: 'show', id: row.id }, (u) => canSeeJournal(u, row));
-  return journalView(row);
+  const targets = showTargets(table, body.slots ?? 'all');
+  if (body.reveal === true && jparse(row.visibility, 'gm') !== 'all') {
+    db.prepare('UPDATE journals SET visibility = ? WHERE id = ?').run('"all"', row.id); row = getRow('journals', row.id); pushJournal(row);
+  }
+  showTo(table, targets, { type: 'show', kind: 'journal', data: journalView(row, { role: 'player' }) });
+  return { ...journalView(row), shownTo: [...targets] };
+});
+tbl('POST', '/actors/:id/show', 'gm', ({ table, params, body }) => { // an NPC: its portrait and its name, nothing else
+  let row = inTable('actors', params.id, table.id); if (!row) throw notFound();
+  const targets = showTargets(table, body.slots ?? 'all');
+  if (body.reveal === true && !row.shown) { db.prepare('UPDATE actors SET shown = 1 WHERE id = ?').run(row.id); row = getRow('actors', row.id); pushNpcs(table.id); }
+  const d = jparse(row.data, {});
+  showTo(table, targets, { type: 'show', kind: 'npc', data: { id: row.id, name: row.name, portrait: d.portrait || d.token || null } });
+  return { ok: true, shown: !!row.shown, shownTo: [...targets] };
 });
 
 // ---- compendium: the items and spells of a table, plus the GM's global view across tables and outside them.

@@ -238,7 +238,7 @@ function onEvent(ev) {
     if (shown('journal') && !S.journalEdit) renderPanel('journal');
     if (shown('comp') && !compEditing()) renderPanel('comp'); return;
   }
-  if (type === 'show') { S.modal = ev.id; renderModal(); return; }
+  if (type === 'show') { if (ev.kind) { S.modal = ev; renderModal(); } return; } // the GM's eye: a pop-up, kept nowhere
   if (type === 'explored') { if (explored?.sceneId === ev.sceneId) { explored = null; exploredKey = null; syncExplored(); } return; } // the GM reset it
   if (type === 'comp') {
     if (op === 'delete') remove(S.compendium, data.id); else upsert(S.compendium, data);
@@ -1069,6 +1069,7 @@ function sheetView(a, { floating = false } = {}) {
   const notes = section(t('notes'), field(a, d, 'notes', 'area', { rows: 6 }));
   const gm = isGM() && section('GM', h('div', { class: 'line' },
     viewScene() && h('button', { title: t('placeTokenHint'), onclick: () => placeToken(a) }, t('placeToken')),
+    eyeBtn('npc', a),
     h('label', { class: 'check', title: t('npcHint') }, h('input', { type: 'checkbox', checked: a.shown, onchange: guard(async (e) => { Object.assign(a, await api('PATCH', '/actors/' + a.id, { shown: e.target.checked })); }) }), t('shownToPlayers')),
     h('button', { class: 'danger', onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await api('DELETE', '/actors/' + a.id); }) }, t('del'))));
   const perms = isGM() && section(t('perms'), permsEditor(a));
@@ -1331,7 +1332,7 @@ function journalView(j) {
     h('div', { class: 'line' }, h('button', { class: 'quiet', onclick: () => { S.journalId = null; renderPanel(); } }, '← ' + t('back')), h('h3', { class: 'grow' }, j.title)),
     isGM() && h('div', { class: 'line' },
       h('button', { onclick: () => { S.journalEdit = true; renderPanel(); } }, t('edit')),
-      h('button', { class: 'primary', onclick: guard(() => api('POST', `/journals/${j.id}/show`)) }, t('showPlayers')),
+      eyeBtn('journal', j),
       h('button', { class: 'danger', onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await api('DELETE', '/journals/' + j.id); S.journalId = null; }) }, t('del'))),
     journalBody(j));
 }
@@ -1355,12 +1356,36 @@ function journalForm(j) {
       h('button', { class: 'primary', onclick: guard(async () => { const r = await api('PATCH', '/journals/' + j.id, { title: d.title, body: d.body, image: d.image, visibility: vis(), campaignId: d.campaignId }); upsert(S.journals, r); S.journalEdit = false; renderPanel(); }) }, t('save')),
       h('button', { onclick: () => { S.journalEdit = false; renderPanel(); } }, t('back'))));
 }
+/** What the GM shows with the eye: a whole journal entry, or an NPC's portrait and name (click the picture to see it big). */
 function renderModal() {
-  $('.modal')?.remove();
-  const j = S.journals.find((x) => x.id === S.modal); if (!j) return;
+  $('.modal.shown')?.remove();
+  const m = S.modal; if (!m?.data) return;
   const close = () => { S.modal = null; renderModal(); };
-  document.body.append(h('div', { class: 'modal', onclick: (e) => { if (e.target === e.currentTarget) close(); } },
-    h('div', { class: 'modal-card' }, h('button', { class: 'x close', onclick: close }, '×'), h('h3', {}, j.title), journalBody(j))));
+  const body = m.kind === 'npc'
+    ? h('div', { class: 'npc-show' }, m.data.portrait ? h('img', { class: 'npc-portrait', src: m.data.portrait, alt: m.data.name, title: t('zoomImage'), onclick: (e) => e.currentTarget.classList.toggle('big') }) : h('div', { class: 'portrait empty' }, '?'))
+    : journalBody(m.data);
+  document.body.append(h('div', { class: 'modal shown', onclick: (e) => { if (e.target === e.currentTarget) close(); } },
+    h('div', { class: 'modal-card' }, h('button', { class: 'x close', onclick: close }, '×'), h('h3', {}, m.kind === 'npc' ? m.data.name : m.data.title), body)));
+}
+/** The GM's eye button (journal entries, NPCs). */
+const eyeBtn = (kind, x) => h('button', { class: 'quiet eye-btn', title: t('showTo'), 'aria-label': t('showTo'), onclick: (e) => { e.stopPropagation(); eyeDialog(kind, x); } }, h('img', { class: 'tool-ico small', src: iconUrl('eye'), alt: '' }));
+/** To which players? Ticks per player, "everyone", and (when it is not yet visible to players) "also show it in the compendium". */
+function eyeDialog(kind, x) {
+  const players = S.users.filter((u) => u.role === 'player');
+  const chosen = new Set(players.map((u) => u.id)), visible = kind === 'npc' ? !!x.shown : x.visibility === 'all';
+  let reveal = false;
+  const boxes = players.map((u) => h('input', { type: 'checkbox', checked: true, onchange: (e) => { if (e.target.checked) chosen.add(u.id); else chosen.delete(u.id); all.checked = chosen.size === players.length; } }));
+  const all = h('input', { type: 'checkbox', checked: true, onchange: (e) => { boxes.forEach((b, i) => { b.checked = e.target.checked; if (b.checked) chosen.add(players[i].id); else chosen.delete(players[i].id); }); } });
+  dialog(`${t('showTo')} : ${kind === 'npc' ? x.name : x.title}`, h('div', { class: 'eye-dialog' },
+    !players.length ? h('p', { class: 'hint' }, t('noSlots')) : [h('label', { class: 'check' }, all, h('b', {}, t('everyone'))),
+      players.map((u, i) => h('label', { class: 'check' }, boxes[i], h('span', { style: `color:${u.color}` }, u.name)))],
+    !visible && h('label', { class: 'check reveal-box' }, h('input', { type: 'checkbox', onchange: (e) => { reveal = e.target.checked; } }), t('alsoInCompendium')),
+    h('p', { class: 'hint' }, kind === 'npc' ? t('eyeNpcHint') : t('eyeJournalHint'))),
+  [[t('showPlayers'), async () => {
+    const r = await api('POST', `/${kind === 'npc' ? 'actors' : 'journals'}/${x.id}/show`, { slots: chosen.size === players.length ? 'all' : [...chosen], reveal });
+    if (kind === 'npc') x.shown = r.shown; else upsert(S.journals, r);
+    toast(t('shownTo').replace('{n}', r.shownTo.length), false); renderPanel();
+  }, true], [t('cancel'), () => {}]]);
 }
 
 // ------------------------------------------------------------------ sound (GM)
@@ -1495,10 +1520,11 @@ function tableCompendium() {
       !S.journals.length && h('p', { class: 'hint' }, t('empty')),
       S.journals.filter((j) => matchesSearch(j.title, compSearch)).map((j) => h('div', { class: 'entry' }, h('div', { class: 'line' },
         h('button', { class: 'row grow', title: t('openJournal'), onclick: () => { S.journalId = j.id; S.journalEdit = false; openTab('journal'); } }, h('b', {}, j.title), h('span', { class: 'dim' }, ' ' + visLabel(j))),
+        eyeBtn('journal', j),
         h('label', { class: 'check', title: t('journalVisibleHint') }, h('input', { type: 'checkbox', checked: j.visibility === 'all', onchange: guard(async (ev) => { upsert(S.journals, await api('PATCH', '/journals/' + j.id, { visibility: ev.target.checked ? 'all' : 'gm' })); renderPanel(); }) }), '👁'))))),
     fold('npcs', h('h3', {}, t('npcs')), h('p', { class: 'hint' }, t('npcHint')),
       found(S.actors).map((a) => h('label', { class: 'line check' }, h('input', { type: 'checkbox', checked: a.shown, onchange: guard(async (ev) => { Object.assign(a, await api('PATCH', '/actors/' + a.id, { shown: ev.target.checked })); }) }),
-        h('b', { class: 'grow' }, a.name), h('span', { class: 'dim' }, `${t('level')} ${a.data.bio.level}`)))),
+        h('b', { class: 'grow' }, a.name), h('span', { class: 'dim' }, `${t('level')} ${a.data.bio.level}`), eyeBtn('npc', a)))),
   ];
 }
 /** A dropdown of checkboxes: null = everything ticked. */

@@ -353,3 +353,9 @@ fieldset.inv-body.locked input, fieldset.inv-body.locked textarea, fieldset.inv-
 .fold-head .chev.open { transform: rotate(90deg); }
 .sec.fold:not(.open) { margin-bottom: 6px; }
 h4.fold-head { display: flex; }
+/* ROADMAP 3 §3.4: the GM's eye */
+.eye-btn { padding: 2px 4px; line-height: 0; }
+.eye-dialog { display: grid; gap: 6px; } .reveal-box { margin-top: 6px; }
+.npc-show { display: flex; justify-content: center; }
+.npc-portrait { max-width: 100%; max-height: 50vh; border-radius: 10px; cursor: zoom-in; }
+.npc-portrait.big { position: fixed; inset: 2vh 2vw; width: 96vw; height: 96vh; max-height: none; object-fit: contain; background: rgba(31, 0, 19, .95); z-index: 60; cursor: zoom-out; }

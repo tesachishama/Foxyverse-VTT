@@ -196,3 +196,7 @@ test('3.3 compendium groups are folded by default, a click opens / closes one, a
   assert.deepEqual(st, {});
   assert.equal(isGroupOpen(null, 'x'), false);
 });
+test('3.4 the eye button has its icon (square placeholder) and FR/EN texts', () => {
+  squareSvg('eye');
+  bothLangs(['showTo', 'alsoInCompendium', 'eyeNpcHint', 'eyeJournalHint', 'shownTo', 'zoomImage', 'everyone', 'showPlayers']);
+});
