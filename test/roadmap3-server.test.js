@@ -94,3 +94,17 @@ test('2.3 manual mode: values are sanitised (ranges, empty = formula); only the 
   const pipOn = await setManual(pip, a, { on: true, maxhp: 1 });
   assert.equal(pipOn.body.data.manual.maxhp, 50);
 });
+
+test('2.4 items are locked by default (a saved "edit" unlocks); players edit the bonuses of their own items; compendium copies carry no lock', async () => {
+  const a = await manualSheet('Gear');
+  const items = [{ name: 'Old sword', type: 'weapon' }, { name: 'New ring', type: 'other', locked: false, bonuses: { strength: 1 } }];
+  const r = await gm('PATCH', `/actors/${a.id}`, { data: { ...a.data, items } });
+  assert.deepEqual(r.body.data.items.map((i) => i.locked), [true, false]);
+  // a player with the edit right changes a bonus (trust decision: no extra check beyond the sheet's edit right)
+  const mine = r.body.data.items.map((i) => (i.name === 'New ring' ? { ...i, bonuses: { strength: 3 }, usedSlots: ['other'] } : i));
+  const p = await pip('PATCH', `/actors/${a.id}`, { data: { ...r.body.data, items: mine } });
+  assert.equal(p.status, 200); assert.equal(p.body.data.items[1].bonuses.strength, 3);
+  assert.equal(p.body.computed.stats.strength.item, 3);
+  const entry = (await gm('GET', '/compendium')).body.entries.find((e) => e.name === 'New ring');
+  assert.equal(entry.data.locked, undefined);
+});

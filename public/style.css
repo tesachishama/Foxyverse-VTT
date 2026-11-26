@@ -341,3 +341,7 @@ input.search { width: 100%; margin: 0 0 8px; }
 .manual-box { font-size: 12px; font-weight: 400; color: var(--lilac); }
 input.manual { border-color: var(--ember); width: 64px; }
 .res-grid.manual-on .c { color: var(--ember); }
+fieldset.inv-body { border: 0; margin: 6px 0 0; padding: 0; min-width: 0; }
+fieldset.inv-body.locked input, fieldset.inv-body.locked textarea, fieldset.inv-body.locked select { opacity: .75; }
+.inv-name { cursor: pointer; padding: 4px 0; }
+.lock-line { justify-content: flex-end; }

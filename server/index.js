@@ -893,7 +893,7 @@ function cleanComp(sys, kind, data) {
   const key = { item: 'items', spell: 'spells' }[kind];
   const e = sanitizeActorData({ [key]: [data && typeof data === 'object' ? data : {}] }, sys)[key][0];
   delete e.id;
-  if (kind === 'item') e.usedSlots = []; // a template is never "equipped"
+  if (kind === 'item') { e.usedSlots = []; delete e.locked; } // a template is never "equipped"; locking is the sheet's business
   return e;
 }
 const compName = (v, d) => String(v ?? d ?? '').trim().slice(0, 80) || d || 'Entry';

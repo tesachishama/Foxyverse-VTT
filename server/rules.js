@@ -170,7 +170,8 @@ export function sanitizeActorData(raw, sys) {
       if (!used.length && i?.equipped) used = ['other']; // sheets from before slots existed
       return { id: str(i?.id, 16) || newId(), name: str(i?.name, 80), type, qty: int(i?.qty ?? 1, 0, 99999), bonuses, pdef: int(i?.pdef, 0, 9999), mdef: int(i?.mdef, 0, 9999),
         notes: str(i?.notes, 2000), damage: str(i?.damage, 300), // a weapon's roll buttons, e.g. "[pdmg 2d30 | physique]" (shown for weapons only)
-        equipExpr: i?.equipExpr !== undefined ? str(i.equipExpr, 300) : type === 'weapon' ? '[weapons]' : '', usedSlots: used };
+        equipExpr: i?.equipExpr !== undefined ? str(i.equipExpr, 300) : type === 'weapon' ? '[weapons]' : '', usedSlots: used,
+        locked: i?.locked !== false }; // ROADMAP 3 §2.4: an item's fields are locked (read-only) until "edit", so a stray click changes nothing
     })),
     currency: { pc: int(r.currency?.pc, 0, 1e12), pa: int(r.currency?.pa, 0, 1e12), po: int(r.currency?.po, 0, 1e12) },
     notes: str(r.notes, 20000),

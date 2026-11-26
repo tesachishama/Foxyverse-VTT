@@ -147,3 +147,4 @@ test('1.8 a double click on a floating window\'s title folds it and back; it unf
   bothLangs(['foldHint']);
 });
 test('2.3 the manual mode box has its FR/EN name and hint', () => bothLangs(['manualMode', 'manualHint']));
+test('2.4 the item lock button has its FR/EN names', () => bothLangs(['unlockItem', 'lockItem', 'edit', 'save']));

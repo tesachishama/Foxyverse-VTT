@@ -122,29 +122,35 @@ export function inventoryView(env) {
   };
   const card = (it) => {
     const key = ik(it), isOpen = S.openItems.has(key);
+    // ROADMAP 3 §2.4: locked by default (like spells); "edit" unlocks the fields, "save" locks them again. Quantity and slot stay usable.
+    const locked = it.locked !== false;
+    const lockBtn = h('button', { class: 'quiet lock-btn', type: 'button', title: locked ? t('unlockItem') : t('lockItem'), onclick: () => { it.locked = !locked; saveActor(a); rerender(); } }, locked ? '✎ ' + t('edit') : '🔒 ' + t('save'));
     const typeSel = h('select', { onchange: (e) => { it.type = e.target.value; if (it.type === 'weapon' && !it.equipExpr) it.equipExpr = '[weapons]'; saveActor(a); rerender(); } },
       SECTIONS.map(([k, lbl]) => h('option', { value: k }, t(lbl))));
     typeSel.value = it.type;
     return h('div', { class: 'inv-item' + (isOpen ? ' open' : '') + ((it.usedSlots || []).length ? ' on' : ''), id: 'inv-' + key },
       h('div', { class: 'inv-head' },
         h('button', { class: 'chev' + (isOpen ? ' open' : ''), type: 'button', title: t('toggle'), onclick: () => { if (isOpen) S.openItems.delete(key); else S.openItems.add(key); rerender(); } }, '›'),
-        field(a, it, 'name', 'text', { class: 'grow', placeholder: t('name') }), qty(it), picker(it)),
+        locked ? h('b', { class: 'grow inv-name', onclick: () => { if (isOpen) S.openItems.delete(key); else S.openItems.add(key); rerender(); } }, it.name || '…') : field(a, it, 'name', 'text', { class: 'grow', placeholder: t('name') }),
+        qty(it), picker(it)),
       // a closed weapon shows its damage buttons on a second line; they roll in the chat like any other roll button
       !isOpen && it.type === 'weapon' && it.damage?.trim() && h('div', { class: 'inv-damage' }, rollButtons(it.damage)),
-      isOpen && h('div', { class: 'inv-body' },
-        it.type === 'weapon' && h('label', { class: 'inv-damage-edit' }, t('damage'), field(a, it, 'damage', 'text', { class: 'code grow', placeholder: '[pdmg 2d30 | physique][mdmg 2d30 | magique]' })),
+      isOpen && locked && it.type === 'weapon' && it.damage?.trim() && h('div', { class: 'inv-damage' }, rollButtons(it.damage)),
+      isOpen && h('fieldset', { class: 'inv-body' + (locked ? ' locked' : ''), disabled: locked },
+        it.type === 'weapon' && !locked && h('label', { class: 'inv-damage-edit' }, t('damage'), field(a, it, 'damage', 'text', { class: 'code grow', placeholder: '[pdmg 2d30 | physique][mdmg 2d30 | magique]' })),
         field(a, it, 'notes', 'area', { rows: 2, placeholder: t('effect') }),
         (it.type === 'weapon' || it.type === 'armor') ? statStrip(it) : null,
         it.type === 'armor' ? h('div', { class: 'line' }, h('label', {}, t('defP'), field(a, it, 'pdef', 'int', { min: 0, class: 'n' })), h('label', {}, t('defM'), field(a, it, 'mdef', 'int', { min: 0, class: 'n' }))) : null,
         exprRow(it),
         h('div', { class: 'line' }, typeSel, compBtn('item', it), h('span', { class: 'grow' }),
-          h('button', { class: 'danger', type: 'button', onclick: () => { items.splice(items.indexOf(it), 1); saveActor(a); rerender(); } }, t('del')))));
+          !locked && h('button', { class: 'danger', type: 'button', onclick: () => { items.splice(items.indexOf(it), 1); saveActor(a); rerender(); } }, t('del')))),
+      isOpen && h('div', { class: 'line lock-line' }, lockBtn));
   };
 
   // ------------------------------------------------ sections
   const section = ([type, titleKey]) => {
     const list = items.filter((it) => it.type === type);
-    const add = () => { const it = { id: '', _k: 'n' + Math.random().toString(36).slice(2, 8), name: '', type, qty: 1, bonuses: {}, pdef: 0, mdef: 0, notes: '', equipExpr: type === 'weapon' ? '[weapons]' : '', usedSlots: [] }; items.push(it); S.openItems.add(ik(it)); saveActor(a); rerender(); };
+    const add = () => { const it = { id: '', _k: 'n' + Math.random().toString(36).slice(2, 8), name: '', type, qty: 1, bonuses: {}, pdef: 0, mdef: 0, notes: '', equipExpr: type === 'weapon' ? '[weapons]' : '', usedSlots: [], locked: false }; items.push(it); S.openItems.add(ik(it)); saveActor(a); rerender(); };
     const fromComp = (e) => { const it = { ...e, id: '', _k: 'n' + Math.random().toString(36).slice(2, 8), type, usedSlots: [] }; items.push(it); saveActor(a); rerender(); };
     // "+": a small window, "New" or an entry of this category from the compendium
     return h('section', { class: 'sec inv-sec' }, h('h3', {}, t(titleKey), h('span', { class: 'sec-actions' },

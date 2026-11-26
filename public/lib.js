@@ -146,6 +146,8 @@ const DICT = {
     resetExplore: 'Réinitialiser l’exploration…', everyone: 'Tous les joueurs', confirmResetExplore: 'Effacer ce qui a été exploré sur cette scène ?',
     playersWin: 'La lumière des joueurs l’emporte', playersWinHint: 'Les lumières portées par les tokens des joueurs ne sont pas éteintes par cette zone.',
     // ROADMAP 3 (fr)
+    unlockItem: "Modifier cet équipement (débloque ses champs)",
+    lockItem: "Enregistrer (verrouille les champs)",
     manualMode: "Mode manuel (MJ)",
     manualHint: "MJ seulement : saisir à la main PV max, mana max, faveurs max, actions et défenses de cette fiche. Vide = la formule.",
     foldHint: "Double-clic : replier / déplier",
@@ -251,6 +253,8 @@ const DICT = {
     resetExplore: 'Reset exploration…', everyone: 'All players', confirmResetExplore: 'Erase what was explored on this scene?',
     playersWin: "Players' light wins", playersWinHint: "Lights carried by players' tokens are not put out by this area.",
     // ROADMAP 3 (en)
+    unlockItem: "Edit this item (unlocks its fields)",
+    lockItem: "Save (locks the fields)",
     manualMode: "Manual mode (GM)",
     manualHint: "GM only: type this sheet's max HP, max mana, max favors, actions and defenses by hand. Empty = the formula.",
     foldHint: "Double click: fold / unfold",
