@@ -203,6 +203,7 @@ ul.diff .added b { color: var(--ok); } ul.diff .removed b { color: var(--bad); }
 .talent textarea { width: 100%; margin: 2px 0 6px; }
 .spell-effect { display: flex; gap: 6px; align-items: flex-start; } .spell-effect textarea { flex: 1; }
 .spell-effect.locked textarea { background: transparent; border-color: transparent; resize: none; }
+.effect-text { flex: 1; white-space: pre-wrap; padding: 4px 0; }
 
 /* character picture: portrait + token */
 button.avatar { padding: 0; }

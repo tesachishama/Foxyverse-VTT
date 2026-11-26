@@ -939,8 +939,10 @@ function sheetView(a) {
         if (pending.has(a.id)) await saveNow(a);
         const r = await api('POST', `/actors/${a.id}/cast`, { spellId: sp.id }); upsert(S.actors, r); renderPanel();
       }) }, t('cast')), compBtn('spell', sp), h('button', { class: 'x', onclick: () => { d.spells.splice(i, 1); saveActor(a); renderPanel(); } }, '×')),
-    h('div', { class: 'spell-effect' + (sp.locked ? ' locked' : '') },
-      field(a, sp, 'effect', 'area', { rows: 2, placeholder: t('effect'), readonly: sp.locked }),
+    h('div', { class: 'spell-effect' + (sp.locked || a.perm === 'view' ? ' locked' : '') },
+      sp.locked || a.perm === 'view' // locked or read-only: the text with its roll buttons, rolled as this sheet
+        ? h('div', { class: 'effect-text' }, inline(sp.effect ?? '', (c) => doRoll(c, a.id)))
+        : field(a, sp, 'effect', 'area', { rows: 2, placeholder: t('effectHint') }),
       h('button', { class: 'quiet', title: sp.locked ? t('unlockText') : t('lockText'), onclick: () => { sp.locked = !sp.locked; saveActor(a); renderPanel(); } }, sp.locked ? '✎ ' + t('edit') : '🔒 ' + t('save')))))),
   h('div', { class: 'addrow' }, h('button', { class: 'add', onclick: (e) => addMenu(e.currentTarget, 'spell', null,
     () => { d.spells.push({ id: '', name: '', effect: '', cost: 1, costType: 'mp', armed: false, continuous: false, locked: false }); saveActor(a); renderPanel(); },
@@ -1303,7 +1305,7 @@ function compPanel() {
 /** Players: items by category, spells, NPCs (name and picture only). Read-only. */
 function playerCompendium() {
   const entry = (e) => h('details', { class: 'entry' }, h('summary', {}, h('b', {}, e.name), h('span', { class: 'dim' }, ' ' + entrySummary(e))),
-    e.data.notes && h('p', {}, e.data.notes), e.data.effect && h('p', {}, e.data.effect));
+    e.data.notes && h('p', {}, e.data.notes), e.data.effect && h('p', { class: 'effect-text' }, inline(e.data.effect, (c) => doRoll(c))));
   const all = found(S.compendium), npcs = found(S.npcs);
   const items = byCategory(all), spells = all.filter((e) => e.kind === 'spell');
   return h('div', { class: 'pad' },

@@ -185,7 +185,7 @@ The card shows each die, the total, the formula with your stats filled in, and t
 a player on the tokens of sheets they can edit (the server refuses the others). The result reads *took 25 damage (20−5 + 15−5)*: armor comes off **each roll** separately.
 An application can be repeated, and each one has its own `↶` undo (players: on their own sheets). **Reroll** costs the rolling character one favor, GM included (a GM roll with no character is free).
 
-**Talents** are pills with a tier shown as it acts on the d20 (T0 -0, T1 -1, T2 -3, T3 -5, T4 -10) and a description that unfolds. A **ticked** talent applies to every stat check (T2 takes 3 off the d20, an easier roll-under); ticked talents add up; damage and other rolls are untouched. A spell's description can be saved (locked) and unlocked.
+**Talents** are pills with a tier shown as it acts on the d20 (T0 -0, T1 -1, T2 -3, T3 -5, T4 -10) and a description that unfolds. A **ticked** talent applies to every stat check (T2 takes 3 off the d20, an easier roll-under); ticked talents add up; damage and other rolls are untouched. A spell's description can be saved (locked) and unlocked; once locked (or on a view-only sheet) its `[pdmg 2d30 | physique]`-style buttons and **bold** show as on a weapon's damage line, and a click rolls in the chat as that sheet.
 
 ### 5. Equipment
 Each item says where it can be worn with a **slot expression**, and is placed with the slot picker or by clicking the silhouette. See [Equipment slots](#equipment-slots).
