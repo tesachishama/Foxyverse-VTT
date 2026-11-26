@@ -120,6 +120,7 @@ if (richer) {
 
 // ---- ROADMAP 2: "@" aliases (no spaces, unique per table, GM-only). alias_auto: still follows the sheet's name.
 addColumn('actors', 'alias', 'TEXT');
+addColumn('journals', 'campaign_id', CAMPAIGN); // ROADMAP 3 §3.1: a journal entry belongs to a table (or none) and to a campaign (optional)
 addColumn('actors', 'alias_auto', 'INTEGER NOT NULL DEFAULT 1');
 for (const a of db.prepare('SELECT id, table_id, name FROM actors WHERE alias IS NULL ORDER BY id').all()) {
   const taken = db.prepare('SELECT alias FROM actors WHERE table_id IS ? AND alias IS NOT NULL').all(a.table_id).map((r) => r.alias);

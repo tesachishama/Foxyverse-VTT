@@ -58,7 +58,7 @@ const tokenView = (t) => ({ id: t.id, sceneId: t.scene_id, name: t.name, x: t.x,
 /** A player's token: some player has the edit right on its sheet (its light can beat an anti-light, see public/walls.js). */
 const isPlayerCharacter = (t) => !!t.actor_id && !!db.prepare("SELECT 1 FROM actor_perms WHERE actor_id = ? AND level = 'edit'").get(t.actor_id);
 const soundView = (s) => ({ id: s.id, name: s.name, url: s.url, loop: !!s.loop, volume: s.volume });
-const journalView = (j) => ({ id: j.id, title: j.title, body: j.body, image: j.image, visibility: jparse(j.visibility, 'gm'), updated: j.updated });
+const journalView = (j, u = GM) => ({ id: j.id, title: j.title, body: j.body, image: j.image, visibility: jparse(j.visibility, 'gm'), updated: j.updated, ...(u.role === 'gm' ? { campaignId: j.campaign_id ?? null } : {}) });
 const canSeeJournal = (u, j) => { const v = jparse(j.visibility, 'gm'); return u.role === 'gm' || v === 'all' || (Array.isArray(v) && v.includes(u.id)); };
 // ---- compendium entries (items and spells). They link to sheets by kind + name, case-insensitive.
 const compKey = (name) => String(name ?? '').trim().toLowerCase();
@@ -160,7 +160,7 @@ const pushToken = (row, by) => {
   broadcast(sc.table_id, { type: 'token', op: 'upsert', data: tokenView(row), by }, (u) => u.role === 'gm' || pub);
   if (!pub) broadcast(sc.table_id, { type: 'token', op: 'delete', data: { id: row.id }, by }, (u) => u.role !== 'gm');
 };
-const pushJournal = (row) => broadcast(row.table_id, (u) => (canSeeJournal(u, row) ? { type: 'journal', op: 'upsert', data: journalView(row) } : { type: 'journal', op: 'delete', data: { id: row.id } }));
+const pushJournal = (row) => { if (row.table_id != null) broadcast(row.table_id, (u) => (canSeeJournal(u, row) ? { type: 'journal', op: 'upsert', data: journalView(row, u) } : { type: 'journal', op: 'delete', data: { id: row.id } })); };
 const pushComp = (row) => broadcast(row.table_id, (u) => (canSeeComp(u, row) ? { type: 'comp', op: 'upsert', data: compView(row, u) } : { type: 'comp', op: 'delete', data: { id: row.id } }));
 const pushNpcs = (tableId) => broadcast(tableId, { type: 'npcs', data: npcsOf(tableId) });
 const pushChat = (row) => broadcast(row.table_id, { type: 'chat', op: 'upsert', data: chatView(row) }, (u) => canSeeChat(u, row));
@@ -335,7 +335,7 @@ tbl('GET', '/state', 'player', ({ user, table }) => {
     sounds: db.prepare('SELECT * FROM sounds WHERE table_id = ? ORDER BY name').all(table.id).map(soundView),
     playing: [...playingOf(table.id)].map(([id, v]) => ({ id, startedAt: v.startedAt })),
     serverTime: now(),
-    journals: db.prepare('SELECT * FROM journals WHERE table_id = ? ORDER BY title').all(table.id).filter((j) => canSeeJournal(user, j)).map(journalView),
+    journals: db.prepare('SELECT * FROM journals WHERE table_id = ? ORDER BY title').all(table.id).filter((j) => canSeeJournal(user, j)).map((j) => journalView(j, user)),
     compendium: (() => { const names = gm ? null : namesSeenBy(user, table.id); return db.prepare('SELECT * FROM compendium WHERE table_id = ? ORDER BY kind, name COLLATE NOCASE').all(table.id).filter((c) => canSeeComp(user, c, names)).map((c) => compView(c, user)); })(),
     npcs: npcsOf(table.id),
     actors: db.prepare('SELECT * FROM actors WHERE table_id = ? ORDER BY name').all(table.id).filter((a) => canSeeActor(user, a)).map((a) => actorView(a, user)),
@@ -858,17 +858,42 @@ const cleanVis = (v) => (v === 'all' ? 'all' : Array.isArray(v) ? v.map(Number).
 const journalIn = (table, id) => { const j = inTable('journals', id, table.id); if (!j) throw notFound(); return j; };
 tbl('POST', '/journals', 'gm', ({ table, body }) => {
   const t = now();
-  const r = db.prepare('INSERT INTO journals (table_id, title, body, image, visibility, created, updated) VALUES (?,?,?,?,?,?,?)').run(table.id, String(body.title ?? 'Untitled').slice(0, 120) || 'Untitled', String(body.body ?? '').slice(0, 50000), imgUrl(body.image), JSON.stringify(cleanVis(body.visibility)), t, t);
+  const r = db.prepare('INSERT INTO journals (table_id, title, body, image, visibility, created, updated, campaign_id) VALUES (?,?,?,?,?,?,?,?)').run(table.id, String(body.title ?? 'Untitled').slice(0, 120) || 'Untitled', String(body.body ?? '').slice(0, 50000), imgUrl(body.image), JSON.stringify(cleanVis(body.visibility)), t, t,
+    body.campaignId !== undefined ? campaignId(body.campaignId) : table.campaign_id ?? null); // tagged with the table's campaign unless told otherwise
   const row = getRow('journals', r.lastInsertRowid); pushJournal(row);
   return journalView(row);
 });
-tbl('PATCH', '/journals/:id', 'gm', ({ table, params, body }) => {
-  const cur = journalIn(table, params.id);
-  db.prepare('UPDATE journals SET title=?, body=?, image=?, visibility=?, updated=? WHERE id=?').run(
+function patchJournal(cur, body) {
+  db.prepare('UPDATE journals SET title=?, body=?, image=?, visibility=?, campaign_id=?, updated=? WHERE id=?').run(
     body.title !== undefined ? String(body.title).slice(0, 120) || cur.title : cur.title, body.body !== undefined ? String(body.body).slice(0, 50000) : cur.body,
-    body.image !== undefined ? imgUrl(body.image) : cur.image, body.visibility !== undefined ? JSON.stringify(cleanVis(body.visibility)) : cur.visibility, now(), cur.id);
+    body.image !== undefined ? imgUrl(body.image) : cur.image, body.visibility !== undefined ? JSON.stringify(cleanVis(body.visibility)) : cur.visibility,
+    body.campaignId !== undefined ? campaignId(body.campaignId) : cur.campaign_id, now(), cur.id);
   const row = getRow('journals', cur.id); pushJournal(row);
+  return row;
+}
+tbl('PATCH', '/journals/:id', 'gm', ({ table, params, body }) => journalView(patchJournal(journalIn(table, params.id), body)));
+/** Copy a journal entry (of another table, or outside tables) into this table: a copy, GM only until shown. */
+tbl('POST', '/journals/import', 'gm', ({ table, body }) => {
+  const src = getRow('journals', body.id); if (!src) throw notFound();
+  if (src.table_id === table.id) throw bad('Already in this table');
+  const t = now();
+  const r = db.prepare('INSERT INTO journals (table_id, title, body, image, visibility, created, updated, campaign_id) VALUES (?,?,?,?,?,?,?,?)').run(table.id, src.title, src.body, src.image, '"gm"', t, t, src.campaign_id ?? table.campaign_id ?? null);
+  const row = getRow('journals', r.lastInsertRowid); pushJournal(row);
   return journalView(row);
+});
+// The GM's journal entries outside any table (like the compendium's): list them with every table's, create, edit, delete.
+const globalJournal = (id) => { const j = getRow('journals', id); if (!j) throw notFound(); return j; };
+admin('POST', '/journals', ({ body }) => {
+  const t = now();
+  const r = db.prepare('INSERT INTO journals (table_id, title, body, image, visibility, created, updated, campaign_id) VALUES (NULL,?,?,?,?,?,?,?)').run(String(body.title ?? 'Untitled').slice(0, 120) || 'Untitled', String(body.body ?? '').slice(0, 50000), imgUrl(body.image), '"gm"', t, t, campaignId(body.campaignId));
+  return journalView(getRow('journals', r.lastInsertRowid));
+});
+admin('PATCH', '/journals/:id', ({ params, body }) => journalView(patchJournal(globalJournal(params.id), body)));
+admin('DELETE', '/journals/:id', ({ params }) => {
+  const j = globalJournal(params.id);
+  db.prepare('DELETE FROM journals WHERE id = ?').run(j.id);
+  if (j.table_id != null) broadcast(j.table_id, { type: 'journal', op: 'delete', data: { id: j.id } });
+  return { ok: true };
 });
 tbl('DELETE', '/journals/:id', 'gm', ({ table, params }) => {
   const { id } = journalIn(table, params.id);
@@ -992,6 +1017,7 @@ tbl('POST', '/actors/import', 'gm', ({ table, by, body }) => { // copy an NPC (a
 const slugOf = (tableId) => (tableId == null ? null : getRow('game_tables', tableId)?.slug ?? null);
 admin('GET', '/compendium', () => ({
   entries: db.prepare('SELECT * FROM compendium ORDER BY kind, name COLLATE NOCASE').all().map((c) => ({ ...compView(c), table: slugOf(c.table_id) })),
+  journals: db.prepare('SELECT * FROM journals ORDER BY title COLLATE NOCASE').all().map((j) => ({ ...journalView(j), table: slugOf(j.table_id) })),
   npcs: db.prepare('SELECT id, name, data, table_id, campaign_id FROM actors WHERE table_id IS NOT NULL ORDER BY name COLLATE NOCASE').all()
     .map((a) => { const d = jparse(a.data, {}); return { id: a.id, name: a.name, portrait: tokenImage(d), level: d.bio?.level ?? 1, table: slugOf(a.table_id), campaignId: a.campaign_id ?? null }; }),
   tables: db.prepare('SELECT slug, name FROM game_tables ORDER BY name COLLATE NOCASE').all(),

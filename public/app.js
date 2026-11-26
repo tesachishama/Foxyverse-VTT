@@ -586,7 +586,8 @@ function gmNav() {
 
 // The user's own icons (design-reference/icons) on the tabs, as in the plugin.
 const TAB_ICON = { sheets: 'bio', journal: 'notes', rules: 'stats', comp: 'inventory', table: 'tab', system: 'settings', map: 'tab' };
-const tabList = () => (S.mapMode ? [['map', t('mapLibrary')]] : [['sheets', t('sheets')], ['journal', t('journal')], ['rules', t('rules')], ['comp', t('compendium')],
+// ROADMAP 3 §3.1: the journal tab is the GM's; players read the entries they may see in the compendium.
+const tabList = () => (S.mapMode ? [['map', t('mapLibrary')]] : [['sheets', t('sheets')], ...(isGM() ? [['journal', t('journal')]] : []), ['rules', t('rules')], ['comp', t('compendium')],
   ...(isGM() ? [['table', t('table')], ['sound', t('sound')], ['system', t('system')]] : [])]);
 const tabLabel = (id) => tabList().find(([x]) => x === id)?.[1] ?? id;
 /** What a tab needs when it comes into view. */
@@ -1318,7 +1319,7 @@ function journalPanel() {
   return h('div', { class: 'pad' },
     isGM() && h('button', { class: 'primary wide', onclick: guard(async () => { const r = await api('POST', '/journals', { title: t('newEntry') }); upsert(S.journals, r); S.journalId = r.id; S.journalEdit = true; renderPanel(); }) }, '+ ' + t('newEntry')),
     !S.journals.length && h('p', { class: 'hint' }, t('empty')),
-    h('ul', { class: 'list' }, S.journals.map((x) => h('li', {}, h('button', { class: 'row', onclick: () => { S.journalId = x.id; S.journalEdit = false; renderPanel(); } }, h('b', {}, x.title), isGM() && h('span', { class: 'dim right' }, visLabel(x)))))));
+    h('ul', { class: 'list' }, S.journals.map((x) => h('li', {}, h('button', { class: 'row', onclick: () => { S.journalId = x.id; S.journalEdit = false; renderPanel(); } }, h('b', {}, x.title), isGM() && h('span', { class: 'dim right' }, visLabel(x) + (x.campaignId ? ' · ' + (S.campaigns.find((c) => c.id === x.campaignId)?.name ?? '') : '')))))));
 }
 function journalBody(j) {
   return h('div', { class: 'journal-body' }, j.image && h('img', { class: 'handout', src: j.image, alt: j.title }),
@@ -1334,7 +1335,7 @@ function journalView(j) {
     journalBody(j));
 }
 function journalForm(j) {
-  const d = { title: j.title, body: j.body, image: j.image, mode: j.visibility === 'all' ? 'all' : Array.isArray(j.visibility) ? 'custom' : 'gm', users: Array.isArray(j.visibility) ? [...j.visibility] : [] };
+  const d = { title: j.title, body: j.body, image: j.image, campaignId: j.campaignId ?? null, mode: j.visibility === 'all' ? 'all' : Array.isArray(j.visibility) ? 'custom' : 'gm', users: Array.isArray(j.visibility) ? [...j.visibility] : [] };
   const players = S.users.filter((u) => u.role === 'player');
   const vis = () => (d.mode === 'custom' ? d.users : d.mode);
   const modeSel = h('select', { onchange: (e) => { d.mode = e.target.value; renderPanel2(); } }, h('option', { value: 'gm' }, t('visGM')), h('option', { value: 'all' }, t('visAll')), h('option', { value: 'custom' }, t('visCustom')));
@@ -1348,8 +1349,9 @@ function journalForm(j) {
     h('input', { type: 'text', class: 'title', value: d.title, oninput: (e) => { d.title = e.target.value; } }),
     img, h('textarea', { rows: 14, placeholder: t('body') + ' — **gras**, # titre, - liste, [str +2|label]', oninput: (e) => { d.body = e.target.value; } }, d.body),
     h('div', { class: 'line' }, t('visibility'), modeSel), picks,
+    h('div', { class: 'line' }, t('campaign'), (() => { const sel = h('select', { onchange: (e) => { d.campaignId = e.target.value ? Number(e.target.value) : null; } }, h('option', { value: '' }, t('noCampaign')), S.campaigns.map((c) => h('option', { value: c.id }, c.name))); sel.value = d.campaignId ?? ''; return sel; })()),
     h('div', { class: 'line' },
-      h('button', { class: 'primary', onclick: guard(async () => { const r = await api('PATCH', '/journals/' + j.id, { title: d.title, body: d.body, image: d.image, visibility: vis() }); upsert(S.journals, r); S.journalEdit = false; renderPanel(); }) }, t('save')),
+      h('button', { class: 'primary', onclick: guard(async () => { const r = await api('PATCH', '/journals/' + j.id, { title: d.title, body: d.body, image: d.image, visibility: vis(), campaignId: d.campaignId }); upsert(S.journals, r); S.journalEdit = false; renderPanel(); }) }, t('save')),
       h('button', { onclick: () => { S.journalEdit = false; renderPanel(); } }, t('back'))));
 }
 function renderModal() {

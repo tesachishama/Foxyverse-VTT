@@ -151,3 +151,23 @@ test('2.8 a table whose rules were saved before the labels existed still gets th
   // the server caches rules per table: this table's were never read yet, so they are read from the database now
   assert.deepEqual((await srv.call('GET', '/admin/api/t/oldlabels/system')).body.labels.bio.class, { fr: 'Classe', en: 'Class' });
 });
+
+// ---------------------------------------------------------------- phase 3
+test('3.1 journal entries belong to a table (or none) and to a campaign; players cannot write them; outside-table entries are copied into a table', async () => {
+  const camp = (await srv.call('POST', '/admin/api/campaigns', { name: 'Saga' })).body;
+  const j = (await gm('POST', '/journals', { title: 'Lore', body: 'secret', campaignId: camp.id })).body;
+  assert.equal(j.campaignId, camp.id);
+  assert.equal((await gm('PATCH', `/journals/${j.id}`, { campaignId: null })).body.campaignId, null);
+  assert.equal((await gm('PATCH', `/journals/${j.id}`, { campaignId: 99999 })).status, 400);
+  assert.equal((await pip('POST', '/journals', { title: 'Mine' })).status, 404);
+  assert.equal((await pip('PATCH', `/journals/${j.id}`, { title: 'Mine' })).status, 404);
+  assert.equal((await pip('GET', '/state')).body.journals.some((x) => x.id === j.id), false); // GM only by default
+  const out = (await srv.call('POST', '/admin/api/journals', { title: 'World map notes', campaignId: camp.id })).body;
+  const g = (await srv.call('GET', '/admin/api/compendium')).body;
+  assert.deepEqual(g.journals.find((x) => x.id === out.id).table, null);
+  assert.equal(g.journals.find((x) => x.id === j.id).table, 'r3');
+  const copy = (await gm('POST', '/journals/import', { id: out.id })).body;
+  assert.equal(copy.title, 'World map notes'); assert.equal(copy.campaignId, camp.id); assert.equal(copy.visibility, 'gm');
+  assert.equal((await srv.call('PATCH', `/admin/api/journals/${out.id}`, { body: 'edited' })).body.body, 'edited');
+  assert.equal((await srv.call('DELETE', `/admin/api/journals/${out.id}`)).status, 200);
+});
