@@ -28,6 +28,13 @@ export function ghostsOf(tokens, tps, grid) {
 }
 
 /**
+ * The light a ghost gives: its token's light (radius > 0, not hidden), from the ghost's position. Same rules as the token's own light
+ * (stopped by walls, put out by anti-lights unless "players' light wins" and it is a player's token). The real light stays where the token is.
+ */
+export const ghostLights = (ghosts) => (ghosts || []).filter((g) => g.token.light > 0 && !g.token.hidden)
+  .map((g) => ({ x: g.x, y: g.y, radius: g.token.light, player: !!g.token.pc }));
+
+/**
  * Where a move "from a ghost" really starts: the token must stand on a TP cell linked to cell `viaId`. Returns that start point
  * (the ghost's position), or null when the move is not allowed.
  */

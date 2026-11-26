@@ -6,7 +6,7 @@ import { openTokenCropper } from './tokencrop.js';
 import { signed, tierLabel, damageText, matchesSearch } from './format.js';
 import { isTokenDead, pickViewers, markSeen, orBits, bitsToBase64, bitsFromBase64 } from './vision.js';
 import { radiusStep, moveBlocked } from './walls.js';
-import { ghostsOf, newGroup, tpGroups } from './tp.js';
+import { ghostsOf, ghostLights, newGroup, tpGroups } from './tp.js';
 import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget } from './layout.js';
 
 const S = {
@@ -419,9 +419,11 @@ function buildShell() {
         // viewerIds: tokens always drawn for this page (its own, dead ones included); viewers: the eyes (alive only)
         // a ghost sees what its token would see from there
         viewers: [...eyes.map((x) => eye(x)), ...ghosts.filter((g) => eyes.includes(g.token)).map((g) => eye(g.token, g))], viewerIds: new Set(own.map((x) => x.id)), explored, ghosts,
-        // GM lights and anti-lights, plus the lights tokens carry (a player's token light can beat an anti-light that allows it)
+        // GM lights and anti-lights, plus the lights tokens carry (a player's token light can beat an anti-light that allows it),
+        // and the same lights shining from the tokens' TP ghosts
         lights: [...(sc?.lights ?? []).map((l) => ({ x: l.x, y: l.y, radius: l.radius, anti: l.kind === 'anti', playersWin: !!l.playersWin })),
-          ...tokens.filter((x) => x.light > 0 && !x.hidden).map((x) => ({ x: x.x, y: x.y, radius: x.light, player: !!x.pc }))],
+          ...tokens.filter((x) => x.light > 0 && !x.hidden).map((x) => ({ x: x.x, y: x.y, radius: x.light, player: !!x.pc })),
+          ...ghostLights(ghosts)],
       };
     },
     canMove: (tok) => isGM() || (!!tok.actorId && actorById(tok.actorId)?.perm === 'edit'),

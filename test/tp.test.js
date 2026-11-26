@@ -36,3 +36,28 @@ test('5 ghosts give the vision seen from their cell', () => {
   assert.ok(!computeVision(scene, [tok], []).canSee(800, 400)); // behind the wall from the token...
   assert.ok(computeVision(scene, eyes, []).canSee(800, 400));   // ...but seen from its ghosts on the other side
 });
+
+test('5 a ghost gives its token\'s light from the ghost (dark scene, wall between linked cells); no light, no change', async () => {
+  const { ghostLights } = await import('../public/tp.js');
+  const scene = { width: 1000, height: 1000, grid: 70, dark: 1, walls: [[500, 0, 500, 1000, 0, 0]] };
+  const cells = [{ id: 'a', x: 105, y: 105, group: '1' }, { id: 'b', x: 805, y: 105, group: '1' }];
+  const look = (tok, extra = []) => {
+    const ghosts = ghostsOf([tok], cells, 70);
+    const viewers = [tok, ...ghosts.map((g) => ({ x: g.x, y: g.y, vision: tok.vision }))]; // no darkvision
+    const tokenLight = tok.light > 0 ? [{ x: tok.x, y: tok.y, radius: tok.light, player: !!tok.pc }] : [];
+    return { before: computeVision(scene, viewers, [...tokenLight, ...extra]), after: computeVision(scene, viewers, [...tokenLight, ...ghostLights(ghosts), ...extra]), ghosts };
+  };
+  const lit = look({ x: 105, y: 105, vision: 100, light: 2 });
+  assert.ok(!lit.before.canSee(860, 105)); // before the fix: dark around the ghost
+  assert.ok(lit.after.canSee(860, 105));   // after: the ghost shines
+  assert.ok(!lit.after.canSee(860, 400));  // only within the light's radius
+  assert.ok(lit.after.canSee(160, 105));   // the token's own light is unchanged
+  assert.equal(ghostLights(lit.ghosts).length, 1); // one light per ghost, nothing doubled at the token
+  assert.ok(!look({ x: 105, y: 105, vision: 100, light: 0 }).after.canSee(860, 105)); // no light on the token: still dark
+  assert.deepEqual(ghostLights(ghostsOf([{ x: 105, y: 105, light: 2, hidden: true }], cells, 70)), []); // hidden token: no light
+  // same rules as the token's light: an anti-light puts it out, unless "players' light wins" and it is a player's token
+  const anti = { x: 805, y: 105, radius: 2, anti: true };
+  assert.ok(!look({ x: 105, y: 105, vision: 100, light: 2 }, [anti]).after.canSee(860, 105));
+  assert.ok(look({ x: 105, y: 105, vision: 100, light: 2, pc: true }, [{ ...anti, playersWin: true }]).after.canSee(860, 105));
+  assert.ok(!look({ x: 105, y: 105, vision: 100, light: 2 }, [{ ...anti, playersWin: true }]).after.canSee(860, 105)); // an NPC's light still loses
+});
