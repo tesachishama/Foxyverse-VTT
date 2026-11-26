@@ -336,3 +336,5 @@ input.search { width: 100%; margin: 0 0 8px; }
 .float-win.folded { height: auto !important; min-height: 0 !important; resize: none; }
 .float-win.folded > .float-body { display: none; }
 .float-head { user-select: none; }
+/* ROADMAP 3 §2.2: darkvision sits where "elemental" was, on the line of the sheet's other options (next to the level) */
+.sheet-head .grid2 > label.check { align-self: end; padding-bottom: 4px; }
