@@ -8,6 +8,7 @@ import { isTokenDead, pickViewers, markSeen, orBits, bitsToBase64, bitsFromBase6
 import { radiusStep, moveBlocked } from './walls.js';
 import { ghostsOf, ghostLights, newGroup, tpGroups } from './tp.js';
 import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget } from './layout.js';
+import { TOOLS, TOOL_BUTTONS, iconUrl } from './tools.js';
 
 const S = {
   me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], table: null, allTables: [], mapMode: false,
@@ -467,8 +468,11 @@ const TOOL_HINT = {
     reveal: 'Drag to permanently reveal an area', erase: 'Click to delete a wall, light, TP cell or area',
     select: 'Click a wall, door or light to set it up · drag a light to move it' },
 };
+/** A map tool as an icon button; its name is the tooltip (and the accessible name). */
+const toolButton = (tl, { on = false, disabled = false, onclick, hint } = {}) => h('button', { class: 'tool' + (on ? ' on' : ''), title: t(tl.label) + (hint ? ` (${hint})` : ''), 'aria-label': t(tl.label), disabled, onclick },
+  h('img', { class: 'tool-ico', src: iconUrl(tl.icon), alt: '' }));
 function renderHud() {
-  hudEl.replaceChildren(h('button', { title: 'Fit', onclick: () => map.fit() }, '⤢'));
+  hudEl.replaceChildren(toolButton(TOOL_BUTTONS.find((b) => b.id === 'fit'), { onclick: () => map.fit() }));
   topEl.replaceChildren();
   if (!isGM()) return;
   const sc = viewScene();
@@ -488,8 +492,6 @@ function renderHud() {
     sc?.fog && !S.mapMode && flag(t('playerView'), S.playerView, (v) => { S.playerView = v; renderHud(); map.redraw(); syncExplored(); }),
     sc?.fog && S.playerView && viewAs);
   if (!sc) return;
-  const tools = [['select', 'toolSelect'], ['wall', 'toolWall'], ['twall', 'toolTWall'], ['rect', 'toolRect'], ['circle', 'toolCircle'], ['curve', 'toolCurve'], ['door', 'toolDoor'], ['edit', 'toolEdit'],
-    ['light', 'toolLight'], ['antilight', 'toolAntiLight'], ['tp', 'toolTp'], ['reveal', 'toolReveal'], ['erase', 'toolErase']];
   const snapSel = h('select', { title: t('snap'), onchange: (e) => { S.tool.snap = e.target.value; } },
     h('option', { value: 'grid' }, t('snapGrid')), h('option', { value: 'half' }, t('snapHalf')), h('option', { value: 'off' }, t('snapOff')));
   snapSel.value = S.tool.snap;
@@ -499,11 +501,11 @@ function renderHud() {
   kindSel.value = S.tool.wallKind ?? 'wall';
   const canUndo = S.undo.some((u) => u.sceneId === sc.id);
   add(hudEl, h('div', { class: 'tools' },
-    tools.map(([id, key]) => h('button', { class: S.tool.name === id ? 'on' : '', onclick: () => { S.tool.name = id; map.cancel(); renderHud(); } }, t(key))),
+    TOOLS.map((tl) => toolButton(tl, { on: S.tool.name === tl.id, onclick: () => { S.tool.name = tl.id; map.cancel(); renderHud(); } })),
     S.tool.name !== 'select' && snapSel,
     ['rect', 'circle', 'curve'].includes(S.tool.name) && kindSel,
     ['light', 'antilight'].includes(S.tool.name) && h('label', {}, t('radius'), h('input', { type: 'number', class: 'n', min: 0.5, max: 100, step: 0.5, value: S.tool.radius, oninput: (e) => { S.tool.radius = Number(e.target.value) || 6; } })),
-    h('button', { title: 'Ctrl+Z', disabled: !canUndo, onclick: undoSceneEdit }, t('undo'))),
+    toolButton(TOOL_BUTTONS.find((b) => b.id === 'undo'), { disabled: !canUndo, onclick: undoSceneEdit, hint: 'Ctrl+Z' })),
     TOOL_HINT[getLang()]?.[S.tool.name] && h('div', { class: 'hint tool-hint' }, TOOL_HINT[getLang()][S.tool.name]));
 }
 function renderFoot() {

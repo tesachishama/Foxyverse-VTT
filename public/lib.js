@@ -145,6 +145,8 @@ const DICT = {
     exploreMemory: 'Mémoire d’exploration', exploreHint: 'Ce qu’un joueur a déjà vu reste assombri au lieu de redevenir noir (sans les tokens).',
     resetExplore: 'Réinitialiser l’exploration…', everyone: 'Tous les joueurs', confirmResetExplore: 'Effacer ce qui a été exploré sur cette scène ?',
     playersWin: 'La lumière des joueurs l’emporte', playersWinHint: 'Les lumières portées par les tokens des joueurs ne sont pas éteintes par cette zone.',
+    // ROADMAP 3 (fr)
+    fitMap: 'Ajuster la vue',
   },
   en: {
     name: 'Name', logout: 'Switch player',
@@ -223,12 +225,17 @@ const DICT = {
     exploreMemory: 'Exploration memory', exploreHint: 'What a player has already seen stays dimmed instead of going black again (without tokens).',
     resetExplore: 'Reset exploration…', everyone: 'All players', confirmResetExplore: 'Erase what was explored on this scene?',
     playersWin: "Players' light wins", playersWinHint: "Lights carried by players' tokens are not put out by this area.",
+    // ROADMAP 3 (en)
+    fitMap: 'Fit to view',
   },
 };
-let lang = localStorage.getItem('lang') || (navigator.language || 'fr').slice(0, 2);
+// Browser storage can be missing or throw (private window, blocked site data, and Node for the tests): reads fall back.
+const stored = (k) => { try { return globalThis.localStorage?.getItem(k) ?? null; } catch { return null; } };
+let lang = stored('lang') || (globalThis.navigator?.language || 'fr').slice(0, 2);
 if (!DICT[lang]) lang = 'en';
+export { DICT };
 export const getLang = () => lang;
-export const setLang = (l) => { lang = l; localStorage.setItem('lang', l); };
+export const setLang = (l) => { lang = l; try { localStorage.setItem('lang', l); } catch { /* not kept */ } };
 export const t = (k) => DICT[lang][k] ?? DICT.en[k] ?? k;
 
 // ------------------------------------------------------------------ rich text

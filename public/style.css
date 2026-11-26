@@ -323,3 +323,8 @@ input.search { width: 100%; margin: 0 0 8px; }
 @keyframes bubble-in { from { opacity: 0; transform: translateY(8px); } }
 /* the inspector sits on the right of the map, under the scene bar, so it never hides what it edits near the tools */
 .inspector { left: auto; right: 10px; top: 64px; }
+
+/* ---- ROADMAP 3: icon tools */
+.tools .tool { padding: 3px; line-height: 0; }
+.tool-ico { width: 26px; height: 26px; display: block; }
+.hud > button.tool { padding: 3px; line-height: 0; }
