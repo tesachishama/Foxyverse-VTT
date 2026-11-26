@@ -1,6 +1,6 @@
 {
   "name": "foxyverse-vtt",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Self-hosted virtual tabletop with an editable, formula-driven rule system (Foxyverse by default)",
   "type": "module",
   "private": true,
