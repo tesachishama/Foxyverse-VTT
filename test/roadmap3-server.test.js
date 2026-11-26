@@ -31,3 +31,19 @@ test('1.3 revealed areas: rectangles and polygons are stored, junk and polygons 
   assert.deepEqual(r.body.reveal, [[1, 2, 3, 4], { poly: [[0, 0], [10, 0], [0, 0], [5, 5]] }]);
   await gm('PATCH', `/scenes/${scene.id}`, { reveal: [] });
 });
+
+test('1.6 a click on a TP ghost: the player\'s token jumps to the ghost (linked cell), and a ghost stays on the cell it left', async () => {
+  const sc = (await gm('POST', '/scenes', { name: 'TP', width: 1000, height: 1000, grid: 50,
+    tps: [{ id: 'a', x: 75, y: 75, group: 'g' }, { id: 'b', x: 775, y: 775, group: 'g' }], walls: [[400, 0, 400, 1000, 0, 0, 0, 1, 1]] })).body;
+  await gm('POST', `/scenes/${sc.id}/activate`);
+  const hero = (await gm('POST', '/actors', { name: 'Jumper' })).body;
+  await gm('PUT', `/actors/${hero.id}/perms`, { perms: { [pipSlot.id]: 'edit' } });
+  const tk = (await gm('POST', '/tokens', { sceneId: sc.id, actorId: hero.id, x: 75, y: 75 })).body;
+  // the click sends the ghost's own position, "via" the cell it stands on (a tangible wall between the cells does not matter)
+  const r = await pip('PATCH', `/tokens/${tk.id}`, { x: 775, y: 775, via: 'b' });
+  assert.equal(r.status, 200); assert.deepEqual([r.body.x, r.body.y], [775, 775]);
+  const { ghostsOf } = await import('../public/tp.js');
+  const ghosts = ghostsOf([r.body], (await gm('GET', '/state')).body.scenes.find((s) => s.id === sc.id).tps, 50);
+  assert.deepEqual(ghosts.map((g) => [g.x, g.y]), [[75, 75]]); // the old cell now shows the ghost
+  assert.equal((await pip('PATCH', `/tokens/${tk.id}`, { x: 75, y: 75, via: 'zzz' })).status, 409); // not a linked cell
+});

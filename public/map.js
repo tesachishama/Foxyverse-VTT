@@ -567,7 +567,9 @@ export function createMap(canvas, hooks) {
   const end = (e) => {
     pointers.delete(e.pointerId);
     if (drag?.kind === 'pinch') { if (pointers.size < 2) drag = null; return; }
-    if (drag?.kind === 'token' && drag.home && !drag.moved) { drag.t.x = drag.home.x; drag.t.y = drag.home.y; drag = null; return redraw(); } // a click on a ghost only selects
+    // a click on a ghost (ROADMAP 3 §1.6) makes it the real one: the token jumps there; it still stands on a linked cell, so a ghost stays
+    // on the cell it left (nothing is lost, nothing to undo)
+    if (drag?.kind === 'token' && drag.home && !drag.moved) { hooks.onMove(drag.t, drag.t.x, drag.t.y, true, drag.via); drag = null; return redraw(); }
     if (drag?.kind === 'token') {
       const { scene } = hooks.state(), t = drag.t;
       let s = scene ? snapToken(scene, t, t.x, t.y) : t;
