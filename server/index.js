@@ -169,15 +169,22 @@ const playingOf = (tableId) => { if (!playingByTable.has(tableId)) playingByTabl
 
 // ------------------------------------------------------------------ http helpers
 const json = (res, status, obj) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
+/**
+ * The body, up to `limit` bytes. A body over the limit is read to its end and thrown away, then refused with a clean 413:
+ * answering (and closing) while the browser is still sending made it see a network error instead of "File too large".
+ * Far over the limit (a broken or hostile client), the connection is cut without reading the rest.
+ */
 function readBody(req, limit) {
+  const hardCap = Math.max(limit * 4, limit + 50 * 1024 * 1024);
   return new Promise((resolve, reject) => {
-    const chunks = []; let size = 0, over = false;
+    const chunks = []; let size = 0;
     req.on('data', (c) => {
-      if (over) return;
       size += c.length;
-      if (size > limit) { over = true; chunks.length = 0; reject(new HttpError(413, 'File too large')); } else chunks.push(c);
+      if (size <= limit) chunks.push(c);
+      else if (chunks.length) chunks.length = 0; // over the limit: keep reading, keep nothing
+      if (size > hardCap) { reject(Object.assign(new HttpError(413, 'File too large'), { cut: true })); req.destroy(); }
     });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('end', () => (size > limit ? reject(new HttpError(413, 'File too large')) : resolve(Buffer.concat(chunks))));
     req.on('error', reject);
   });
 }
@@ -1103,7 +1110,7 @@ const server = createServer(async (req, res) => {
   } catch (e) {
     if (res.headersSent) return res.end();
     if (e instanceof HttpError) {
-      if (e.status === 413) { res.setHeader('Connection', 'close'); res.on('finish', () => req.socket.destroy()); } // stop an oversized upload after replying
+      if (e.cut) return; // the oversized upload was cut off: nobody is listening for an answer
       return json(res, e.status, { ...(e.data ?? {}), error: e.message });
     }
     logServerError(e, { method: req.method, path, user });

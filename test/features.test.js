@@ -209,3 +209,10 @@ test('a malformed URL gets a 400 and the server keeps running', async () => {
   assert.equal((await fetch(srv.base + '/api/%E0%A4')).status, 400);
   assert.equal((await fetch(srv.base + '/api/tables')).status, 200);
 });
+
+test('an oversized upload always gets a clean 413 "File too large", never a cut connection (even several at once)', async () => {
+  const big = Buffer.concat([PNG(), Buffer.alloc(6 * 1024 * 1024)]);
+  const results = await Promise.all(Array.from({ length: 8 }, () => pipUpload('image/png', big).then((r) => r.status, (e) => e.cause?.code ?? e.message)));
+  assert.deepEqual(results, results.map(() => 413));
+  assert.equal((await pipUpload('image/png', PNG(5))).status, 200); // and the next upload works
+});
