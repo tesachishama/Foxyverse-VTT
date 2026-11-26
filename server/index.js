@@ -51,7 +51,7 @@ function tokenDead(t) {
   const a = getRow('actors', t.actor_id);
   return !!a && Number(jparse(a.data, {}).hp?.cur ?? 1) <= 0;
 }
-/** Darkvision comes from the linked sheet (a toggle next to "elemental"). */
+/** Darkvision comes from the linked sheet (a toggle on the sheet). */
 const tokenDarkvision = (t) => !!t.actor_id && jparse(getRow('actors', t.actor_id)?.data, {}).darkvision === true;
 const tokenView = (t) => ({ id: t.id, sceneId: t.scene_id, name: t.name, x: t.x, y: t.y, size: t.size, image: t.image, color: t.color, actorId: t.actor_id, hidden: !!t.hidden, vision: t.vision, light: t.light, sight: !!t.sight,
   life: t.life ?? 'auto', dead: tokenDead(t), pc: isPlayerCharacter(t), darkvision: tokenDarkvision(t) });

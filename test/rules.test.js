@@ -10,7 +10,7 @@ const roll = (line, actor, rng) => executeRoll(sys, parseCommand(line), actor, r
 const make = (patch = {}) => {
   const a = defaultActorData(sys);
   for (const [k, v] of Object.entries(patch.stats ?? {})) a.stats[k].base = v;
-  Object.assign(a.bio, patch.bio ?? {}); a.elemental = !!patch.elemental; a.items = patch.items ?? [];
+  Object.assign(a.bio, patch.bio ?? {}); a.items = patch.items ?? [];
   return sanitizeActorData(a, sys);
 };
 
@@ -86,17 +86,6 @@ test('temp HP absorbs first; KO at 0', () => {
   assert.equal(data.hp.temp, 0); assert.equal(data.hp.cur, 8); assert.equal(report.tempLost, 4);
   const ko = applyRoll(sys, a, { ...body, results: [{ total: 99 }], sum: 99 });
   assert.equal(ko.data.hp.cur, 0); assert.equal(ko.report.ko, true);
-});
-
-test('elementals: HP 1, immune to physical, magic drains temp then mana', () => {
-  const e = make({ elemental: true, stats: { constitution: 10, intelligence: 10, focus: 10 }, bio: { level: 2 } });
-  const c = actorContext(sys, e);
-  assert.equal(c.derived.maxhp, 1);
-  assert.equal(c.derived.maxmp, Math.round(Math.round(20 * 0.75 + 4 / 4) + (30 - 1) * 0.75)); // plugin formula
-  e.hp.cur = 1; e.mp.cur = 20; e.hp.temp = 3;
-  assert.equal(applyRoll(sys, e, { kind: 'damage', dtype: 'physical', results: [{ total: 50 }], sum: 50 }).report.dealt, 0);
-  const m = applyRoll(sys, e, { kind: 'damage', dtype: 'magical', results: [{ total: 10 }], sum: 10 });
-  assert.equal(m.data.hp.cur, 1); assert.equal(m.data.hp.temp, 0); assert.equal(m.data.mp.cur, 13);
 });
 
 test('heal is capped at max HP; mana at max MP', () => {

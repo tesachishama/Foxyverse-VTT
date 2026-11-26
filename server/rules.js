@@ -7,7 +7,7 @@ const WORD = /^[a-z_]+$/;
 const KINDS = ['damage', 'heal', 'theal', 'mana', 'generic'];
 // Variable names the app itself provides to every formula.
 const BUILTIN = {
-  lvl: ['lvl', 'niv'], elemental: ['elemental'], bonact: ['bonact', 'actbon'], bonspe: ['bonspe', 'spebon', 'vitbon', 'bonvit'],
+  lvl: ['lvl', 'niv'], bonact: ['bonact', 'actbon'], bonspe: ['bonspe', 'spebon', 'vitbon', 'bonvit'],
   pdef: ['pdef', 'defp'], mdef: ['mdef', 'defm'],
   curhp: ['curhp', 'hpcur', 'pvact', 'actpv'],
   temhp: ['temhp', 'hptem', 'pvtem', 'tempv', 'temphp', 'hptemp', 'temppv', 'pvtemp'],
@@ -93,7 +93,7 @@ export function defaultActorData(sys) {
   const stats = {};
   sys.stats.forEach((s) => { stats[s.id] = { base: sys.character.baseStat, passive: 0 }; });
   const data = { bio: { class: '', element: '', level: 1 }, stats, hp: { cur: 0, temp: 0 }, mp: { cur: 0 }, fav: { cur: 0 },
-    bonact: 0, bonspe: 0, elemental: false, darkvision: false, talents: [], spells: [], items: [], currency: { pc: 0, pa: 0, po: 0 }, notes: '' };
+    bonact: 0, bonspe: 0, darkvision: false, talents: [], spells: [], items: [], currency: { pc: 0, pa: 0, po: 0 }, notes: '' };
   return fillResources(sys, data);
 }
 
@@ -140,7 +140,7 @@ export function sanitizeActorData(raw, sys) {
     hp: { cur: int(r.hp?.cur, -9999, 999999), temp: int(r.hp?.temp, 0, 999999) },
     mp: { cur: int(r.mp?.cur, 0, 999999) },
     fav: { cur: int(r.fav?.cur, 0, 999) },
-    bonact: int(r.bonact, -99, 99), bonspe: int(r.bonspe, -999, 999), elemental: !!r.elemental,
+    bonact: int(r.bonact, -99, 99), bonspe: int(r.bonspe, -999, 999),
     darkvision: r.darkvision === true, // sees its whole vision zone without light (in black and white where it is dark)
     // a ticked talent is a passive modifier on every stat check (see talentModifier)
     talents: list(r.talents, (t) => ({ id: str(t?.id, 16) || newId(), name: str(t?.name, 80), tier: int(t?.tier ?? 0, 0, 20), enabled: t?.enabled === true, description: str(t?.description, 4000) })),
@@ -173,7 +173,6 @@ export function actorContext(sys, data) {
   const pdef = equipped.reduce((a, i) => a + (Number(i.pdef) || 0), 0);
   const mdef = equipped.reduce((a, i) => a + (Number(i.mdef) || 0), 0);
   setAll(vars, BUILTIN.lvl, Number(data.bio?.level) || 1);
-  setAll(vars, BUILTIN.elemental, data.elemental ? 1 : 0);
   setAll(vars, BUILTIN.bonact, Number(data.bonact) || 0);
   setAll(vars, BUILTIN.bonspe, Number(data.bonspe) || 0);
   setAll(vars, BUILTIN.pdef, pdef); setAll(vars, BUILTIN.mdef, mdef);
@@ -276,15 +275,13 @@ export function applyRoll(sys, data, body) {
   if (body.kind === 'damage') {
     // "pdmg 3 2d20" is three rolls: the armor (DP or DM) comes off each roll on its own (never below 0), then they add up.
     const armor = body.dtype === 'physical' ? c.pdef : body.dtype === 'magical' ? c.mdef : 0;
-    const immune = body.dtype === 'physical' && next.elemental; // elementals ignore physical damage
-    const rolls = amounts.map((a) => ({ raw: a, armor: immune ? a : Math.min(a, armor), dealt: immune ? 0 : Math.max(0, a - armor) }));
+    const rolls = amounts.map((a) => ({ raw: a, armor: Math.min(a, armor), dealt: Math.max(0, a - armor) }));
     const dealt = rolls.reduce((n, r) => n + r.dealt, 0);
     report.rolls = rolls;
     const tempLost = Math.min(next.hp.temp, dealt); next.hp.temp -= tempLost;
-    let rest = dealt - tempLost, hpLost = 0, mpLost = 0;
-    if (next.elemental) { mpLost = Math.min(next.mp.cur, rest); next.mp.cur -= mpLost; }
-    else { hpLost = Math.min(Math.max(0, next.hp.cur), rest); next.hp.cur = Math.max(0, next.hp.cur - rest); }
-    Object.assign(report, { dealt, tempLost, hpLost, mpLost, hp: next.hp.cur, ko: !next.elemental && next.hp.cur <= 0 });
+    const rest = dealt - tempLost, hpLost = Math.min(Math.max(0, next.hp.cur), rest);
+    next.hp.cur = Math.max(0, next.hp.cur - rest);
+    Object.assign(report, { dealt, tempLost, hpLost, hp: next.hp.cur, ko: next.hp.cur <= 0 });
   } else if (body.kind === 'heal') {
     const before = next.hp.cur; next.hp.cur = Math.min(maxhp, next.hp.cur + body.sum);
     Object.assign(report, { healed: next.hp.cur - before, hp: next.hp.cur });

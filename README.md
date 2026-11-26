@@ -170,7 +170,7 @@ Mouse wheel zooms, right/middle-drag pans, two-finger pinch works on touch scree
 Double-click a token to open its sheet. Players move the tokens of the sheets they can edit. Tokens snap to the grid.
 Select a token (GM) to edit its name, size, linked character, **vision** (cells, 100 by default, 0 = no vision), **light**, its **state**, whether it **shares its sight with all players**, colour, image, or hide it.
 A token whose sheet is at 0 HP or less turns **black and white** (50 % opacity) for everyone and **sees nothing**; the state can force *dead* or *alive*.
-The sheet's **Darkvision** box (next to *Elemental*) lets its tokens see without light (see [Fog, vision and darkness](#fog-vision-and-darkness)). The GM also sets each sheet's **`@` alias** there (see below).
+The sheet's **Darkvision** box lets its tokens see without light (see [Fog, vision and darkness](#fog-vision-and-darkness)). The GM also sets each sheet's **`@` alias** there (see below).
 
 ### 4. Layout and rolling
 Tabs and panels sit on the **left**, the map in the middle, the **chat on the right**. Tabs never scroll (two rows for the GM). Each side can stay open or be **dynamic**:
@@ -234,12 +234,11 @@ A leading number is a repeat count: `/pdmg 10 2d4`. Clicking `[str +2|label]` in
 rolling its **maximum** lowers it (so nat 1 on a failure is a success, nat 1 on a success is a critical success, nat max on a success is a failure, on a failure a critical failure). Comparisons (`1d20 < 10`, `1d20 > 15`) grade the same way, reversed for `>`.
 
 *Formula language:* `XdY` (X and Y can be expressions), `+ - * ^ ( )`, `/` divide rounding to nearest, `\` divide rounding down, `%` divide rounding **up** (not modulo), `<` means at most and `>` at least, `expr !< n` / `!> n` clamp the total,
-`min() max() floor() ceil() round() abs()`. Variables: every stat and derived value with its aliases, plus `lvl elemental bonact bonspe pdef mdef curhp temhp curmp curfav`. Unknown names are 0. A `d` right after a number, a name or `)` is the dice
+`min() max() floor() ceil() round() abs()`. Variables: every stat and derived value with its aliases, plus `lvl bonact bonspe pdef mdef curhp temhp curmp curfav`. Unknown names are 0. A `d` right after a number, a name or `)` is the dice
 operator (`2dcon`, `lvld6`), so you can also write `d6` for one die.
 
 ### Defenses and damage
 Only **equipped** items count (including items placed in *Other*). `DP` reduces each physical hit, `DM` each magical hit, true damage ignores both. Temporary HP goes first. At 0 mana spells cost HP.
-**Elementals** have 1 HP, ignore physical damage and lose mana (after temp HP) from other damage.
 
 ### Equipment slots
 33 slots: `weapon1-3`, `hat`, `face`, `pendant1-3`, `torso`, `rshoulder lshoulder`, `rarm larm`, `rwrist lwrist`, ten finger slots (`rthumb rindex rmiddle rring rpinky`, `lthumb ...`), `belt`, `rleg lleg`, `rankle lankle`, `rfoot lfoot`, and **`other`**

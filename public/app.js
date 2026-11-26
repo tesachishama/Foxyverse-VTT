@@ -954,7 +954,6 @@ function sheetView(a) {
     h('div', { class: 'grid2' },
       h('label', {}, t('cls'), field(a, d.bio, 'class')), h('label', {}, t('element'), field(a, d.bio, 'element')),
       h('label', {}, t('level'), field(a, d.bio, 'level', 'int', { min: 1, class: 'n' })),
-      h('label', { class: 'check' }, field(a, d, 'elemental', 'bool'), t('elemental')),
       h('label', { class: 'check', title: t('darkvisionHint') }, field(a, d, 'darkvision', 'bool'), t('darkvision')),
       isGM() && h('label', { title: t('aliasHint') }, t('alias'), h('input', { type: 'text', class: 'code', value: a.alias ?? '', maxlength: 40, placeholder: t('aliasAuto'),
         onchange: guard(async (e) => { if (pending.has(a.id)) await saveNow(a); const r = await api('PATCH', '/actors/' + a.id, { alias: e.target.value }); a.alias = r.alias; e.target.value = r.alias; }) }))));

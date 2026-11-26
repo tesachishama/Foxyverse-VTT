@@ -75,7 +75,7 @@
         "pvmax",
         "maxpv"
       ],
-      "formula": "con*(lvl+1)*(1-elemental) + elemental"
+      "formula": "con*(lvl+1)"
     },
     {
       "id": "maxmp",
@@ -85,7 +85,7 @@
         "pmmax",
         "maxpm"
       ],
-      "formula": "((int+foc)*3+lvl^2)/4 + elemental*(con*(lvl+1)-1)*3/4"
+      "formula": "((int+foc)*3+lvl^2)/4"
     },
     {
       "id": "maxfav",

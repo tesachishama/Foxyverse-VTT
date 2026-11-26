@@ -139,6 +139,35 @@ if (!db.prepare("SELECT 1 FROM settings WHERE key = 'vision100'").get()) {
   db.exec("UPDATE tokens SET vision = 100 WHERE vision = 0; INSERT INTO settings (key, value) VALUES ('vision100', '1');");
 }
 
+// ---- ROADMAP 3 §2.1: "elemental" is gone (optional rule modules will come later). The default formulas lose it, but only where a
+// formula is still exactly the old default (a formula the GM changed is never touched; an unknown variable is 0 anyway, so old
+// formulas keep working). A table where a sheet was ticked "elemental" keeps its rules as they are, and the log says so. Once.
+export const OLD_DEFAULTS = { maxhp: 'con*(lvl+1)*(1-elemental) + elemental', maxmp: '((int+foc)*3+lvl^2)/4 + elemental*(con*(lvl+1)-1)*3/4' };
+export const NEW_DEFAULTS = { maxhp: 'con*(lvl+1)', maxmp: '((int+foc)*3+lvl^2)/4' };
+/** The system with the old default formulas replaced (a new object), or null when nothing changes. */
+export function withoutElemental(sys) {
+  let changed = false;
+  const derived = (sys?.derived ?? []).map((d) => (OLD_DEFAULTS[d.id] !== undefined && d.formula === OLD_DEFAULTS[d.id] ? ((changed = true), { ...d, formula: NEW_DEFAULTS[d.id] }) : d));
+  return changed ? { ...sys, derived } : null;
+}
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'r3noElemental'").get()) {
+  db.exec('BEGIN');
+  for (const t of db.prepare('SELECT id, slug, system FROM game_tables').all()) {
+    let sys; try { sys = JSON.parse(t.system); } catch { continue; }
+    const next = withoutElemental(sys); if (!next) continue;
+    const elementals = db.prepare('SELECT name, data FROM actors WHERE table_id = ?').all(t.id).filter((a) => { try { return JSON.parse(a.data).elemental === true; } catch { return false; } });
+    if (elementals.length) { console.log(`Table "${t.slug}": rules not migrated (no more "elemental"), because these sheets were elemental: ${elementals.map((a) => a.name).join(', ')}. Edit its HP / mana formulas by hand if needed.`); continue; }
+    db.prepare('UPDATE game_tables SET system = ? WHERE id = ?').run(JSON.stringify(next), t.id);
+    console.log(`Table "${t.slug}": default HP / mana formulas updated (no more "elemental").`);
+  }
+  for (const s of db.prepare('SELECT id, data FROM systems').all()) { // saved systems (library) too: they have no sheets
+    let sys; try { sys = JSON.parse(s.data); } catch { continue; }
+    const next = withoutElemental(sys); if (next) db.prepare('UPDATE systems SET data = ? WHERE id = ?').run(JSON.stringify(next), s.id);
+  }
+  db.prepare("INSERT INTO settings (key, value) VALUES ('r3noElemental', '1')").run();
+  db.exec('COMMIT');
+}
+
 const systems = new Map(); // table id -> parsed system (cache)
 export function getSystem(tableId) {
   if (!systems.has(tableId)) {
