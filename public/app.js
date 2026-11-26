@@ -9,11 +9,12 @@ import { radiusStep, moveBlocked } from './walls.js';
 import { ghostsOf, ghostLights, newGroup, tpGroups } from './tp.js';
 import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget } from './layout.js';
 import { TOOLS, TOOL_BUTTONS, iconUrl } from './tools.js';
+import { defaultFilter, SELECT_KINDS, deleteItems, liveItems } from './select.js';
 
 const S = {
   me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], table: null, allTables: [], mapMode: false,
   tab: 'sheets', sheetId: null, selected: new Set(), rollMod: '', draft: null,
-  sounds: [], playing: [], journals: [], compendium: [], npcs: [], compView: 'table', compGlobal: null, compFilter: { tables: null, campaigns: null }, campaigns: [], savedSystems: [], timeOffset: 0, viewId: null, tool: { name: 'select', radius: 6, snap: 'grid' }, playerView: false, viewAs: 'players', undo: [],
+  sounds: [], playing: [], journals: [], compendium: [], npcs: [], compView: 'table', compGlobal: null, compFilter: { tables: null, campaigns: null }, campaigns: [], savedSystems: [], timeOffset: 0, viewId: null, tool: { name: 'select', radius: 6, snap: 'grid', filter: defaultFilter() }, items: [], playerView: false, viewAs: 'players', undo: [],
   picked: null, // the GM's picked map item: { kind: 'wall', index } or { kind: 'light', id }
   journalId: null, journalEdit: false, modal: null, audioBlocked: false, openItems: new Set(),
   actorId: Number(localStorage.getItem('speakAs')) || null,
@@ -334,15 +335,16 @@ let editsPending = 0;
 function replaceScene(r) {
   if (isGM()) upsert(S.scenes, r);
   if (r.active || S.scene?.id === r.id) S.scene = r;
+  if (S.items.length && viewScene()?.id === r.id) { const keep = liveItems(r, S.items); if (keep.length !== S.items.length) setSelection(S.selected, keep); }
   map.redraw(); renderHud(); if (S.picked) renderInspector(); syncExplored();
 }
 /** Optimistic scene edit: consecutive wall clicks must see each other, so apply locally first and queue the saves in order. */
-function sceneEdit(patch, { undoable = true } = {}) {
+function sceneEdit(patch, { undoable = true, undoExtra = null } = {}) {
   const sc = viewScene(); if (!sc) return Promise.resolve();
   if (undoable) {
     const prev = {};
     for (const k of ['walls', 'lights', 'reveal', 'tps']) if (k in patch) prev[k] = structuredClone(sc[k] ?? []);
-    if (Object.keys(prev).length) { S.undo.push({ sceneId: sc.id, prev }); if (S.undo.length > 60) S.undo.shift(); }
+    if (Object.keys(prev).length) { S.undo.push({ sceneId: sc.id, prev, ...(undoExtra ?? {}) }); if (S.undo.length > 60) S.undo.shift(); }
   }
   Object.assign(sc, patch); sc._rev = (sc._rev || 0) + 1; map.redraw(); editsPending++;
   editQueue = editQueue
@@ -384,11 +386,51 @@ function moveByKey(e) {
   map.redraw();
 }
 
-function undoSceneEdit() {
+/**
+ * Undo the last map edit. An entry holds the scene lists as they were (prev), and possibly token positions to put back
+ * (tokens: [{ id, x, y }]) and deleted tokens to create again (recreate: [token]).
+ */
+const undoSceneEdit = guard(async () => {
   const last = S.undo[S.undo.length - 1];
   if (!last || last.sceneId !== viewScene()?.id) return;
-  S.undo.pop(); sceneEdit(last.prev, { undoable: false }); renderHud();
+  S.undo.pop();
+  if (last.prev && Object.keys(last.prev).length) sceneEdit(last.prev, { undoable: false });
+  for (const p of last.tokens ?? []) {
+    const tok = S.tokens.find((x) => x.id === p.id); if (!tok) continue;
+    Object.assign(tok, { x: p.x, y: p.y }); api('PATCH', '/tokens/' + tok.id, { x: p.x, y: p.y }).catch((e) => toast(e.message));
+  }
+  for (const tk of last.recreate ?? []) {
+    const { id, sceneId, actorId, dead, pc, darkvision, ...rest } = tk;
+    upsert(S.tokens, await api('POST', '/tokens', { ...rest, sceneId, actorId }));
+  }
+  setSelection(new Set(), []); renderHud();
+});
+/** The selection changed (map clicks, rectangle, lasso, inspector). One map item and no token: that item's inspector. */
+function setSelection(tokens, items) {
+  S.selected = tokens; S.items = items;
+  S.picked = !tokens.size && items.length === 1 ? items[0] : null;
+  renderInspector(); renderChat(); map?.redraw();
 }
+/** The GM dragged several things at once: tokens move one by one, map items in one scene edit; one undo step for all. */
+function onGroupMove(moves, patch) {
+  for (const m of moves) api('PATCH', '/tokens/' + m.t.id, m.to).catch((e) => { toast(e.message); if (e.data?.token) { Object.assign(m.t, e.data.token); map.redraw(); } });
+  const tokens = moves.map((m) => ({ id: m.t.id, ...m.from }));
+  if (Object.keys(patch).length) sceneEdit(patch, { undoExtra: { tokens } });
+  else { S.undo.push({ sceneId: viewScene().id, prev: {}, tokens }); renderHud(); }
+  map.redraw();
+}
+/** Delete everything selected (GM): tokens and map items, one undo step (deleted tokens come back as new tokens). */
+const deleteSelection = guard(async () => {
+  const sc = viewScene(); if (!sc || !isGM()) return;
+  const toks = S.tokens.filter((x) => S.selected.has(x.id) && x.sceneId === sc.id), items = liveItems(sc, S.items);
+  if (!toks.length && !items.length) return;
+  const recreate = toks.map((x) => structuredClone(x));
+  setSelection(new Set(), []);
+  for (const tk of toks) { remove(S.tokens, tk.id); api('DELETE', '/tokens/' + tk.id).catch((e) => toast(e.message)); }
+  if (items.length) sceneEdit(deleteItems(sc, items), { undoExtra: { recreate } });
+  else { S.undo.push({ sceneId: sc.id, prev: {}, recreate }); renderHud(); }
+  map.redraw();
+});
 
 function buildShell() {
   const canvas = h('canvas', { id: 'map' });
@@ -416,7 +458,7 @@ function buildShell() {
       const ghosts = sc ? ghostsOf(tokens.filter((x) => !x.hidden || isGM()), sc.tps, sc.grid) : []; // tokens on TP cells, copied on the linked cells
       const eye = (x, at = x) => ({ x: at.x, y: at.y, vision: x.vision, darkvision: tokenDarkvision(x) });
       return {
-        scene: sc, tokens, selected: S.selected, tool: S.tool, gm: isGM(), playerView: S.playerView, picked: S.picked,
+        scene: sc, tokens, selected: S.selected, tool: S.tool, gm: isGM(), playerView: S.playerView, picked: S.picked, items: S.items, filter: S.tool.filter,
         // viewerIds: tokens always drawn for this page (its own, dead ones included); viewers: the eyes (alive only)
         // a ghost sees what its token would see from there
         viewers: [...eyes.map((x) => eye(x)), ...ghosts.filter((g) => eyes.includes(g.token)).map((g) => eye(g.token, g))], viewerIds: new Set(own.map((x) => x.id)), explored, ghosts,
@@ -431,12 +473,13 @@ function buildShell() {
     onFog: (total) => fogNote.classList.toggle('hidden', !total),
     isDead: tokenDead,
     hpRatio: (tok) => { const a = tok.actorId && actorById(tok.actorId); const max = a?.computed.derived.maxhp; return max ? a.data.hp.cur / max : null; },
-    onSelect: (set) => { S.selected = set; if (set.size) S.picked = null; renderInspector(); renderChat(); },
+    onSelect: (set, items) => setSelection(set, items ?? []),
+    onGroupMove,
     newTpGroup: () => newGroup(viewScene()?.tps),
     onMove: (tok, x, y, final, via) => { api('PATCH', '/tokens/' + tok.id, via ? { x, y, via } : { x, y }).catch((e) => { if (e.data?.token) { Object.assign(tok, e.data.token); map.redraw(); } }); }, // a wall: back to where the server has it
     onDoor: toggleDoor,
     onVision: rememberSeen,
-    onPick: (item) => { S.picked = item; if (item) S.selected = new Set(); renderInspector(); map.redraw(); },
+    onPick: (item) => setSelection(new Set(), item ? [item] : []),
     onOpen: (tok) => { if (tok.actorId && actorById(tok.actorId)) { S.sheetId = tok.actorId; openTab('sheets'); } },
     onSceneEdit: sceneEdit,
   });
@@ -457,7 +500,7 @@ const TOOL_HINT = {
     light: 'Clic : poser une lumière · ensuite, en Sélection : la déplacer, régler le rayon avec la poignée', antilight: "Clic : poser une anti-lumière (retire la lumière sous sa zone)",
     tp: 'Clic : poser une case de TP (elle rejoint le groupe de la case sélectionnée, sinon un nouveau groupe) · en Sélection : la glisser, changer son groupe',
     reveal: 'Glisser : révéler une zone en permanence', erase: 'Clic : supprimer mur, lumière, case de TP ou zone',
-    select: 'Clic sur un mur, une porte ou une lumière pour la régler · glisser une lumière pour la déplacer' },
+    select: 'Glisser sur le vide : rectangle de sélection · Maj+clic : ajouter / retirer · Maj+glisser : lasso · glisser la sélection : tout déplacer · clic droit glissé : déplacer la vue' },
   en: { wall: 'Wall (blocks sight and light). Click to add points · right-click or Esc to finish · Shift or Alt: free placement',
     twall: "Tangible wall (blocks players' movement, not sight). Click to add points · right-click or Esc to finish",
     rect: 'Drag: rectangle of walls · Shift: no snapping', circle: 'Drag from the centre to the edge: circle of walls',
@@ -466,7 +509,7 @@ const TOOL_HINT = {
     light: 'Click to place a light · then, with Select: drag it, set its radius with the handle', antilight: 'Click to place an anti-light (removes light under its area)',
     tp: "Click: place a TP cell (it joins the picked cell's group, else a new group) · with Select: drag it, change its group",
     reveal: 'Drag to permanently reveal an area', erase: 'Click to delete a wall, light, TP cell or area',
-    select: 'Click a wall, door or light to set it up · drag a light to move it' },
+    select: 'Drag on the empty map: selection rectangle · Shift+click: add / remove · Shift+drag: lasso · drag the selection: move it all · right-drag: pan' },
 };
 /** A map tool as an icon button; its name is the tooltip (and the accessible name). */
 const toolButton = (tl, { on = false, disabled = false, onclick, hint } = {}) => h('button', { class: 'tool' + (on ? ' on' : ''), title: t(tl.label) + (hint ? ` (${hint})` : ''), 'aria-label': t(tl.label), disabled, onclick },
@@ -476,7 +519,7 @@ function renderHud() {
   topEl.replaceChildren();
   if (!isGM()) return;
   const sc = viewScene();
-  const sel = h('select', { title: t('scenes'), onchange: (e) => { S.viewId = Number(e.target.value); S.selected = new Set(); S.picked = null; renderAll(); } },
+  const sel = h('select', { title: t('scenes'), onchange: (e) => { S.viewId = Number(e.target.value); S.selected = new Set(); S.items = []; S.picked = null; renderAll(); } },
     S.scenes.map((s) => h('option', { value: s.id }, s.name + (s.active ? ' ●' : ''))));
   sel.value = S.viewId ?? '';
   const flag = (label, checked, on) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked, onchange: (e) => on(e.target.checked) }), label);
@@ -503,6 +546,9 @@ function renderHud() {
   add(hudEl, h('div', { class: 'tools' },
     TOOLS.map((tl) => toolButton(tl, { on: S.tool.name === tl.id, onclick: () => { S.tool.name = tl.id; map.cancel(); renderHud(); } })),
     S.tool.name !== 'select' && snapSel,
+    // what the selection picks (rectangle, lasso, clicks): all ticked by default
+    S.tool.name === 'select' && h('details', { class: 'multi sel-filter' }, h('summary', {}, t('selectWhat')),
+      SELECT_KINDS.map((k) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: S.tool.filter[k], onchange: (e) => { S.tool.filter[k] = e.target.checked; } }), t('sel_' + k)))),
     ['rect', 'circle', 'curve'].includes(S.tool.name) && kindSel,
     ['light', 'antilight'].includes(S.tool.name) && h('label', {}, t('radius'), h('input', { type: 'number', class: 'n', min: 0.5, max: 100, step: 0.5, value: S.tool.radius, oninput: (e) => { S.tool.radius = Number(e.target.value) || 6; } })),
     toolButton(TOOL_BUTTONS.find((b) => b.id === 'undo'), { disabled: !canUndo, onclick: undoSceneEdit, hint: 'Ctrl+Z' })),
@@ -1078,7 +1124,7 @@ function tablePanel() {
       h('div', { class: 'line' }, slotName, h('button', { class: 'primary', onclick: addSlot }, '+ ' + t('addPlayer')))),
     h('section', { class: 'sec' }, h('h3', {}, t('scenes')),
       h('ul', { class: 'list' }, S.scenes.map((x) => h('li', { class: 'line' },
-        h('button', { class: 'row grow' + (x.id === S.viewId ? ' on' : ''), title: t('view'), onclick: () => { S.viewId = x.id; S.selected = new Set(); renderAll(); } }, h('b', {}, x.name)),
+        h('button', { class: 'row grow' + (x.id === S.viewId ? ' on' : ''), title: t('view'), onclick: () => { S.viewId = x.id; S.selected = new Set(); S.items = []; S.picked = null; renderAll(); } }, h('b', {}, x.name)),
         x.active ? h('span', { class: 'badge success' }, t('active')) : h('button', { onclick: guard(() => api('POST', `/scenes/${x.id}/activate`)) }, t('activate')),
         h('button', { class: 'x', title: t('toLibrary'), onclick: guard(async () => { await request('POST', `/admin/api/scenes/${x.id}/copy`, { table: null }); toast(t('saved'), false); }) }, '⇪'),
         h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if ((await ask(t('confirmDel')))) await api('DELETE', '/scenes/' + x.id); }) }, '×')))),
@@ -1153,6 +1199,14 @@ function itemInspector(sc) {
 function renderInspector() {
   const sc = viewScene(), item = isGM() && S.picked && sc ? itemInspector(sc) : null;
   if (item) { inspectorEl.classList.remove('hidden'); return fill(inspectorEl, item); }
+  const many = S.selected.size + S.items.length;
+  if (isGM() && sc && many > 1) { // several things: how many, and delete them all
+    inspectorEl.classList.remove('hidden');
+    return fill(inspectorEl, h('div', { class: 'insp-head' }, h('b', { class: 'grow' }, t('selectedCount').replace('{n}', many)),
+      h('button', { class: 'x', title: t('close'), onclick: () => setSelection(new Set(), []) }, '×')),
+    h('p', { class: 'hint' }, t('groupHint')),
+    h('button', { class: 'danger', title: t('delKey'), onclick: deleteSelection }, t('del')));
+  }
   const tok = isGM() && S.selected.size === 1 ? S.tokens.find((x) => x.id === [...S.selected][0]) : null;
   inspectorEl.classList.toggle('hidden', !tok);
   if (!tok) return inspectorEl.replaceChildren();

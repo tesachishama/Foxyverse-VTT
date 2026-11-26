@@ -2,7 +2,10 @@
 import { computeVision, inReveal, distToSeg } from './vision.js';
 import { cellCenter } from './tp.js';
 import { W as WALL, makeWall, blocksSight, blocksMove, moveBlocked, doorCenter, splitWall, nodesAt, moveNodes, mergeOnRelease, radiusStep } from './walls.js';
+import { pickInArea, rectPoly, revealPts, pointInPoly, allowed, toggleItem, hasItem, mergeSelection, snapDelta, moveItems } from './select.js';
 const ICON = 0.5; // door, light and TP icons: half a cell
+/** A hit (see hitItem) as a selection item (public/select.js). */
+const asItem = (it) => (!it ? null : it.kind === 'door' || it.kind === 'wall' ? { kind: 'wall', index: it.index } : it.kind === 'light' ? { kind: 'light', id: it.light.id } : it.kind === 'tp' ? { kind: 'tp', id: it.cell.id } : null);
 
 export const DEAD_ALPHA = 0.5;
 const images = new Map();
@@ -240,11 +243,16 @@ export function createMap(canvas, hooks) {
   }
 
   function drawGuides(scene, st) {
-    const z = 1 / cam.z, editing = st.tool.name !== 'select';
-    for (const r of scene.reveal || []) { ctx.fillStyle = 'rgba(159,227,180,0.08)'; ctx.fillRect(r[0], r[1], r[2], r[3]); ctx.setLineDash([8 * z, 6 * z]); ctx.strokeStyle = 'rgba(159,227,180,0.6)'; ctx.lineWidth = z; ctx.strokeRect(r[0], r[1], r[2], r[3]); ctx.setLineDash([]); }
+    const z = 1 / cam.z, editing = st.tool.name !== 'select', items = st.items || [];
+    const isSel = (it) => hasItem(items, it) || (st.picked && hasItem([st.picked], it));
+    (scene.reveal || []).forEach((r, i) => {
+      const sel = isSel({ kind: 'reveal', index: i });
+      poly(ctx, revealPts(r)); ctx.fillStyle = sel ? 'rgba(255,154,77,0.12)' : 'rgba(159,227,180,0.08)'; ctx.fill();
+      ctx.setLineDash([8 * z, 6 * z]); ctx.strokeStyle = sel ? '#ff9a4d' : 'rgba(159,227,180,0.6)'; ctx.lineWidth = (sel ? 2 : 1) * z; ctx.stroke(); ctx.setLineDash([]);
+    });
     // walls: orange = sight + light, green dashed = movement only, orange with a green core = both; doors in blue (dashed when open)
     (scene.walls || []).forEach((w, i) => {
-      const picked = st.picked?.kind === 'wall' && st.picked.index === i;
+      const picked = isSel({ kind: 'wall', index: i });
       ctx.lineCap = 'round';
       if (picked) { ctx.lineWidth = 9 * z; ctx.strokeStyle = 'rgba(255,219,255,0.5)'; ctx.beginPath(); ctx.moveTo(w[0], w[1]); ctx.lineTo(w[2], w[3]); ctx.stroke(); }
       const sight = blocksSight(w) || (w[WALL.door] && w[WALL.open]), move = !w[WALL.door] && blocksMove(w);
@@ -263,12 +271,13 @@ export function createMap(canvas, hooks) {
     for (const c of tps) {
       if (tpImg) ctx.drawImage(tpImg, c.x - ts / 2, c.y - ts / 2, ts, ts); else { ctx.fillStyle = '#9fe3b4'; ctx.fillRect(c.x - ts / 2, c.y - ts / 2, ts, ts); }
       ctx.font = `600 ${11 * z}px system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillStyle = '#9fe3b4'; ctx.fillText(c.group, c.x + ts / 2 + 2 * z, c.y - ts / 2);
-      if (st.picked?.kind === 'tp' && st.picked.id === c.id) { ctx.strokeStyle = '#ff9a4d'; ctx.lineWidth = 3 * z; ctx.strokeRect(c.x - ts / 2, c.y - ts / 2, ts, ts); }
+      if (isSel({ kind: 'tp', id: c.id })) { ctx.strokeStyle = '#ff9a4d'; ctx.lineWidth = 3 * z; ctx.strokeRect(c.x - ts / 2, c.y - ts / 2, ts, ts); }
     }
     // lights: small icons (GM only); the picked one shows its radius and a handle to resize it
     for (const l of scene.lights || []) {
       const anti = l.kind === 'anti', s = ICON * scene.grid, img = image(anti ? '/icons/antilight.svg' : '/icons/light.svg', redraw);
       const picked = st.picked?.kind === 'light' && st.picked.id === l.id, color = anti ? 'rgba(235,165,255,0.75)' : 'rgba(255,216,77,0.7)';
+      if (!picked && isSel({ kind: 'light', id: l.id })) { ctx.strokeStyle = '#ff9a4d'; ctx.lineWidth = 3 * z; ctx.strokeRect(l.x - s / 2, l.y - s / 2, s, s); }
       if (editing || picked) { ctx.setLineDash([6 * z, 6 * z]); ctx.strokeStyle = color; ctx.lineWidth = (picked ? 2 : 1) * z; ctx.beginPath(); ctx.arc(l.x, l.y, l.radius * scene.grid, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); }
       if (img) ctx.drawImage(img, l.x - s / 2, l.y - s / 2, s, s); else { ctx.fillStyle = anti ? '#eba5ff' : '#ffd84d'; ctx.beginPath(); ctx.arc(l.x, l.y, s / 2, 0, Math.PI * 2); ctx.fill(); }
       if (picked) {
@@ -282,6 +291,9 @@ export function createMap(canvas, hooks) {
       const last = draft.pts[draft.pts.length - 1];
       ctx.strokeStyle = draft.door ? '#7ad7ff' : '#ff9a4d'; ctx.lineWidth = 3 * z; ctx.setLineDash([6 * z, 4 * z]);
       ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(cursor.x, cursor.y); ctx.stroke(); ctx.setLineDash([]);
+    }
+    for (const area of [draft?.marquee, draft?.lasso]) if (area?.length > 1) { // the selection being drawn
+      ctx.setLineDash([6 * z, 4 * z]); ctx.strokeStyle = '#ffdbff'; ctx.lineWidth = 1.5 * z; poly(ctx, area); ctx.fillStyle = 'rgba(255,219,255,0.08)'; ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
     }
     if (draft?.rect) { const r = draft.rect; ctx.strokeStyle = '#9fe3b4'; ctx.lineWidth = 2 * z; ctx.strokeRect(r.x, r.y, r.w, r.h); }
     ctx.strokeStyle = '#ff9a4d'; ctx.lineWidth = 3 * z; ctx.setLineDash([6 * z, 4 * z]);
@@ -387,6 +399,13 @@ export function createMap(canvas, hooks) {
     }
   }
 
+  /** Start dragging the whole selection (tokens and map items) from world point w. */
+  function startGroup(st, w) {
+    const sc = st.scene;
+    drag = { kind: 'group', start: w, d: { dx: 0, dy: 0 }, moved: false, items: [...(st.items || [])],
+      toks: st.tokens.filter((t) => st.selected.has(t.id)).map((t) => ({ t, x: t.x, y: t.y })),
+      orig: { walls: sc.walls, lights: sc.lights, tps: sc.tps, reveal: sc.reveal } };
+  }
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
     canvas.setPointerCapture(e.pointerId);
@@ -407,9 +426,21 @@ export function createMap(canvas, hooks) {
       return useTool(st, e, p);
     }
     const w = toWorld(p.x, p.y), item = st.scene && hitItem(st.scene, w, st.gm, st.picked);
-    if (item?.kind === 'door') { hooks.onDoor?.(st.scene.walls[item.index]); if (st.gm) hooks.onPick?.({ kind: 'wall', index: item.index }); return redraw(); }
     if (item?.kind === 'radius') { drag = { kind: 'radius', id: item.light.id, lights: st.scene.lights.map((l) => ({ ...l })), orig: st.scene.lights }; return; }
-    if (item?.kind === 'tp') {
+    // the GM's selection (ROADMAP 3 §1.2): the checkboxes say what can be picked; Shift adds or takes out; Shift+drag is a lasso
+    const filter = st.gm ? st.filter : null, items = st.items || [];
+    const mapItem = st.gm ? asItem(item) : null, okItem = !!mapItem && allowed(st.scene, mapItem, filter);
+    const tok = hitToken(p.x, p.y), okTok = !!tok && (!st.gm || filter?.tokens !== false);
+    if (st.gm && e.shiftKey && st.scene) {
+      if (okTok) { const next = new Set(st.selected); if (next.has(tok.id)) next.delete(tok.id); else next.add(tok.id); hooks.onSelect(next, items); return redraw(); }
+      if (okItem) { hooks.onSelect(new Set(st.selected), toggleItem(items, mapItem)); return redraw(); }
+      drag = { kind: 'lasso', pts: [[w.x, w.y]] }; draft = { lasso: drag.pts }; return redraw();
+    }
+    // pressing on a part of a selection of several things drags them all together
+    const inSelReveal = !tok && !item && items.some((it) => it.kind === 'reveal' && st.scene.reveal?.[it.index] && pointInPoly(w.x, w.y, revealPts(st.scene.reveal[it.index])));
+    if (st.gm && st.selected.size + items.length > 1 && ((okTok && st.selected.has(tok.id)) || (okItem && hasItem(items, mapItem)) || inSelReveal)) { startGroup(st, w); return redraw(); }
+    if (item?.kind === 'door') { hooks.onDoor?.(st.scene.walls[item.index]); if (okItem) hooks.onPick?.({ kind: 'wall', index: item.index }); return redraw(); }
+    if (item?.kind === 'tp' && okItem) {
       hooks.onPick?.({ kind: 'tp', id: item.cell.id });
       drag = { kind: 'tp', id: item.cell.id, tps: st.scene.tps.map((c) => ({ ...c })), orig: st.scene.tps, moved: false };
       return redraw();
@@ -417,26 +448,29 @@ export function createMap(canvas, hooks) {
     // a ghost (TP): picking it up teleports the real token there, and the move goes on from that side
     const ghost = !hitToken(p.x, p.y) && [...(st.ghosts || [])].reverse().find((g) => Math.hypot(w.x - g.x, w.y - g.y) <= (g.token.size * st.scene.grid * 0.92) / 2);
     if (ghost && hooks.canMove(ghost.token)) {
-      const t = ghost.token, home = { x: t.x, y: t.y }; hooks.onSelect(new Set([t.id]));
+      const t = ghost.token, home = { x: t.x, y: t.y }; hooks.onSelect(new Set([t.id]), []);
       t.x = ghost.x; t.y = ghost.y;
       drag = { kind: 'token', t, dx: 0, dy: 0, ok: { x: t.x, y: t.y }, sent: { x: t.x, y: t.y }, free: st.gm, via: ghost.to.id, home, moved: false };
       drag.dx = t.x - w.x; drag.dy = t.y - w.y;
       return redraw();
     }
-    if (item?.kind === 'light') {
+    if (item?.kind === 'light' && okItem) {
       hooks.onPick?.({ kind: 'light', id: item.light.id });
       drag = { kind: 'light', id: item.light.id, dx: item.light.x - w.x, dy: item.light.y - w.y, lights: st.scene.lights.map((l) => ({ ...l })), orig: st.scene.lights, moved: false };
       return redraw();
     }
-    const t = hitToken(p.x, p.y), { selected } = st;
+    const t = okTok ? tok : null, { selected } = st;
     if (t) {
       const next = new Set(e.shiftKey ? selected : []);
       if (e.shiftKey && selected.has(t.id)) next.delete(t.id); else next.add(t.id);
-      hooks.onSelect(next);
+      hooks.onSelect(next, []);
       if (hooks.canMove(t) && !e.shiftKey) drag = { kind: 'token', t, dx: t.x - w.x, dy: t.y - w.y, ok: { x: t.x, y: t.y }, sent: { x: t.x, y: t.y }, free: st.gm };
+    } else if (st.gm && okItem && mapItem.kind === 'wall') {
+      hooks.onPick?.(mapItem);
+    } else if (st.gm && st.scene) { // the empty map: a selection rectangle (a click without dragging clears the selection)
+      drag = { kind: 'marquee', x: w.x, y: w.y, sx: p.x, sy: p.y }; draft = { marquee: rectPoly(w.x, w.y, w.x, w.y) };
     } else {
-      if (!e.shiftKey) hooks.onSelect(new Set());
-      hooks.onPick?.(item?.kind === 'wall' ? { kind: 'wall', index: item.index } : null);
+      if (!e.shiftKey) hooks.onSelect(new Set(), []);
       drag = { kind: 'pan', sx: p.x, sy: p.y, cx: cam.x, cy: cam.y, moved: false };
     }
     redraw();
@@ -471,6 +505,19 @@ export function createMap(canvas, hooks) {
       if (drag.kind === 'light') { l.x = Math.round(w.x + drag.dx); l.y = Math.round(w.y + drag.dy); }
       else l.radius = radiusStep(Math.hypot(w.x - l.x, w.y - l.y) / sc.grid); // steps of half a cell
       drag.moved = true; sc.lights = drag.lights; sc._rev = (sc._rev || 0) + 1;
+    } else if (drag.kind === 'marquee') {
+      const w = toWorld(p.x, p.y); draft = { marquee: rectPoly(drag.x, drag.y, w.x, w.y) };
+    } else if (drag.kind === 'lasso') {
+      const w = toWorld(p.x, p.y), last = drag.pts[drag.pts.length - 1];
+      if (Math.hypot(w.x - last[0], w.y - last[1]) > 4 / cam.z && drag.pts.length < 2000) drag.pts.push([w.x, w.y]);
+    } else if (drag.kind === 'group') {
+      const sc = st.scene, w = toWorld(p.x, p.y), rx = w.x - drag.start.x, ry = w.y - drag.start.y;
+      const d = e.altKey ? { dx: Math.round(rx), dy: Math.round(ry) } : snapDelta(sc, rx, ry, st.tool.snap);
+      if (d.dx !== drag.d.dx || d.dy !== drag.d.dy) {
+        drag.d = d; drag.moved = true;
+        for (const m of drag.toks) { m.t.x = m.x + d.dx; m.t.y = m.y + d.dy; }
+        Object.assign(sc, drag.orig, moveItems({ ...sc, ...drag.orig }, drag.items, d.dx, d.dy)); sc._rev = (sc._rev || 0) + 1;
+      }
     } else if (drag.kind === 'rect') {
       const w = toWorld(p.x, p.y); draft.rect = { x: Math.min(drag.x, w.x), y: Math.min(drag.y, w.y), w: Math.abs(w.x - drag.x), h: Math.abs(w.y - drag.y) };
     } else if (drag.kind === 'token') {
@@ -494,6 +541,23 @@ export function createMap(canvas, hooks) {
       let s = scene ? snapToken(scene, t, t.x, t.y) : t;
       if (!drag.free && scene && moveBlocked(scene.walls, drag.sent.x, drag.sent.y, s.x, s.y)) s = moveBlocked(scene.walls, drag.sent.x, drag.sent.y, drag.ok.x, drag.ok.y) ? drag.sent : drag.ok;
       t.x = s.x; t.y = s.y; hooks.onMove(t, s.x, s.y, true, drag.via);
+    }
+    if (drag?.kind === 'marquee' || drag?.kind === 'lasso') {
+      const st = hooks.state(), p = pos(e), area = drag.kind === 'lasso' ? drag.pts : draft?.marquee;
+      draft = null;
+      if (drag.kind === 'marquee' && Math.hypot(p.x - drag.sx, p.y - drag.sy) < 4) hooks.onSelect(new Set(), []); // a plain click
+      else if (st.scene && area?.length >= 3) {
+        const got = pickInArea(st.scene, st.tokens, area, st.filter);
+        // the rectangle replaces the selection; the lasso (Shift) adds to it
+        const next = drag.kind === 'lasso' ? mergeSelection({ tokens: [...st.selected], items: st.items || [] }, got) : got;
+        hooks.onSelect(new Set(next.tokens), next.items);
+      }
+    }
+    if (drag?.kind === 'group') {
+      const { scene } = hooks.state(), d = drag.d, patch = moveItems({ ...scene, ...drag.orig }, drag.items, d.dx, d.dy);
+      Object.assign(scene, drag.orig); scene._rev = (scene._rev || 0) + 1;
+      if (drag.moved && (d.dx || d.dy)) hooks.onGroupMove?.(drag.toks.map((m) => ({ t: m.t, from: { x: m.x, y: m.y }, to: { x: m.t.x, y: m.t.y } })), patch);
+      else for (const m of drag.toks) { m.t.x = m.x; m.t.y = m.y; }
     }
     if (drag?.kind === 'rect') {
       const r = draft?.rect, { scene } = hooks.state();

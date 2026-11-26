@@ -519,10 +519,10 @@ tbl('POST', '/tokens', 'gm', ({ table, by, body }) => {
   const scene = inTable('scenes', body.sceneId, table.id); if (!scene) throw bad('Unknown scene');
   const actor = body.actorId ? inTable('actors', body.actorId, table.id) : null;
   const portrait = actor ? tokenImage(jparse(actor.data, {})) : null;
-  const r = db.prepare('INSERT INTO tokens (scene_id, name, x, y, size, image, color, actor_id, hidden, vision, light, sight) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(
+  const r = db.prepare('INSERT INTO tokens (scene_id, name, x, y, size, image, color, actor_id, hidden, vision, light, sight, life) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
     scene.id, String(body.name ?? actor?.name ?? 'Token').slice(0, 60), num(body.x, scene.width / 2), num(body.y, scene.height / 2),
     Math.min(10, Math.max(0.25, num(body.size, 1))), imgUrl(body.image) ?? portrait, color(body.color), actor?.id ?? null, body.hidden ? 1 : 0,
-    Math.min(100, Math.max(0, num(body.vision, 100))), Math.min(100, Math.max(0, num(body.light, 0))), body.sight ? 1 : 0); // vision in cells: 0 = none, 100 by default
+    Math.min(100, Math.max(0, num(body.vision, 100))), Math.min(100, Math.max(0, num(body.light, 0))), body.sight ? 1 : 0, ['dead', 'alive'].includes(body.life) ? body.life : 'auto'); // vision in cells: 0 = none, 100 by default
   const row = getRow('tokens', r.lastInsertRowid);
   pushToken(row, by);
   return tokenView(row);

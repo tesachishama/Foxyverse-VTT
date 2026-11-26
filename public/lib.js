@@ -146,6 +146,16 @@ const DICT = {
     resetExplore: 'Réinitialiser l’exploration…', everyone: 'Tous les joueurs', confirmResetExplore: 'Effacer ce qui a été exploré sur cette scène ?',
     playersWin: 'La lumière des joueurs l’emporte', playersWinHint: 'Les lumières portées par les tokens des joueurs ne sont pas éteintes par cette zone.',
     // ROADMAP 3 (fr)
+    selectWhat: "Sélectionner…",
+    sel_tokens: "Tokens",
+    sel_walls: "Murs",
+    sel_doors: "Portes",
+    sel_lights: "Lumières",
+    sel_tps: "Cases de TP",
+    sel_reveal: "Zones révélées",
+    selectedCount: "{n} éléments sélectionnés",
+    groupHint: "Glisse l'un d'eux pour tout déplacer. Suppr : tout supprimer, Ctrl+Z : annuler.",
+    delKey: "Supprimer (Suppr)",
     fitMap: 'Ajuster la vue',
   },
   en: {
@@ -226,6 +236,16 @@ const DICT = {
     resetExplore: 'Reset exploration…', everyone: 'All players', confirmResetExplore: 'Erase what was explored on this scene?',
     playersWin: "Players' light wins", playersWinHint: "Lights carried by players' tokens are not put out by this area.",
     // ROADMAP 3 (en)
+    selectWhat: "Select…",
+    sel_tokens: "Tokens",
+    sel_walls: "Walls",
+    sel_doors: "Doors",
+    sel_lights: "Lights",
+    sel_tps: "TP cells",
+    sel_reveal: "Revealed areas",
+    selectedCount: "{n} things selected",
+    groupHint: "Drag one of them to move them all. Delete: delete them all, Ctrl+Z: undo.",
+    delKey: "Delete (Del)",
     fitMap: 'Fit to view',
   },
 };
