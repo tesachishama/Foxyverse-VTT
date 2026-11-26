@@ -146,6 +146,9 @@ const DICT = {
     resetExplore: 'Réinitialiser l’exploration…', everyone: 'Tous les joueurs', confirmResetExplore: 'Effacer ce qui a été exploré sur cette scène ?',
     playersWin: 'La lumière des joueurs l’emporte', playersWinHint: 'Les lumières portées par les tokens des joueurs ne sont pas éteintes par cette zone.',
     // ROADMAP 3 (fr)
+    youtubeUrl: "Lien d'une vidéo YouTube",
+    youtubeSound: "Musique YouTube",
+    youtubeHint: "Joué par le lecteur YouTube intégré dans le navigateur de chacun (jamais téléchargé). Pubs possibles ; certaines vidéos interdisent l'intégration ; les joueurs doivent pouvoir joindre YouTube.",
     showTo: "Montrer à…",
     alsoInCompendium: "Le rendre aussi visible dans le compendium des joueurs",
     eyeNpcHint: "Les joueurs choisis voient le portrait et le nom seulement, dans une fenêtre qu'ils ferment eux-mêmes. Rien n'est gardé.",
@@ -268,6 +271,9 @@ const DICT = {
     resetExplore: 'Reset exploration…', everyone: 'All players', confirmResetExplore: 'Erase what was explored on this scene?',
     playersWin: "Players' light wins", playersWinHint: "Lights carried by players' tokens are not put out by this area.",
     // ROADMAP 3 (en)
+    youtubeUrl: "YouTube video link",
+    youtubeSound: "YouTube music",
+    youtubeHint: "Played by YouTube's embedded player in each browser (never downloaded). Ads may play; some videos forbid embedding; players must be able to reach YouTube.",
     showTo: "Show to…",
     alsoInCompendium: "Also make it visible in the players' compendium",
     eyeNpcHint: "The chosen players see the portrait and the name only, in a window they close themselves. Nothing is kept.",

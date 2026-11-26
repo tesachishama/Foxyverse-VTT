@@ -200,3 +200,15 @@ test('3.4 the eye button has its icon (square placeholder) and FR/EN texts', () 
   squareSvg('eye');
   bothLangs(['showTo', 'alsoInCompendium', 'eyeNpcHint', 'eyeJournalHint', 'shownTo', 'zoomImage', 'everyone', 'showPlayers']);
 });
+
+// ---------------------------------------------------------------- 4.1 YouTube
+import { youtubeId, youtubeUrl } from '../public/media.js';
+test('4.1 YouTube links of every usual shape give the video id; anything else is refused', () => {
+  const id = 'dQw4w9WgXcQ';
+  for (const u of [`https://www.youtube.com/watch?v=${id}&t=42s`, `https://youtu.be/${id}?si=x`, `https://m.youtube.com/watch?v=${id}`, `https://music.youtube.com/watch?v=${id}&list=RD`,
+    `https://www.youtube.com/embed/${id}`, `https://www.youtube.com/shorts/${id}`, `https://www.youtube-nocookie.com/embed/${id}`, `http://youtube.com/live/${id}`]) assert.equal(youtubeId(u), id, u);
+  for (const u of ['', 'not a url', `https://evil.example/watch?v=${id}`, `https://www.youtube.com.evil.example/watch?v=${id}`, 'https://www.youtube.com/watch?v=short', `javascript:alert(1)//youtube.com/watch?v=${id}`, `https://www.youtube.com/channel/${id}`])
+    assert.equal(youtubeId(u), null, u);
+  assert.equal(youtubeUrl(id), `https://www.youtube.com/watch?v=${id}`);
+  bothLangs(['youtubeUrl', 'youtubeSound', 'youtubeHint']);
+});

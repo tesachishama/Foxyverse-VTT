@@ -223,3 +223,20 @@ test('3.4 the eye on an NPC sends only its portrait and name to the chosen playe
     assert.equal((await pip('POST', `/actors/${npc.id}/show`, { slots: 'all' })).status, 404);
   } finally { ev.close(); }
 });
+
+test('4.1 a sound may be a YouTube link (stored in one form, never downloaded); other links are refused; the page may embed YouTube only', async () => {
+  const yt = await gm('POST', '/sounds', { name: 'Tavern', youtube: 'https://youtu.be/dQw4w9WgXcQ?t=3', loop: true });
+  assert.equal(yt.status, 200);
+  assert.deepEqual([yt.body.kind, yt.body.videoId, yt.body.url], ['youtube', 'dQw4w9WgXcQ', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ']);
+  assert.equal((await gm('POST', '/sounds', { youtube: 'https://vimeo.com/123' })).status, 400);
+  assert.equal((await gm('POST', '/sounds', { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' })).status, 400); // only through "youtube"
+  assert.equal((await pip('POST', '/sounds', { youtube: 'https://youtu.be/dQw4w9WgXcQ' })).status, 404);
+  assert.equal((await pip('GET', '/state')).body.sounds.find((s) => s.id === yt.body.id).kind, 'youtube');
+  const play = await gm('POST', `/sounds/${yt.body.id}/play`);
+  assert.equal(play.status, 200);
+  const csp = (await fetch(srv.base + '/')).headers.get('content-security-policy');
+  assert.match(csp, /frame-src https:\/\/www\.youtube\.com https:\/\/www\.youtube-nocookie\.com;/);
+  assert.match(csp, /script-src 'self' https:\/\/www\.youtube\.com https:\/\/s\.ytimg\.com;/);
+  assert.match(csp, /connect-src 'self';/); // nothing is fetched from YouTube by the app itself
+  await gm('POST', '/audio/stop');
+});

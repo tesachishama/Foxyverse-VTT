@@ -1395,11 +1395,19 @@ function soundPanel() {
     renderPanel();
   }) });
   const isOn = (s) => S.playing.some((p) => p.id === s.id);
+  // a YouTube video, played by YouTube's own player in each browser (never downloaded)
+  const ytUrl = h('input', { type: 'url', class: 'grow', placeholder: t('youtubeUrl') });
+  const addYt = guard(async () => {
+    if (!ytUrl.value.trim()) return;
+    upsert(S.sounds, await api('POST', '/sounds', { name: t('youtubeSound'), youtube: ytUrl.value.trim(), loop: true, volume: 1 })); ytUrl.value = ''; renderPanel();
+  });
+  ytUrl.addEventListener('keydown', (e) => { if (e.key === 'Enter') addYt(); });
   return h('div', { class: 'pad' }, h('p', { class: 'hint' }, t('soundHint')),
     h('div', { class: 'line' }, h('label', { class: 'filebtn' }, '+ ' + t('uploadAudio'), file), h('button', { onclick: guard(() => api('POST', '/audio/stop')) }, t('stopAll'))),
+    h('div', { class: 'line', title: t('youtubeHint') }, ytUrl, h('button', { onclick: addYt }, '+ YouTube')),
     !S.sounds.length && h('p', { class: 'hint' }, t('empty')),
     S.sounds.map((s) => h('div', { class: 'sound' + (isOn(s) ? ' on' : '') },
-      h('div', { class: 'line' }, h('input', { type: 'text', class: 'grow', value: s.name, onchange: guard((e) => api('PATCH', '/sounds/' + s.id, { name: e.target.value })) }),
+      h('div', { class: 'line' }, s.kind === 'youtube' && h('span', { class: 'badge yt', title: s.url }, 'YouTube'), h('input', { type: 'text', class: 'grow', value: s.name, onchange: guard((e) => api('PATCH', '/sounds/' + s.id, { name: e.target.value })) }),
         h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if ((await ask(t('confirmDel')))) await api('DELETE', '/sounds/' + s.id); }) }, '×')),
       h('div', { class: 'line' },
         h('button', { class: 'primary', onclick: guard(() => api('POST', `/sounds/${s.id}/play`)) }, '▶ ' + t('play')),

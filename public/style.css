@@ -359,3 +359,8 @@ h4.fold-head { display: flex; }
 .npc-show { display: flex; justify-content: center; }
 .npc-portrait { max-width: 100%; max-height: 50vh; border-radius: 10px; cursor: zoom-in; }
 .npc-portrait.big { position: fixed; inset: 2vh 2vw; width: 96vw; height: 96vh; max-height: none; object-fit: contain; background: rgba(31, 0, 19, .95); z-index: 60; cursor: zoom-out; }
+/* ROADMAP 3 §4.1: YouTube's player, small and visible while it plays */
+.yt-dock { position: fixed; left: 50%; top: 8px; transform: translateX(-50%); display: flex; gap: 8px; z-index: 14; pointer-events: none; }
+.yt-box { pointer-events: auto; background: rgba(75, 0, 44, .95); border: 1px solid var(--line); border-radius: 8px; padding: 4px; display: grid; gap: 2px; }
+.yt-title { font-size: 11px; color: var(--lilac); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge.yt { color: #ff8a8a; border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; font-size: 11px; }

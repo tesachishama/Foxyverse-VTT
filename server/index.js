@@ -18,6 +18,7 @@ import { parseNarration, uniqueAlias, aliasFrom, NARRATOR } from './narration.js
 import { normWall, moveBlocked, radiusStep, W } from '../public/walls.js';
 import { exploreDims } from '../public/vision.js';
 import { ghostStart } from '../public/tp.js';
+import { youtubeId, youtubeUrl } from '../public/media.js';
 
 const PORT = process.env.PORT === '0' ? 0 : Number(process.env.PORT) || 3000; // 0: any free port (tests)
 const HOST = process.env.HOST || '0.0.0.0';
@@ -57,7 +58,7 @@ const tokenView = (t) => ({ id: t.id, sceneId: t.scene_id, name: t.name, x: t.x,
   life: t.life ?? 'auto', dead: tokenDead(t), pc: isPlayerCharacter(t), darkvision: tokenDarkvision(t) });
 /** A player's token: some player has the edit right on its sheet (its light can beat an anti-light, see public/walls.js). */
 const isPlayerCharacter = (t) => !!t.actor_id && !!db.prepare("SELECT 1 FROM actor_perms WHERE actor_id = ? AND level = 'edit'").get(t.actor_id);
-const soundView = (s) => ({ id: s.id, name: s.name, url: s.url, loop: !!s.loop, volume: s.volume });
+const soundView = (s) => { const yt = youtubeId(s.url); return { id: s.id, name: s.name, url: s.url, loop: !!s.loop, volume: s.volume, kind: yt ? 'youtube' : 'file', ...(yt ? { videoId: yt } : {}) }; };
 const journalView = (j, u = GM) => ({ id: j.id, title: j.title, body: j.body, image: j.image, visibility: jparse(j.visibility, 'gm'), updated: j.updated, ...(u.role === 'gm' ? { campaignId: j.campaign_id ?? null } : {}) });
 const canSeeJournal = (u, j) => { const v = jparse(j.visibility, 'gm'); return u.role === 'gm' || v === 'all' || (Array.isArray(v) && v.includes(u.id)); };
 // ---- compendium entries (items and spells). They link to sheets by kind + name, case-insensitive.
@@ -822,8 +823,13 @@ tbl('POST', '/system/test', 'gm', ({ table, body }) => {
 // ---- audio
 const audioUrl = (v) => (/^\/uploads\/[a-f0-9]{64}\.(mp3|ogg|wav|m4a|flac|webm)$/.test(v ?? '') ? v : (() => { throw bad('Invalid audio URL'); })());
 const soundIn = (table, id) => { const s = inTable('sounds', id, table.id); if (!s) throw notFound(); return s; };
+/** An uploaded file, or a YouTube link (stored in one canonical form; played by YouTube's player, never downloaded). */
+function soundUrl(body) {
+  if (body.youtube !== undefined) { const id = youtubeId(body.youtube); if (!id) throw bad('Not a YouTube video link'); return youtubeUrl(id); }
+  return audioUrl(body.url);
+}
 tbl('POST', '/sounds', 'gm', ({ table, body }) => {
-  const r = db.prepare('INSERT INTO sounds (table_id, name, url, loop, volume, created) VALUES (?,?,?,?,?,?)').run(table.id, String(body.name ?? 'Sound').slice(0, 80) || 'Sound', audioUrl(body.url), body.loop ? 1 : 0, Math.min(1, Math.max(0, num(body.volume, 1))), now());
+  const r = db.prepare('INSERT INTO sounds (table_id, name, url, loop, volume, created) VALUES (?,?,?,?,?,?)').run(table.id, String(body.name ?? 'Sound').slice(0, 80) || 'Sound', soundUrl(body), body.loop ? 1 : 0, Math.min(1, Math.max(0, num(body.volume, 1))), now());
   const row = getRow('sounds', r.lastInsertRowid);
   broadcast(table.id, { type: 'sound', op: 'upsert', data: soundView(row) });
   return soundView(row);
@@ -1127,7 +1133,8 @@ const isPage = (p) => p === '/' || /^\/[a-z0-9-]+\/?$/.test(p) || /^\/admin(\/[a
 const server = createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; media-src 'self'; connect-src 'self'; frame-ancestors 'none'");
+  // YouTube's embedded player (ROADMAP 3 §4.1): its script and its frame, nothing else from outside
+  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob: https://i.ytimg.com; style-src 'self' 'unsafe-inline'; script-src 'self' https://www.youtube.com https://s.ytimg.com; frame-src https://www.youtube.com https://www.youtube-nocookie.com; media-src 'self'; connect-src 'self'; frame-ancestors 'none'");
   const url = new URL(req.url, 'http://x');
   let path = url.pathname, user = null;
   try {
