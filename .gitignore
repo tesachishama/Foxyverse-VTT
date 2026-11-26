@@ -1,3 +1,9 @@
 data/
 node_modules/
 .claude
+# Notes de travail pour Claude Code (locales, non versionnées)
+CLAUDE.md
+ROADMAP.md
+ROADMAP2.md
+design-reference/
+design-reference.zip
