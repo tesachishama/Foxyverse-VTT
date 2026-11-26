@@ -17,6 +17,12 @@ export function clampRect(r, vw, vh, min = { w: 260, h: 180 }) {
  * was, so it unfolds to the same size. Returns the new saved entry.
  */
 export const toggleFold = (saved) => ({ ...(saved ?? {}), folded: !saved?.folded });
+/** Floating windows are tabs ("sheets", "journal"...) or single sheets ("sheet:<id>", ROADMAP 3 §2.7, several at once). */
+export const sheetFloatId = (actorId) => `sheet:${actorId}`;
+export function floatTarget(id) {
+  const m = /^sheet:(\d+)$/.exec(String(id));
+  return m ? { kind: 'sheet', actorId: Number(m[1]) } : { kind: 'tab', tab: String(id) };
+}
 /** The size to remember after a resize: none while folded (the window is only its title bar then). */
 export const sizeToSave = (folded, w, h) => (folded ? null : { w, h });
 

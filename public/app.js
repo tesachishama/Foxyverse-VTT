@@ -7,7 +7,7 @@ import { signed, tierLabel, damageText, matchesSearch } from './format.js';
 import { isTokenDead, pickViewers, markSeen, orBits, bitsToBase64, bitsFromBase64 } from './vision.js';
 import { radiusStep, moveBlocked } from './walls.js';
 import { ghostsOf, ghostLights, newGroup, tpGroups } from './tp.js';
-import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget, mapShortcut, toggleFold, sizeToSave } from './layout.js';
+import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget, mapShortcut, toggleFold, sizeToSave, sheetFloatId, floatTarget } from './layout.js';
 import { TOOLS, TOOL_BUTTONS, REVEAL_MODES, WALL_SHAPES, WALL_FLAGS, iconUrl } from './tools.js';
 import { defaultFilter, SELECT_KINDS, deleteItems, liveItems } from './select.js';
 import { splitSheets } from './sheets.js';
@@ -245,10 +245,10 @@ function onEvent(ev) {
   }
   if (type === 'npcs') { S.npcs = data; if (shown('comp') && !compEditing()) renderPanel('comp'); return; }
   if (type === 'actor') {
-    if (op === 'delete') { remove(S.actors, data.id); if (S.sheetId === data.id) S.sheetId = null; renderAll(); return; }
+    if (op === 'delete') { remove(S.actors, data.id); if (S.sheetId === data.id) S.sheetId = null; closeFloat(sheetFloatId(data.id)); renderAll(); return; }
     if (by === CLIENT_ID && pending.has(data.id)) return;
     const had = actorById(data.id);
-    const typing = shown('sheets') && S.sheetId === data.id && inPanels(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+    const typing = !!document.activeElement?.closest?.(`[data-sheet="${data.id}"]`) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
     if (had && typing) {
       // Someone else changed this character (damage, healing, a cast) while the sheet is being edited: keep our local copy, but take the live
       // resources so that our next save cannot write the old HP / mana / favors back.
@@ -259,6 +259,7 @@ function onEvent(ev) {
     if (!had) { if (!S.actorId) S.actorId = data.id; renderAll(); return; }
     map.redraw(); renderChatWho();
     if (shown('sheets') && S.sheetId === data.id) renderPanel('sheets');
+    renderSheetFloats(actorById(data.id));
     return;
   }
   if (type === 'chat') {
@@ -629,8 +630,9 @@ function renderPanel(only = null, { force = false } = {}) {
     if (only && only !== id) continue;
     if (!force && !only && typingIn(f.body)) continue;
     const top = f.body.scrollTop;
-    f.body.className = 'float-body panel-' + id;
-    f.body.replaceChildren(panels[id]());
+    const target = floatTarget(id);
+    f.body.className = 'float-body panel-' + (target.kind === 'sheet' ? 'sheets' : id);
+    f.body.replaceChildren(target.kind === 'sheet' ? sheetFloat(target.actorId) : panels[id]());
     f.body.scrollTop = top;
   }
 }
@@ -645,11 +647,15 @@ function saveFloat(id, patch) { const all = floatStore(); all[id] = { ...(all[id
 function raiseFloat(id) { const f = floats.get(id); if (f) f.win.style.zIndex = String(++floatZ); }
 function placeFloat(win, r) { Object.assign(win.style, { left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' }); }
 function popOut(id, { remember = true } = {}) {
-  if (floats.has(id) || !tabList().some(([x]) => x === id)) return;
+  const target = floatTarget(id), sheet = target.kind === 'sheet' ? actorById(target.actorId) : null;
+  if (floats.has(id)) return raiseFloat(id);
+  if (target.kind === 'sheet' ? !sheet : !tabList().some(([x]) => x === id)) return; // a sheet this page can at least see, or a tab it has
+  const title = sheet ? sheet.name : tabLabel(id), ico = TAB_ICON[sheet ? 'sheets' : id];
   const body = h('div', { class: 'float-body' });
-  const head = h('div', { class: 'float-head', title: t('foldHint') }, TAB_ICON[id] && icon(TAB_ICON[id], 'ico tab-ico'), h('b', { class: 'grow' }, tabLabel(id)),
-    h('button', { class: 'quiet', title: t('dockBack'), onclick: () => dockBack(id) }, '⇲'));
-  const win = h('div', { class: 'float-win', role: 'dialog', 'aria-label': tabLabel(id) }, head, body);
+  const head = h('div', { class: 'float-head', title: t('foldHint') }, ico && icon(ico, 'ico tab-ico'), h('b', { class: 'grow float-title' }, title),
+    sheet ? h('button', { class: 'quiet', title: t('close'), onclick: () => closeFloat(id) }, '×')
+      : h('button', { class: 'quiet', title: t('dockBack'), onclick: () => dockBack(id) }, '⇲'));
+  const win = h('div', { class: 'float-win' + (sheet ? ' sheet-win' : ''), role: 'dialog', 'aria-label': title }, head, body);
   const saved = floatStore()[id];
   win.classList.toggle('folded', !!saved?.folded);
   // double click on the title bar: fold to the title bar only, and back
@@ -675,8 +681,25 @@ function popOut(id, { remember = true } = {}) {
   // resize: the bottom-right corner (CSS resize); the new size is remembered
   new ResizeObserver(debounce(() => { const size = sizeToSave(win.classList.contains('folded'), win.offsetWidth, win.offsetHeight); if (size && floats.get(id)?.win === win) saveFloat(id, size); }, 300)).observe(win);
   if (remember) saveFloat(id, { ...r, open: true });
+  if (sheet) return renderPanel(id, { force: true });
   enterTab(id);
   renderDock();
+}
+/** Close a sheet's window (a tab's window docks back instead). */
+function closeFloat(id) {
+  const f = floats.get(id); if (!f) return;
+  f.win.remove(); floats.delete(id); saveFloat(id, { open: false });
+}
+/** A sheet in its own window: the same sheet as in the tab, read-only when this page can only view it. */
+function sheetFloat(actorId) {
+  const a = actorById(actorId);
+  return a ? sheetView(a, { floating: true }) : h('p', { class: 'hint pad' }, t('empty'));
+}
+/** Redraw the windows showing this sheet (unless someone is typing in them), and rename them. */
+function renderSheetFloats(a) {
+  const id = sheetFloatId(a.id), f = floats.get(id); if (!f) return;
+  const name = f.win.querySelector('.float-title'); if (name && name.textContent !== a.name) name.textContent = a.name;
+  if (!typingIn(f.body)) renderPanel(id, { force: true });
 }
 function dockBack(id) {
   const f = floats.get(id); if (!f) return;
@@ -872,17 +895,19 @@ const sendSave = guard(async (a) => {
   for (const k of ['hp', 'mp', 'fav']) {
     if (a.data[k].cur !== sent[k] || res.data[k].cur === sent[k]) continue;
     a.data[k].cur = res.data[k].cur;
-    const input = $(`[data-r="${k}"]`);
-    if (input && document.activeElement !== input) input.value = res.data[k].cur;
+    for (const input of $$(`[data-sheet="${a.id}"] [data-r="${k}"]`)) if (document.activeElement !== input) input.value = res.data[k].cur;
   }
   for (const k of ['talents', 'spells', 'items']) a.data[k].forEach((x, i) => { if (!x.id) x.id = res.data[k][i]?.id ?? ''; });
   a.data.items.forEach((x) => { if (x._k && x.id && S.openItems.has(x._k)) S.openItems.add(x.id); }); // a new card stays open once it has its real id
   if (res.alias !== undefined) a.alias = res.alias; // a rename moves an automatic alias
   a.computed = res.computed; pending.delete(a.id); patchComputed(a); map.redraw(); renderChatWho();
+  // the same sheet may be open twice (tab and window): the view not being typed in catches up
+  renderSheetFloats(a);
+  if (shown('sheets') && S.sheetId === a.id && !floats.has('sheets') && !typingIn(panelEl)) renderPanel('sheets');
 });
 const cget = (a, path) => path.split('.').reduce((o, k) => o?.[k], a.computed);
 function patchComputed(a) {
-  $$('[data-c]').forEach((el) => {
+  $$(`[data-sheet="${a.id}"] [data-c]`).forEach((el) => {
     el.textContent = cget(a, el.dataset.c) ?? 0;
     if (el.dataset.c === 'points.spent') el.classList.toggle('over', a.computed.points.spent > a.computed.points.budget);
   });
@@ -915,6 +940,7 @@ function sheetRows(list) {
     h('button', { class: 'row grow', onclick: () => { S.sheetId = x.id; renderPanel(); } },
       h('b', {}, x.name), h('span', { class: 'dim' }, ` ${t('level')} ${x.data.bio.level}${isGM() ? ' · ' + permSummary(x) : x.perm === 'view' ? ' · ' + t('permView') : ''}`),
       h('span', { class: 'dim right' }, `${x.data.hp.cur}/${x.computed.derived.maxhp} ${t('hp')}`)),
+    h('button', { class: 'quiet', title: t('popOutSheet'), 'aria-label': t('popOutSheet'), onclick: () => popOut(sheetFloatId(x.id)) }, '⧉'),
     isGM() && viewScene() && h('button', { class: 'quiet', title: t('placeTokenHint'), 'aria-label': t('placeToken'), onclick: () => placeToken(x) }, '⊕ ' + t('tokenShort')))));
 }
 
@@ -949,7 +975,7 @@ function addMenu(anchor, kind, category, onNew, onPick) {
   setTimeout(() => { document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', esc); }, 0);
   $('input', menu)?.focus();
 }
-function sheetView(a) {
+function sheetView(a, { floating = false } = {}) {
   const sys = S.system, d = a.data, idx = statIndex();
   const modInput = h('input', { type: 'text', class: 'mod', placeholder: '+0', value: S.rollMod, oninput: (e) => { S.rollMod = e.target.value.trim(); } });
   const rollBtn = (cmdType, label, cls = 'roll') => h('button', { class: cls, onclick: () => doRoll(`/${cmdType} ${S.rollMod}`, a.id) }, label);
@@ -957,7 +983,8 @@ function sheetView(a) {
   const num = (obj, key, lo = 0) => field(a, obj, key, 'int', { min: lo, class: 'n' });
 
   const head = h('div', { class: 'sheet-head' },
-    h('button', { class: 'quiet', onclick: () => { saveNow(a); S.sheetId = null; renderPanel(); } }, '← ' + t('back')),
+    !floating && h('div', { class: 'line' }, h('button', { class: 'quiet grow', onclick: () => { saveNow(a); S.sheetId = null; renderPanel(); } }, '← ' + t('back')),
+      h('button', { class: 'quiet', title: t('popOutSheet'), onclick: () => popOut(sheetFloatId(a.id)) }, '⧉')),
     h('div', { class: 'namerow' },
       h('button', { class: 'avatar', title: t('picture'), onclick: () => pictureDialog(a) }, (d.token || d.portrait) ? h('img', { src: d.token || d.portrait, alt: '' }) : '+'),
       field(a, a, 'name', 'text', { class: 'title grow' })),
@@ -1039,10 +1066,10 @@ function sheetView(a) {
     h('label', { class: 'check', title: t('npcHint') }, h('input', { type: 'checkbox', checked: a.shown, onchange: guard(async (e) => { Object.assign(a, await api('PATCH', '/actors/' + a.id, { shown: e.target.checked })); }) }), t('shownToPlayers')),
     h('button', { class: 'danger', onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await api('DELETE', '/actors/' + a.id); }) }, t('del'))));
   const perms = isGM() && section(t('perms'), permsEditor(a));
-  if (a.perm === 'view') return h('div', { class: 'sheet pad' }, // everything visible, nothing editable
-    h('button', { class: 'quiet', onclick: () => { S.sheetId = null; renderPanel(); } }, '← ' + t('back')), h('p', { class: 'hint' }, t('viewOnly')),
+  if (a.perm === 'view') return h('div', { class: 'sheet pad', 'data-sheet': a.id }, // everything visible, nothing editable
+    !floating && h('button', { class: 'quiet', onclick: () => { S.sheetId = null; renderPanel(); } }, '← ' + t('back')), h('p', { class: 'hint' }, t('viewOnly')),
     h('fieldset', { class: 'readonly', disabled: true }, head, res, stats, talents, spells, items, money, notes));
-  return h('div', { class: 'sheet pad' }, head, res, stats, talents, spells, items, money, notes, perms, gm);
+  return h('div', { class: 'sheet pad', 'data-sheet': a.id }, head, res, stats, talents, spells, items, money, notes, perms, gm);
 }
 /**
  * GM: put a token of this sheet on the scene being viewed (ROADMAP 3 §2.5). Nothing is created until the click on the map, so players

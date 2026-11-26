@@ -115,3 +115,12 @@ test('2.5 only the GM puts tokens down (players have no such route)', async () =
   const tk = await gm('POST', '/tokens', { sceneId: scene.id, actorId: a.id, x: 75, y: 125 });
   assert.equal(tk.status, 200); assert.deepEqual([tk.body.x, tk.body.y, tk.body.actorId], [75, 125, a.id]);
 });
+
+test('2.7 a sheet window shows what the server sends: a view-only player gets the sheet but cannot save it; an invisible sheet is not sent', async () => {
+  const seen = (await gm('POST', '/actors', { name: 'Seen' })).body, hidden = (await gm('POST', '/actors', { name: 'Hidden' })).body;
+  await gm('PUT', `/actors/${seen.id}/perms`, { perms: { [pipSlot.id]: 'view' } });
+  const st = (await pip('GET', '/state')).body;
+  assert.equal(st.actors.find((a) => a.id === seen.id)?.perm, 'view');
+  assert.equal(st.actors.find((a) => a.id === hidden.id), undefined);
+  assert.equal((await pip('PATCH', `/actors/${seen.id}`, { name: 'Renamed' })).status, 403);
+});

@@ -170,3 +170,14 @@ test('2.6 the GM\'s sheets split by themselves: PC = a player can edit it, NPC =
   assert.equal(isPC({}), false);
   bothLangs(['pcs', 'npcs', 'tokenShort']);
 });
+
+// ---------------------------------------------------------------- 2.7 sheets in their own windows
+import { sheetFloatId, floatTarget } from '../public/layout.js';
+test('2.7 a sheet opens in its own window (several at once): window ids tell sheets and tabs apart', () => {
+  assert.equal(sheetFloatId(12), 'sheet:12');
+  assert.deepEqual(floatTarget('sheet:12'), { kind: 'sheet', actorId: 12 });
+  assert.deepEqual(floatTarget('journal'), { kind: 'tab', tab: 'journal' });
+  assert.deepEqual(floatTarget('sheet:x'), { kind: 'tab', tab: 'sheet:x' });
+  assert.notEqual(sheetFloatId(1), sheetFloatId(2));
+  bothLangs(['popOutSheet']);
+});
