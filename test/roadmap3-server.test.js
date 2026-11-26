@@ -47,3 +47,19 @@ test('1.6 a click on a TP ghost: the player\'s token jumps to the ghost (linked 
   assert.deepEqual(ghosts.map((g) => [g.x, g.y]), [[75, 75]]); // the old cell now shows the ghost
   assert.equal((await pip('PATCH', `/tokens/${tk.id}`, { x: 75, y: 75, via: 'zzz' })).status, 409); // not a linked cell
 });
+
+test('1.7 the GM\'s free reroll costs no favor; players cannot use it; the normal reroll still costs a favor, GM included', async () => {
+  const hero = (await gm('POST', '/actors', { name: 'Lucky' })).body;
+  await gm('PUT', `/actors/${hero.id}/perms`, { perms: { [pipSlot.id]: 'edit' } });
+  const favs = async () => (await gm('GET', '/state')).body.actors.find((a) => a.id === hero.id).data.fav.cur;
+  const start = await favs();
+  assert.ok(start >= 1);
+  const roll = (await pip('POST', '/chat', { text: '/con', actorId: hero.id })).body;
+  assert.equal((await pip('POST', `/chat/${roll.id}/reroll`, { free: true })).status, 403);
+  assert.equal(await favs(), start);
+  const free = await gm('POST', `/chat/${roll.id}/reroll`, { free: true });
+  assert.equal(free.status, 200); assert.equal(free.body.body.rerolls, 1); assert.equal(free.body.body.freeRerolls, 1);
+  assert.equal(await favs(), start);
+  assert.equal((await gm('POST', `/chat/${roll.id}/reroll`)).status, 200);
+  assert.equal(await favs(), start - 1);
+});

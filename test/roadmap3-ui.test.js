@@ -132,3 +132,4 @@ test('1.5 Delete (or Backspace) deletes the selection, Ctrl/Cmd+Z undoes; other 
   assert.equal(mapShortcut({ key: 'Delete', ctrlKey: true }), null);
   assert.equal(mapShortcut({ key: 'z' }), null);
 });
+test('1.7 the free reroll button has its FR/EN name', () => bothLangs(['freeReroll', 'freeRerollHint']));

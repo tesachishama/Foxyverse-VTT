@@ -705,7 +705,7 @@ tbl('POST', '/chat', 'player', ({ user, table, body }) => {
   return chatView(postChat(table, user, speaker?.id, whisper, { t: 'text', text, avatar: avatarOf(speaker), name: speaker?.name }));
 });
 const chatIn = (user, table, id) => { const m = inTable('chat', id, table.id); if (!m || !canSeeChat(user, m)) throw notFound(); return m; };
-tbl('POST', '/chat/:id/reroll', 'player', ({ user, table, by, params }) => {
+tbl('POST', '/chat/:id/reroll', 'player', ({ user, table, by, params, body: req }) => {
   const msg = chatIn(user, table, params.id);
   const body = JSON.parse(msg.body);
   if (body.t !== 'roll') throw bad('Only rolls can be rerolled');
@@ -713,15 +713,18 @@ tbl('POST', '/chat/:id/reroll', 'player', ({ user, table, by, params }) => {
   const sys = getSystem(table.id);
   const actorRow = msg.actor_id ? inTable('actors', msg.actor_id, table.id) : null;
   const data = actorRow ? sanitizeActorData(JSON.parse(actorRow.data), sys) : null;
-  // A reroll always costs the rolling character a favor, GM included. Only a GM roll with no character is free.
-  if (actorRow) {
+  // A reroll always costs the rolling character a favor, GM included. Only a GM roll with no character is free,
+  // and the GM's "free reroll" button (ROADMAP 3 §1.7), which players cannot use.
+  const free = req.free === true;
+  if (free && user.role !== 'gm') throw forbidden('Only the GM rerolls without a favor');
+  if (free) { /* nothing to pay */ } else if (actorRow) {
     if (data.fav.cur < 1) throw bad('No favor left');
     data.fav.cur -= 1;
   } else if (user.role !== 'gm') throw bad('No character on this roll to pay the favor');
   const result = executeRoll(sys, body.cmd, data);
-  const next = { ...body, ...result, rerolls: (body.rerolls ?? 0) + 1, history: [...(body.history ?? []), body.sum], applied: [] };
+  const next = { ...body, ...result, rerolls: (body.rerolls ?? 0) + 1, freeRerolls: (body.freeRerolls ?? 0) + (free ? 1 : 0), history: [...(body.history ?? []), body.sum], applied: [] };
   db.prepare('UPDATE chat SET body = ? WHERE id = ?').run(JSON.stringify(next), msg.id);
-  if (actorRow) { db.prepare('UPDATE actors SET data=?, updated=? WHERE id=?').run(JSON.stringify(data), now(), actorRow.id); pushActor(getRow('actors', actorRow.id), by); }
+  if (actorRow && !free) { db.prepare('UPDATE actors SET data=?, updated=? WHERE id=?').run(JSON.stringify(data), now(), actorRow.id); pushActor(getRow('actors', actorRow.id), by); }
   const row = getRow('chat', msg.id); pushChat(row);
   return chatView(row);
 });

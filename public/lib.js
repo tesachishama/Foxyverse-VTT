@@ -146,6 +146,8 @@ const DICT = {
     resetExplore: 'Réinitialiser l’exploration…', everyone: 'Tous les joueurs', confirmResetExplore: 'Effacer ce qui a été exploré sur cette scène ?',
     playersWin: 'La lumière des joueurs l’emporte', playersWinHint: 'Les lumières portées par les tokens des joueurs ne sont pas éteintes par cette zone.',
     // ROADMAP 3 (fr)
+    freeReroll: "Relancer (gratuit)",
+    freeRerollHint: "MJ seulement : relance sans dépenser de faveur",
     shapeLine: "Ligne",
     wallTangible: "Tangible",
     wallTangibleHint: "Bloque le mouvement des joueurs (le MJ passe)",
@@ -246,6 +248,8 @@ const DICT = {
     resetExplore: 'Reset exploration…', everyone: 'All players', confirmResetExplore: 'Erase what was explored on this scene?',
     playersWin: "Players' light wins", playersWinHint: "Lights carried by players' tokens are not put out by this area.",
     // ROADMAP 3 (en)
+    freeReroll: "Reroll (free)",
+    freeRerollHint: "GM only: reroll without spending a favor",
     shapeLine: "Line",
     wallTangible: "Tangible",
     wallTangibleHint: "Blocks players' movement (the GM goes through)",

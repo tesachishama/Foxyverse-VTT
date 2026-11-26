@@ -826,6 +826,7 @@ function rollCard(m, b, del) {
     b.count > 1 && h('div', { class: 'sum' }, 'Σ ', b.sum),
     h('div', { class: 'roll-actions' },
       (mine || isGM()) && h('button', { onclick: guard(() => api('POST', `/chat/${m.id}/reroll`)) }, '↻ ' + t('reroll')),
+      isGM() && h('button', { title: t('freeRerollHint'), onclick: guard(() => api('POST', `/chat/${m.id}/reroll`, { free: true })) }, '↻ ' + t('freeReroll')),
       ['damage', 'heal', 'theal', 'mana'].includes(b.kind) && (isGM() || canTargetSelection() || (ownsActor && b.kind !== 'damage')) &&
         h('button', { class: 'primary', onclick: applyRoll(m) }, t('apply') + (S.selected.size ? ` (${S.selected.size})` : ''))),
     (b.applied ?? []).map((a) => h('div', { class: 'applied' + (a.undone ? ' undone' : '') }, `${a.name}: `, appliedText(a),
