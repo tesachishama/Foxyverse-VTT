@@ -14,6 +14,21 @@ const BUILTIN = {
   curmp: ['curmp', 'mpcur', 'pmact', 'actpm'], curfav: ['curfav', 'favcur', 'favact', 'actfav'],
 };
 const REQUIRED_DERIVED = ['maxhp', 'maxmp', 'maxfav', 'act'];
+/**
+ * The GM's manual mode (ROADMAP 3 §2.3): per sheet, typed values win over the formulas. null = the formula.
+ * Speed is already free (bonspe) and stats are typed anyway.
+ */
+export const MANUAL_FIELDS = { maxhp: [0, 999999], maxmp: [0, 999999], maxfav: [0, 999], act: [0, 99], pdef: [0, 9999], mdef: [0, 9999] };
+function cleanManual(m) {
+  const out = { on: m?.on === true };
+  for (const [k, [lo, hi]] of Object.entries(MANUAL_FIELDS)) {
+    const v = m?.[k];
+    out[k] = v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : int(v, lo, hi);
+  }
+  return out;
+}
+/** A typed value that replaces a formula, or undefined. */
+const manualValue = (data, key) => (data?.manual?.on && data.manual[key] != null ? Number(data.manual[key]) : undefined);
 const newId = () => randomBytes(4).toString('hex');
 const int = (v, lo = -1e6, hi = 1e6) => Math.min(hi, Math.max(lo, Math.trunc(Number(v)) || 0));
 const str = (v, n = 200) => String(v ?? '').slice(0, n);
@@ -142,6 +157,7 @@ export function sanitizeActorData(raw, sys) {
     fav: { cur: int(r.fav?.cur, 0, 999) },
     bonact: int(r.bonact, -99, 99), bonspe: int(r.bonspe, -999, 999),
     darkvision: r.darkvision === true, // sees its whole vision zone without light (in black and white where it is dark)
+    manual: cleanManual(r.manual), // the GM's manual mode: typed maxima, actions and defenses (only the GM changes it, see server/index.js)
     // a ticked talent is a passive modifier on every stat check (see talentModifier)
     talents: list(r.talents, (t) => ({ id: str(t?.id, 16) || newId(), name: str(t?.name, 80), tier: int(t?.tier ?? 0, 0, 20), enabled: t?.enabled === true, description: str(t?.description, 4000) })),
     spells: list(r.spells, (s) => ({ id: str(s?.id, 16) || newId(), name: str(s?.name, 80), effect: str(s?.effect, 2000), cost: int(s?.cost, 0, 99999),
@@ -170,16 +186,16 @@ export function actorContext(sys, data) {
     stats[s.id] = { base, passive, item, total: base + passive + item };
     setAll(vars, [s.id, ...s.aliases], stats[s.id].total);
   }
-  const pdef = equipped.reduce((a, i) => a + (Number(i.pdef) || 0), 0);
-  const mdef = equipped.reduce((a, i) => a + (Number(i.mdef) || 0), 0);
+  const pdef = manualValue(data, 'pdef') ?? equipped.reduce((a, i) => a + (Number(i.pdef) || 0), 0);
+  const mdef = manualValue(data, 'mdef') ?? equipped.reduce((a, i) => a + (Number(i.mdef) || 0), 0);
   setAll(vars, BUILTIN.lvl, Number(data.bio?.level) || 1);
   setAll(vars, BUILTIN.bonact, Number(data.bonact) || 0);
   setAll(vars, BUILTIN.bonspe, Number(data.bonspe) || 0);
   setAll(vars, BUILTIN.pdef, pdef); setAll(vars, BUILTIN.mdef, mdef);
   const derived = {}, errors = {};
   for (const d of sys.derived) {
-    let v = 0;
-    try { v = evaluateStatic(d.formula, vars); } catch (e) { errors[d.id] = e.message; }
+    let v = manualValue(data, d.id);
+    if (v === undefined) { v = 0; try { v = evaluateStatic(d.formula, vars); } catch (e) { errors[d.id] = e.message; } }
     derived[d.id] = v; setAll(vars, [d.id, ...d.aliases], v);
   }
   setAll(vars, BUILTIN.curhp, Number(data.hp?.cur) || 0);

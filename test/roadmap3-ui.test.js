@@ -146,3 +146,4 @@ test('1.8 a double click on a floating window\'s title folds it and back; it unf
   assert.deepEqual(sizeToSave(false, 400, 500), { w: 400, h: 500 });
   bothLangs(['foldHint']);
 });
+test('2.3 the manual mode box has its FR/EN name and hint', () => bothLangs(['manualMode', 'manualHint']));

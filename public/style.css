@@ -338,3 +338,6 @@ input.search { width: 100%; margin: 0 0 8px; }
 .float-head { user-select: none; }
 /* ROADMAP 3 §2.2: darkvision sits where "elemental" was, on the line of the sheet's other options (next to the level) */
 .sheet-head .grid2 > label.check { align-self: end; padding-bottom: 4px; }
+.manual-box { font-size: 12px; font-weight: 400; color: var(--lilac); }
+input.manual { border-color: var(--ember); width: 64px; }
+.res-grid.manual-on .c { color: var(--ember); }

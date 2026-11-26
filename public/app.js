@@ -958,13 +958,20 @@ function sheetView(a) {
       isGM() && h('label', { title: t('aliasHint') }, t('alias'), h('input', { type: 'text', class: 'code', value: a.alias ?? '', maxlength: 40, placeholder: t('aliasAuto'),
         onchange: guard(async (e) => { if (pending.has(a.id)) await saveNow(a); const r = await api('PATCH', '/actors/' + a.id, { alias: e.target.value }); a.alias = r.alias; e.target.value = r.alias; }) }))));
 
-  const res = section(t('hp') + ' / ' + t('mp') + ' / ' + t('fav'), h('div', { class: 'res-grid' },
-    h('label', {}, t('hp'), field(a, d.hp, 'cur', 'int', { min: -9999, class: 'n', 'data-r': 'hp' }), ' / ', C(a, 'derived.maxhp')),
+  // the GM's manual mode (ROADMAP 3 §2.3): typed maxima, actions and defenses win over the formulas, for this sheet only (empty = formula)
+  const man = d.manual ??= { on: false };
+  const manualOn = isGM() && man.on;
+  const val = (key, path) => (manualOn ? h('input', { type: 'number', class: 'n manual', min: 0, value: man[key] ?? '', placeholder: String(cget(a, path) ?? 0), title: t('manualHint'),
+    oninput: (e) => { man[key] = e.target.value === '' ? null : Number(e.target.value) || 0; saveActor(a); } }) : C(a, path));
+  const manualBox = isGM() && h('label', { class: 'check manual-box', title: t('manualHint') },
+    h('input', { type: 'checkbox', checked: man.on, onchange: (e) => { man.on = e.target.checked; saveActor(a); renderPanel(); } }), t('manualMode'));
+  const res = section(t('hp') + ' / ' + t('mp') + ' / ' + t('fav'), h('div', { class: 'res-grid' + (man.on ? ' manual-on' : '') },
+    h('label', {}, t('hp'), field(a, d.hp, 'cur', 'int', { min: -9999, class: 'n', 'data-r': 'hp' }), ' / ', val('maxhp', 'derived.maxhp')),
     h('label', {}, t('temp'), num(d.hp, 'temp')),
-    h('label', {}, t('mp'), field(a, d.mp, 'cur', 'int', { min: 0, class: 'n', 'data-r': 'mp' }), ' / ', C(a, 'derived.maxmp')),
-    h('label', {}, t('fav'), field(a, d.fav, 'cur', 'int', { min: 0, class: 'n', 'data-r': 'fav' }), ' / ', C(a, 'derived.maxfav')),
-    h('label', {}, t('actions'), C(a, 'derived.act')),
-    h('label', {}, t('defP'), C(a, 'pdef'), ' ', t('defM'), ' ', C(a, 'mdef'))));
+    h('label', {}, t('mp'), field(a, d.mp, 'cur', 'int', { min: 0, class: 'n', 'data-r': 'mp' }), ' / ', val('maxmp', 'derived.maxmp')),
+    h('label', {}, t('fav'), field(a, d.fav, 'cur', 'int', { min: 0, class: 'n', 'data-r': 'fav' }), ' / ', val('maxfav', 'derived.maxfav')),
+    h('label', {}, t('actions'), val('act', 'derived.act')),
+    h('label', {}, t('defP'), val('pdef', 'pdef'), ' ', t('defM'), ' ', val('mdef', 'mdef'))), manualBox);
 
   const rows = sys.stats.map((s) => h('tr', {},
     h('td', {}, rollBtn(s.id, s.label)),

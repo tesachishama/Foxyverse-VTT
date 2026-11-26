@@ -602,6 +602,7 @@ tbl('PATCH', '/actors/:id', 'player', ({ user, table, by, params, body }) => {
   let data = JSON.parse(cur.data);
   if (body.data) { // a higher max (level, stats, gear) raises current HP/mana/favors by the same amount
     const next = sanitizeActorData(body.data, sys);
+    if (user.role !== 'gm') next.manual = sanitizeActorData(data, sys).manual; // the manual mode is the GM's alone
     data = followMax(resourceMaxes(sys, sanitizeActorData(data, sys)), resourceMaxes(sys, next), next);
   }
   if (body.shown !== undefined) { // list it to players in the compendium (name + picture only)

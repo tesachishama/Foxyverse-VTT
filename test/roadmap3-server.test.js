@@ -63,3 +63,34 @@ test('1.7 the GM\'s free reroll costs no favor; players cannot use it; the norma
   assert.equal((await gm('POST', `/chat/${roll.id}/reroll`)).status, 200);
   assert.equal(await favs(), start - 1);
 });
+
+// ---------------------------------------------------------------- 2.3 manual mode
+const manualSheet = async (name) => {
+  const a = (await gm('POST', '/actors', { name })).body;
+  await gm('PUT', `/actors/${a.id}/perms`, { perms: { [pipSlot.id]: 'edit' } });
+  return a;
+};
+const setManual = (who, a, manual) => who('PATCH', `/actors/${a.id}`, { data: { ...a.data, manual } });
+for (const [key, path, value] of [['maxhp', 'derived.maxhp', 77], ['maxmp', 'derived.maxmp', 55], ['maxfav', 'derived.maxfav', 9], ['act', 'derived.act', 4], ['pdef', 'pdef', 12], ['mdef', 'mdef', 8]]) {
+  test(`2.3 manual mode: a typed ${key} wins over the formula, only while the mode is on`, async () => {
+    const a = await manualSheet('Manual ' + key);
+    const get = (r) => path.split('.').reduce((o, k) => o[k], r.body.computed);
+    const before = get({ body: a });
+    const on = await setManual(gm, a, { on: true, [key]: value });
+    assert.equal(on.status, 200); assert.equal(get(on), value); assert.equal(on.body.data.manual[key], value);
+    const off = await setManual(gm, on.body, { ...on.body.data.manual, on: false });
+    assert.equal(get(off), before); // the typed value is kept, unused
+    assert.equal(off.body.data.manual[key], value);
+  });
+}
+test('2.3 manual mode: values are sanitised (ranges, empty = formula); only the GM changes it, players keep it as it is', async () => {
+  const a = await manualSheet('Manual rights');
+  const r = await setManual(gm, a, { on: 'yes', maxhp: -5, maxfav: 5000, act: 'x', pdef: '', mdef: 3.7 });
+  assert.deepEqual(r.body.data.manual, { on: false, maxhp: 0, maxmp: null, maxfav: 999, act: null, pdef: null, mdef: 3 });
+  const on = await setManual(gm, a, { on: true, maxhp: 50 });
+  const pipTry = await setManual(pip, on.body, { on: false, maxhp: 999 });
+  assert.equal(pipTry.status, 200); // the rest of the sheet saves...
+  assert.deepEqual([pipTry.body.data.manual.on, pipTry.body.data.manual.maxhp, pipTry.body.computed.derived.maxhp], [true, 50, 50]); // ...the manual mode does not change
+  const pipOn = await setManual(pip, a, { on: true, maxhp: 1 });
+  assert.equal(pipOn.body.data.manual.maxhp, 50);
+});
