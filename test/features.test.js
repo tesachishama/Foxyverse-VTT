@@ -135,7 +135,9 @@ test('journal visibility: gm / all / specific players; show pushes to viewers', 
   const mine = await gm('POST', '/journals', { title: 'For Pip', body: '[int +0|check]', visibility: [pipSlot.id] });
   assert.deepEqual((await pip('GET', '/state')).body.journals.map((j) => j.title), ['For Pip']);
   assert.equal((await pip('POST', '/journals', { title: 'x' })).status, 404);
-  await gm('POST', `/journals/${secret.body.id}/show`); // show makes a GM-only entry public
+  await gm('POST', `/journals/${secret.body.id}/show`); // ROADMAP 3: a plain show is a pop-up only, nothing is kept...
+  assert.equal((await pip('GET', '/state')).body.journals.length, 1);
+  await gm('POST', `/journals/${secret.body.id}/show`, { reveal: true }); // ...unless the GM also makes it visible
   assert.equal((await pip('GET', '/state')).body.journals.length, 2);
   await gm('PATCH', `/journals/${mine.body.id}`, { visibility: 'gm' });
   assert.equal((await pip('GET', '/state')).body.journals.length, 1);
