@@ -120,3 +120,15 @@ test('1.4 the door box: a closed door blocks everything; only a line can be a do
   assert.equal(w[4], 1); assert.ok(blocksMove(w) && blocksSight(w));
   assert.equal(wallToolFlags('curve', { door: true }).door, false);
 });
+
+// ---------------------------------------------------------------- 1.5 Delete and Ctrl+Z
+import { mapShortcut } from '../public/layout.js';
+test('1.5 Delete (or Backspace) deletes the selection, Ctrl/Cmd+Z undoes; other keys and combinations do nothing', () => {
+  assert.equal(mapShortcut({ key: 'Delete' }), 'delete');
+  assert.equal(mapShortcut({ key: 'Backspace' }), 'delete');
+  assert.equal(mapShortcut({ key: 'z', ctrlKey: true }), 'undo');
+  assert.equal(mapShortcut({ key: 'Z', metaKey: true }), 'undo');
+  assert.equal(mapShortcut({ key: 'z', ctrlKey: true, shiftKey: true }), null); // Ctrl+Shift+Z is not undo
+  assert.equal(mapShortcut({ key: 'Delete', ctrlKey: true }), null);
+  assert.equal(mapShortcut({ key: 'z' }), null);
+});

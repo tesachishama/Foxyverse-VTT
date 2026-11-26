@@ -44,5 +44,11 @@ export function keyStep(e) {
   const s = STEPS[e.code] ?? STEPS[e.key];
   return s ? { dx: s[0], dy: s[1] } : null;
 }
+/** Map shortcuts (ROADMAP 3 §1.5): "delete" (Delete, or Backspace for keyboards without Delete), "undo" (Ctrl/Cmd+Z), or null. */
+export function mapShortcut(e) {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) return 'undo';
+  if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'Delete' || e.key === 'Backspace')) return 'delete';
+  return null;
+}
 /** Keys go to the map only when nobody is typing (fields, the chat) and no dialog is open. */
 export const typingTarget = (el) => !!el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable === true);

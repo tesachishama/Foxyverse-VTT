@@ -7,7 +7,7 @@ import { signed, tierLabel, damageText, matchesSearch } from './format.js';
 import { isTokenDead, pickViewers, markSeen, orBits, bitsToBase64, bitsFromBase64 } from './vision.js';
 import { radiusStep, moveBlocked } from './walls.js';
 import { ghostsOf, ghostLights, newGroup, tpGroups } from './tp.js';
-import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget } from './layout.js';
+import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget, mapShortcut } from './layout.js';
 import { TOOLS, TOOL_BUTTONS, REVEAL_MODES, WALL_SHAPES, WALL_FLAGS, iconUrl } from './tools.js';
 import { defaultFilter, SELECT_KINDS, deleteItems, liveItems } from './select.js';
 
@@ -448,7 +448,13 @@ function buildShell() {
   app.replaceChildren(h('div', { id: 'layout', class: S.mapMode ? 'no-chat' : '' }, dockPane, stage, chatPane));
   mountSide('dock');
   audio = createAudio({ getOffset: () => S.timeOffset, onBlocked: () => { if (!S.audioBlocked) { S.audioBlocked = true; renderFoot(); } } });
-  document.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName ?? '') && isGM()) { e.preventDefault(); undoSceneEdit(); } });
+  // GM map shortcuts, at a table and in the map library editor: Delete removes the selection, Ctrl+Z undoes (not while typing or in a dialog)
+  document.addEventListener('keydown', (e) => {
+    const k = mapShortcut(e);
+    if (!k || !isGM() || typingTarget(document.activeElement) || document.querySelector('.modal, .add-menu')) return;
+    e.preventDefault();
+    if (k === 'undo') undoSceneEdit(); else deleteSelection();
+  });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.modal) { S.modal = null; renderModal(); } });
   document.addEventListener('keydown', moveByKey);
   document.addEventListener('click', () => { if (S.audioBlocked) { S.audioBlocked = false; audio.unlock(); renderFoot(); } });
