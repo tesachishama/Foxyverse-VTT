@@ -108,3 +108,10 @@ test('2.4 items are locked by default (a saved "edit" unlocks); players edit the
   const entry = (await gm('GET', '/compendium')).body.entries.find((e) => e.name === 'New ring');
   assert.equal(entry.data.locked, undefined);
 });
+
+test('2.5 only the GM puts tokens down (players have no such route)', async () => {
+  const a = await manualSheet('Placed');
+  assert.equal((await pip('POST', '/tokens', { sceneId: scene.id, actorId: a.id, x: 75, y: 75 })).status, 404);
+  const tk = await gm('POST', '/tokens', { sceneId: scene.id, actorId: a.id, x: 75, y: 125 });
+  assert.equal(tk.status, 200); assert.deepEqual([tk.body.x, tk.body.y, tk.body.actorId], [75, 125, a.id]);
+});

@@ -148,3 +148,15 @@ test('1.8 a double click on a floating window\'s title folds it and back; it unf
 });
 test('2.3 the manual mode box has its FR/EN name and hint', () => bothLangs(['manualMode', 'manualHint']));
 test('2.4 the item lock button has its FR/EN names', () => bothLangs(['unlockItem', 'lockItem', 'edit', 'save']));
+
+// ---------------------------------------------------------------- 2.5 place a token at the pointer
+import { placeAt } from '../public/select.js';
+test('2.5 a token being placed lands on the grid by the snapping mode (cell centres, half cells, or free)', () => {
+  const sc = { grid: 50, ox: 0, oy: 0 };
+  assert.deepEqual(placeAt(sc, 1, 61, 140, 'grid'), { x: 75, y: 125 });
+  assert.deepEqual(placeAt(sc, 2, 61, 140, 'grid'), { x: 50, y: 150 }); // a 2x2 token sits on a cell corner
+  assert.deepEqual(placeAt(sc, 1, 61, 140, 'half'), { x: 50, y: 150 });
+  assert.deepEqual(placeAt(sc, 1, 61.4, 140.6, 'off'), { x: 61, y: 141 });
+  assert.deepEqual(placeAt({ grid: 50, ox: 10, oy: 0 }, 1, 61, 140, 'grid'), { x: 85, y: 125 });
+  bothLangs(['placeToken', 'placeTokenHint']);
+});

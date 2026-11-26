@@ -2,7 +2,7 @@
 import { computeVision, inReveal, distToSeg } from './vision.js';
 import { cellCenter } from './tp.js';
 import { W as WALL, makeWall, blocksSight, blocksMove, moveBlocked, doorCenter, splitWall, nodesAt, moveNodes, mergeOnRelease, radiusStep } from './walls.js';
-import { pickInArea, rectPoly, revealPts, pointInPoly, allowed, toggleItem, hasItem, mergeSelection, snapDelta, moveItems } from './select.js';
+import { pickInArea, rectPoly, revealPts, pointInPoly, allowed, toggleItem, hasItem, mergeSelection, snapDelta, moveItems, placeAt } from './select.js';
 import { wallToolFlags } from './tools.js';
 const ICON = 0.5; // door, light and TP icons: half a cell
 /** A hit (see hitItem) as a selection item (public/select.js). */
@@ -38,6 +38,7 @@ export function createMap(canvas, hooks) {
   const [fogC, fogX] = layer(), [visC, visX] = layer(), [litC, litX] = layer(), [pcC, pcX] = layer(), [greyC, greyX] = layer();
   const cam = { x: 0, y: 0, z: 1 };
   let W = 0, H = 0, dpr = 1, drag = null, lastSend = 0, sceneId = null, fitted = false, draft = null, cursor = null;
+  let placing = null, hover = null; // a token following the pointer until a click puts it down (ROADMAP 3 §2.5)
   const pointers = new Map();
   let visCache = { scene: null, key: '', vis: null }, shownDoors = new Set();
 
@@ -189,6 +190,7 @@ export function createMap(canvas, hooks) {
     // ghosts of tokens standing on TP cells, on every linked cell (seen like tokens: own ones always)
     for (const g of st.ghosts || []) if (!fogged || own(g.token) || vis.canSee(g.x, g.y)) drawToken(scene, { ...g.token, x: g.x, y: g.y }, false, true);
     drawDoors(scene, st, fogOn && !godView ? vis : null);
+    if (placing && hover) { const at = placeAt(scene, placing.token.size || 1, hover.x, hover.y, st.tool.snap); drawToken(scene, { ...placing.token, ...at }, true, true); }
     if (st.gm) drawGuides(scene, st);
     ctx.restore();
   }
@@ -437,6 +439,11 @@ export function createMap(canvas, hooks) {
       return;
     }
     const st = hooks.state(), tool = st.tool.name;
+    if (placing) { // a click puts the token down (calibrated to the grid by the snapping mode); right click cancels
+      const w = toWorld(p.x, p.y), pl = placing; placing = null; canvas.style.cursor = '';
+      if (e.button === 0 && st.scene) pl.done(placeAt(st.scene, pl.token.size || 1, w.x, w.y, st.tool.snap)); else pl.cancel?.();
+      return redraw();
+    }
     if (e.button === 1 || e.button === 2) { drag = { kind: 'pan', sx: p.x, sy: p.y, cx: cam.x, cy: cam.y, moved: false, right: e.button === 2 }; return; }
     if (tool !== 'select' && st.gm && st.scene) {
       if (tool === 'reveal') { // three ways (ROADMAP 3 §1.3): rectangle, lasso (free hand), polygon (click the corners)
@@ -511,6 +518,8 @@ export function createMap(canvas, hooks) {
     const p = pos(e);
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, p);
     const st = hooks.state();
+    hover = toWorld(p.x, p.y);
+    if (placing) { canvas.style.cursor = 'copy'; return redraw(); }
     if (st.scene && st.tool.name !== 'select') { const w = toWorld(p.x, p.y); cursor = snapPoint(st.scene, w.x, w.y, e.shiftKey || e.altKey, st.tool.snap, drag?.kind !== 'vertex'); if (draft) redraw(); }
     if (!drag) { canvas.style.cursor = st.tool.name !== 'select' && st.gm ? 'crosshair' : hitToken(p.x, p.y) || (st.scene && hitItem(st.scene, toWorld(p.x, p.y), st.gm, st.picked)?.kind?.match(/door|light|radius/)) ? 'pointer' : 'grab'; return; }
     if (drag.kind === 'pinch' && pointers.size >= 2) {
@@ -623,7 +632,10 @@ export function createMap(canvas, hooks) {
   };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
-  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && draft) { draft = null; redraw(); } });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && placing) { const pl = placing; placing = null; canvas.style.cursor = ''; pl.cancel?.(); redraw(); }
+    if (e.key === 'Escape' && draft) { draft = null; redraw(); }
+  });
   canvas.addEventListener('dblclick', (e) => { if (draft?.revpoly) return closePoly(); if (hooks.state().tool.name !== 'select') return; const p = pos(e), t = hitToken(p.x, p.y); if (t) hooks.onOpen(t); });
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -632,5 +644,7 @@ export function createMap(canvas, hooks) {
     cam.x = before.x - p.x / cam.z; cam.y = before.y - p.y / cam.z; redraw();
   }, { passive: false });
 
-  return { redraw, fit, viewCenter, cancel: () => { draft = null; redraw(); } };
+  /** Let a token follow the pointer; done({ x, y }) on the click that puts it down, cancel() on Escape or a right click. */
+  const place = (token, done, cancel) => { placing = { token, done, cancel }; redraw(); };
+  return { redraw, fit, viewCenter, place, placing: () => !!placing, cancel: () => { draft = null; redraw(); } };
 }

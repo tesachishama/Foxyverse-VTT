@@ -1025,7 +1025,7 @@ function sheetView(a) {
   const money = section(t('currency'), h('div', { class: 'line' }, ['pc', 'pa', 'po'].map((k) => h('label', {}, k.toUpperCase(), field(a, d.currency, k, 'int', { min: 0, class: 'n wide' })))));
   const notes = section(t('notes'), field(a, d, 'notes', 'area', { rows: 6 }));
   const gm = isGM() && section('GM', h('div', { class: 'line' },
-    viewScene() && h('button', { onclick: guard(async () => { const c = map.viewCenter(); await api('POST', '/tokens', { sceneId: viewScene().id, actorId: a.id, name: a.name, x: Math.round(c.x), y: Math.round(c.y) }); toast(t('saved'), false); await loadState(); renderAll(); }) }, t('placeToken')),
+    viewScene() && h('button', { title: t('placeTokenHint'), onclick: () => placeToken(a) }, t('placeToken')),
     h('label', { class: 'check', title: t('npcHint') }, h('input', { type: 'checkbox', checked: a.shown, onchange: guard(async (e) => { Object.assign(a, await api('PATCH', '/actors/' + a.id, { shown: e.target.checked })); }) }), t('shownToPlayers')),
     h('button', { class: 'danger', onclick: guard(async () => { if (!(await ask(t('confirmDel')))) return; await api('DELETE', '/actors/' + a.id); }) }, t('del'))));
   const perms = isGM() && section(t('perms'), permsEditor(a));
@@ -1033,6 +1033,19 @@ function sheetView(a) {
     h('button', { class: 'quiet', onclick: () => { S.sheetId = null; renderPanel(); } }, '← ' + t('back')), h('p', { class: 'hint' }, t('viewOnly')),
     h('fieldset', { class: 'readonly', disabled: true }, head, res, stats, talents, spells, items, money, notes));
   return h('div', { class: 'sheet pad' }, head, res, stats, talents, spells, items, money, notes, perms, gm);
+}
+/**
+ * GM: put a token of this sheet on the scene being viewed (ROADMAP 3 §2.5). Nothing is created until the click on the map, so players
+ * never see a token appear in the middle of the map first. Escape cancels.
+ */
+function placeToken(a) {
+  const sc = viewScene(); if (!isGM() || !sc) return;
+  toast(t('placeTokenHint'), false);
+  map.place({ name: a.name, image: a.data.token || a.data.portrait || null, color: '#eba5ff', size: 1, hidden: false },
+    guard(async ({ x, y }) => {
+      const tok = await api('POST', '/tokens', { sceneId: sc.id, actorId: a.id, name: a.name, x, y });
+      upsert(S.tokens, tok); setSelection(new Set([tok.id]), []);
+    }));
 }
 /** Portrait (the whole character) and token (round, framed: map, chat, NPC list). A new portrait asks for the token's framing. */
 function pictureDialog(a) {

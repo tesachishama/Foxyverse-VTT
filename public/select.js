@@ -78,6 +78,15 @@ export function snapDelta(scene, dx, dy, mode = 'grid') {
   return { dx: Math.round(dx / g) * g + 0, dy: Math.round(dy / g) * g + 0 }; // + 0: no "-0"
 }
 const r10 = (v) => Math.round(v * 10) / 10;
+/**
+ * Where a token being placed lands (ROADMAP 3 §2.5): its centre, by the snapping mode. "grid": centred on whole cells (a size-2 token
+ * on a cell corner), "half": on half cells, "off": where the pointer is.
+ */
+export function placeAt(scene, size, x, y, mode = 'grid') {
+  if (mode === 'off') return { x: Math.round(x), y: Math.round(y) };
+  const g = mode === 'half' ? scene.grid / 2 : scene.grid, s = mode === 'half' ? 0 : size, ox = scene.ox || 0, oy = scene.oy || 0;
+  return { x: ox + (Math.round((x - ox) / g - s / 2) + s / 2) * g, y: oy + (Math.round((y - oy) / g - s / 2) + s / 2) * g };
+}
 /** Move the selected map items by (dx, dy): the scene patch to send. TP cells stay on cell centres. */
 export function moveItems(scene, items, dx, dy) {
   const patch = {}, walls = new Set(), lights = new Set(), tps = new Set(), reveal = new Set();
