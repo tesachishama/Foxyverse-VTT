@@ -11,6 +11,7 @@ import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typ
 import { TOOLS, TOOL_BUTTONS, REVEAL_MODES, WALL_SHAPES, WALL_FLAGS, iconUrl } from './tools.js';
 import { defaultFilter, SELECT_KINDS, deleteItems, liveItems } from './select.js';
 import { splitSheets } from './sheets.js';
+import { searchSounds, sortSounds, groupSounds } from './sounds.js';
 
 const S = {
   me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], table: null, allTables: [], mapMode: false,
@@ -1394,7 +1395,6 @@ function soundPanel() {
     for (const f of e.target.files) { const url = await upload(f); upsert(S.sounds, await api('POST', '/sounds', { name: f.name.replace(/\.[^.]+$/, ''), url, loop: false, volume: 1 })); }
     renderPanel();
   }) });
-  const isOn = (s) => S.playing.some((p) => p.id === s.id);
   // a YouTube video, played by YouTube's own player in each browser (never downloaded)
   const ytUrl = h('input', { type: 'url', class: 'grow', placeholder: t('youtubeUrl') });
   const addYt = guard(async () => {
@@ -1406,14 +1406,43 @@ function soundPanel() {
     h('div', { class: 'line' }, h('label', { class: 'filebtn' }, '+ ' + t('uploadAudio'), file), h('button', { onclick: guard(() => api('POST', '/audio/stop')) }, t('stopAll'))),
     h('div', { class: 'line', title: t('youtubeHint') }, ytUrl, h('button', { onclick: addYt }, '+ YouTube')),
     !S.sounds.length && h('p', { class: 'hint' }, t('empty')),
-    S.sounds.map((s) => h('div', { class: 'sound' + (isOn(s) ? ' on' : '') },
+    S.sounds.length > 0 && h('div', { class: 'line' }, soundSearchBox(), (() => {
+      const sel = h('select', { title: t('sortBy'), onchange: (e) => { soundSort = e.target.value; writeJSON(storage(), 'soundSort', soundSort); renderPanel('sound'); } },
+        h('option', { value: 'name' }, t('sortName')), h('option', { value: 'date' }, t('sortDate')));
+      sel.value = soundSort; return sel; })()),
+    // ROADMAP 3 §4.2: groups and sub-groups (two levels), "No group" first; a search looks in names, groups and tags
+    h('datalist', { id: 'sound-groups' }, [...new Set(S.sounds.map((s) => s.group).filter(Boolean))].map((g) => h('option', { value: g }))),
+    groupSounds(sortSounds(searchSounds(S.sounds, soundSearch), soundSort)).map(({ group, subgroups }) => h('section', { class: 'sec sound-group' },
+      h('h3', {}, group || t('noGroup')),
+      subgroups.map(({ subgroup, sounds }) => [subgroup && h('h4', { class: 'sound-sub' }, subgroup), sounds.map(soundRow)]))),
+    soundSearch.trim() && !searchSounds(S.sounds, soundSearch).length && h('p', { class: 'hint' }, t('noMatch')));
+}
+let soundSearch = '', soundSort = readJSON((() => { try { return window.localStorage; } catch { return null; } })(), 'soundSort', 'name');
+const soundEdit = new Set(); // sounds whose group / tags editor is open
+function soundSearchBox() {
+  return h('input', { type: 'search', class: 'search grow', placeholder: '🔍 ' + t('searchSounds'), value: soundSearch, 'data-soundsearch': '1', oninput: (e) => {
+    soundSearch = e.target.value; const pos = e.target.selectionStart;
+    renderPanel('sound', { force: true });
+    const box = $('[data-soundsearch]'); if (box) { box.focus(); box.setSelectionRange(pos, pos); }
+  } });
+}
+function soundRow(s) {
+  const isOn = S.playing.some((p) => p.id === s.id), editing = soundEdit.has(s.id);
+  const patch = (body) => guard(() => api('PATCH', '/sounds/' + s.id, body));
+  return h('div', { class: 'sound' + (isOn ? ' on' : '') },
       h('div', { class: 'line' }, s.kind === 'youtube' && h('span', { class: 'badge yt', title: s.url }, 'YouTube'), h('input', { type: 'text', class: 'grow', value: s.name, onchange: guard((e) => api('PATCH', '/sounds/' + s.id, { name: e.target.value })) }),
+        h('button', { class: 'x', title: t('soundOrganize'), onclick: () => { if (editing) soundEdit.delete(s.id); else soundEdit.add(s.id); renderPanel('sound'); } }, editing ? '▴' : '▾'),
         h('button', { class: 'x', title: t('del'), onclick: guard(async () => { if ((await ask(t('confirmDel')))) await api('DELETE', '/sounds/' + s.id); }) }, '×')),
+      s.tags?.length > 0 && h('div', { class: 'tags' }, s.tags.map((tg) => h('span', { class: 'chip', onclick: () => { soundSearch = tg; renderPanel('sound'); } }, '#' + tg))),
+      editing && h('div', { class: 'sound-edit' },
+        h('label', {}, t('soundGroup'), h('input', { type: 'text', list: 'sound-groups', maxlength: 40, value: s.group, placeholder: t('noGroup'), onchange: (e) => patch({ group: e.target.value })() })),
+        h('label', {}, t('soundSubgroup'), h('input', { type: 'text', maxlength: 40, value: s.subgroup, disabled: !s.group, onchange: (e) => patch({ subgroup: e.target.value })() })),
+        h('label', {}, t('soundTags'), h('input', { type: 'text', value: (s.tags ?? []).join(', '), placeholder: t('soundTagsHint'), onchange: (e) => patch({ tags: e.target.value })() }))),
       h('div', { class: 'line' },
         h('button', { class: 'primary', onclick: guard(() => api('POST', `/sounds/${s.id}/play`)) }, '▶ ' + t('play')),
         h('button', { onclick: guard(() => api('POST', `/sounds/${s.id}/stop`)) }, t('stop')),
         h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: s.loop, onchange: guard((e) => api('PATCH', '/sounds/' + s.id, { loop: e.target.checked })) }), t('loop')),
-        h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: s.volume, title: t('volume'), onchange: guard((e) => api('PATCH', '/sounds/' + s.id, { volume: Number(e.target.value) })) })))));
+        h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: s.volume, title: t('volume'), onchange: guard((e) => api('PATCH', '/sounds/' + s.id, { volume: Number(e.target.value) })) })));
 }
 
 // ------------------------------------------------------------------ compendium (GM)

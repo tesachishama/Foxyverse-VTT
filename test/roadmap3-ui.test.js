@@ -212,3 +212,32 @@ test('4.1 YouTube links of every usual shape give the video id; anything else is
   assert.equal(youtubeUrl(id), `https://www.youtube.com/watch?v=${id}`);
   bothLangs(['youtubeUrl', 'youtubeSound', 'youtubeHint']);
 });
+
+// ---------------------------------------------------------------- 4.2 sound groups
+import { cleanGroup, cleanTags, searchSounds, sortSounds, groupSounds } from '../public/sounds.js';
+const snd = [
+  { id: 1, name: 'Rain', group: '', subgroup: '', tags: ['calme'], created: 3 },
+  { id: 2, name: 'Battle drums', group: 'Combat', subgroup: 'Boss', tags: ['épique'], created: 1 },
+  { id: 3, name: 'arrows', group: 'Combat', subgroup: '', tags: [], created: 2 },
+  { id: 4, name: 'Tavern', group: 'Ambiance', subgroup: 'Ville', tags: ['Calme', 'foule'], created: 4 },
+];
+test('4.2 sounds are grouped in groups and sub-groups, "No group" first', () => {
+  const g = groupSounds(snd);
+  assert.deepEqual(g.map((x) => x.group), ['', 'Ambiance', 'Combat']);
+  assert.deepEqual(g[2].subgroups.map((x) => [x.subgroup, x.sounds.map((s) => s.id)]), [['', [3]], ['Boss', [2]]]);
+  assert.deepEqual(groupSounds([{ id: 9, name: 'x', group: '', subgroup: 'orphan' }])[0].subgroups[0].subgroup, ''); // no sub-group without a group
+  bothLangs(['noGroup', 'sortBy', 'sortName', 'sortDate', 'searchSounds', 'soundOrganize', 'soundGroup', 'soundSubgroup', 'soundTags', 'soundTagsHint']);
+});
+test('4.2 search looks in names, groups, sub-groups and tags (accents and case ignored); sort by name or date added', () => {
+  assert.deepEqual(searchSounds(snd, 'calme').map((s) => s.id), [1, 4]);
+  assert.deepEqual(searchSounds(snd, 'EPIQUE').map((s) => s.id), [2]);
+  assert.deepEqual(searchSounds(snd, 'combat boss').map((s) => s.id), [2]);
+  assert.equal(searchSounds(snd, '  ').length, 4);
+  assert.deepEqual(sortSounds(snd, 'name').map((s) => s.id), [3, 2, 1, 4]);
+  assert.deepEqual(sortSounds(snd, 'date').map((s) => s.id), [4, 1, 3, 2]); // last added first
+});
+test('4.2 group names and tags are cleaned', () => {
+  assert.equal(cleanGroup('  Big   fight '), 'Big fight'); assert.equal(cleanGroup('x'.repeat(50)).length, 40); assert.equal(cleanGroup(null), '');
+  assert.deepEqual(cleanTags(' calme, Calme ,, foule '), ['calme', 'foule']);
+  assert.equal(cleanTags(Array.from({ length: 30 }, (_, i) => 't' + i)).length, 20);
+});

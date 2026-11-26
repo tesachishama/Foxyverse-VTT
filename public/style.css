@@ -364,3 +364,7 @@ h4.fold-head { display: flex; }
 .yt-box { pointer-events: auto; background: rgba(75, 0, 44, .95); border: 1px solid var(--line); border-radius: 8px; padding: 4px; display: grid; gap: 2px; }
 .yt-title { font-size: 11px; color: var(--lilac); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge.yt { color: #ff8a8a; border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; font-size: 11px; }
+/* ROADMAP 3 §4.2: sound groups and tags */
+.sound-group > h3 { font-size: 15px; } .sound-sub { margin: 8px 0 4px; color: var(--lilac); font-size: 13px; }
+.sound .tags { display: flex; gap: 4px; flex-wrap: wrap; margin: 2px 0; } .sound .tags .chip { cursor: pointer; font-size: 11px; }
+.sound-edit { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; margin: 4px 0; } .sound-edit label:last-child { grid-column: 1 / -1; }

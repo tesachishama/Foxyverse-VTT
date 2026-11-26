@@ -120,7 +120,11 @@ if (richer) {
 
 // ---- ROADMAP 2: "@" aliases (no spaces, unique per table, GM-only). alias_auto: still follows the sheet's name.
 addColumn('actors', 'alias', 'TEXT');
-addColumn('journals', 'campaign_id', CAMPAIGN); // ROADMAP 3 §3.1: a journal entry belongs to a table (or none) and to a campaign (optional)
+addColumn('journals', 'campaign_id', CAMPAIGN);
+// ROADMAP 3 §4.2: sounds in groups and sub-groups, with tags. Existing sounds land in "No group" (the empty group).
+addColumn('sounds', 'grp', "TEXT NOT NULL DEFAULT ''");
+addColumn('sounds', 'subgrp', "TEXT NOT NULL DEFAULT ''");
+addColumn('sounds', 'tags', "TEXT NOT NULL DEFAULT '[]'"); // ROADMAP 3 §3.1: a journal entry belongs to a table (or none) and to a campaign (optional)
 addColumn('actors', 'alias_auto', 'INTEGER NOT NULL DEFAULT 1');
 for (const a of db.prepare('SELECT id, table_id, name FROM actors WHERE alias IS NULL ORDER BY id').all()) {
   const taken = db.prepare('SELECT alias FROM actors WHERE table_id IS ? AND alias IS NOT NULL').all(a.table_id).map((r) => r.alias);

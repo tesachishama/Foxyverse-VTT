@@ -19,6 +19,7 @@ import { normWall, moveBlocked, radiusStep, W } from '../public/walls.js';
 import { exploreDims } from '../public/vision.js';
 import { ghostStart } from '../public/tp.js';
 import { youtubeId, youtubeUrl } from '../public/media.js';
+import { cleanGroup, cleanTags } from '../public/sounds.js';
 
 const PORT = process.env.PORT === '0' ? 0 : Number(process.env.PORT) || 3000; // 0: any free port (tests)
 const HOST = process.env.HOST || '0.0.0.0';
@@ -58,7 +59,8 @@ const tokenView = (t) => ({ id: t.id, sceneId: t.scene_id, name: t.name, x: t.x,
   life: t.life ?? 'auto', dead: tokenDead(t), pc: isPlayerCharacter(t), darkvision: tokenDarkvision(t) });
 /** A player's token: some player has the edit right on its sheet (its light can beat an anti-light, see public/walls.js). */
 const isPlayerCharacter = (t) => !!t.actor_id && !!db.prepare("SELECT 1 FROM actor_perms WHERE actor_id = ? AND level = 'edit'").get(t.actor_id);
-const soundView = (s) => { const yt = youtubeId(s.url); return { id: s.id, name: s.name, url: s.url, loop: !!s.loop, volume: s.volume, kind: yt ? 'youtube' : 'file', ...(yt ? { videoId: yt } : {}) }; };
+const soundView = (s) => { const yt = youtubeId(s.url); return { id: s.id, name: s.name, url: s.url, loop: !!s.loop, volume: s.volume, kind: yt ? 'youtube' : 'file', ...(yt ? { videoId: yt } : {}),
+  group: s.grp ?? '', subgroup: s.subgrp ?? '', tags: jparse(s.tags, []), created: s.created }; };
 const journalView = (j, u = GM) => ({ id: j.id, title: j.title, body: j.body, image: j.image, visibility: jparse(j.visibility, 'gm'), updated: j.updated, ...(u.role === 'gm' ? { campaignId: j.campaign_id ?? null } : {}) });
 const canSeeJournal = (u, j) => { const v = jparse(j.visibility, 'gm'); return u.role === 'gm' || v === 'all' || (Array.isArray(v) && v.includes(u.id)); };
 // ---- compendium entries (items and spells). They link to sheets by kind + name, case-insensitive.
@@ -829,15 +831,19 @@ function soundUrl(body) {
   return audioUrl(body.url);
 }
 tbl('POST', '/sounds', 'gm', ({ table, body }) => {
-  const r = db.prepare('INSERT INTO sounds (table_id, name, url, loop, volume, created) VALUES (?,?,?,?,?,?)').run(table.id, String(body.name ?? 'Sound').slice(0, 80) || 'Sound', soundUrl(body), body.loop ? 1 : 0, Math.min(1, Math.max(0, num(body.volume, 1))), now());
+  const grp = cleanGroup(body.group);
+  const r = db.prepare('INSERT INTO sounds (table_id, name, url, loop, volume, created, grp, subgrp, tags) VALUES (?,?,?,?,?,?,?,?,?)').run(table.id, String(body.name ?? 'Sound').slice(0, 80) || 'Sound', soundUrl(body), body.loop ? 1 : 0, Math.min(1, Math.max(0, num(body.volume, 1))), now(),
+    grp, grp ? cleanGroup(body.subgroup) : '', JSON.stringify(cleanTags(body.tags)));
   const row = getRow('sounds', r.lastInsertRowid);
   broadcast(table.id, { type: 'sound', op: 'upsert', data: soundView(row) });
   return soundView(row);
 });
 tbl('PATCH', '/sounds/:id', 'gm', ({ table, params, body }) => {
   const cur = soundIn(table, params.id);
-  db.prepare('UPDATE sounds SET name=?, loop=?, volume=? WHERE id=?').run(body.name !== undefined ? String(body.name).slice(0, 80) : cur.name, body.loop !== undefined ? (body.loop ? 1 : 0) : cur.loop,
-    body.volume !== undefined ? Math.min(1, Math.max(0, num(body.volume, 1))) : cur.volume, cur.id);
+  const grp = body.group !== undefined ? cleanGroup(body.group) : cur.grp ?? '';
+  const sub = !grp ? '' : body.subgroup !== undefined ? cleanGroup(body.subgroup) : cur.subgrp ?? ''; // a sub-group lives in a group
+  db.prepare('UPDATE sounds SET name=?, loop=?, volume=?, grp=?, subgrp=?, tags=? WHERE id=?').run(body.name !== undefined ? String(body.name).slice(0, 80) : cur.name, body.loop !== undefined ? (body.loop ? 1 : 0) : cur.loop,
+    body.volume !== undefined ? Math.min(1, Math.max(0, num(body.volume, 1))) : cur.volume, grp, sub, body.tags !== undefined ? JSON.stringify(cleanTags(body.tags)) : cur.tags ?? '[]', cur.id);
   const row = getRow('sounds', cur.id);
   broadcast(table.id, { type: 'sound', op: 'upsert', data: soundView(row) });
   return soundView(row);

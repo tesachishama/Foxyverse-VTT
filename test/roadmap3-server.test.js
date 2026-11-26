@@ -240,3 +240,14 @@ test('4.1 a sound may be a YouTube link (stored in one form, never downloaded); 
   assert.match(csp, /connect-src 'self';/); // nothing is fetched from YouTube by the app itself
   await gm('POST', '/audio/stop');
 });
+
+test('4.2 sounds keep a group, a sub-group (only inside a group) and tags; sanitised on the server, GM only', async () => {
+  const mp3 = Buffer.concat([Buffer.from('ID3'), Buffer.alloc(200, 7)]);
+  const up = await (await fetch(srv.base + '/admin/api/t/r3/upload', { method: 'POST', headers: { 'Content-Type': 'audio/mpeg' }, body: mp3 })).json();
+  const s = (await gm('POST', '/sounds', { name: 'Drums', url: up.url, group: ' Combat ', subgroup: 'Boss', tags: 'épique, Épique, loud' })).body;
+  assert.deepEqual([s.group, s.subgroup, s.tags], ['Combat', 'Boss', ['épique', 'loud']]); // the same tag twice (case) is kept once
+  const moved = (await gm('PATCH', `/sounds/${s.id}`, { group: '' })).body;
+  assert.deepEqual([moved.group, moved.subgroup], ['', '']); // back to "No group": the sub-group goes too
+  assert.deepEqual((await gm('PATCH', `/sounds/${s.id}`, { tags: ['a', 'A', ' b '] })).body.tags, ['a', 'b']);
+  assert.equal((await pip('PATCH', `/sounds/${s.id}`, { group: 'x' })).status, 404);
+});
