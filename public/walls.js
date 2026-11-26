@@ -16,8 +16,9 @@ export function normWall(w) {
   const b = (i, d) => (w[i] === undefined || w[i] === null ? d : w[i] ? 1 : 0);
   return [w[0], w[1], w[2], w[3], b(4, 0), b(5, 0), b(6, 0), b(7, 0), b(8, 1)];
 }
+/** preset: a PRESETS name, or the wall tool's boxes { move, sight } (ROADMAP 3 §1.4). */
 export const makeWall = (x1, y1, x2, y2, preset = 'wall', door = false) => {
-  const p = PRESETS[preset] ?? PRESETS.wall;
+  const p = typeof preset === 'object' && preset ? { move: preset.move ? 1 : 0, sight: preset.sight ? 1 : 0 } : PRESETS[preset] ?? PRESETS.wall;
   return [x1, y1, x2, y2, door ? 1 : 0, 0, 0, door ? 1 : p.move, door ? 1 : p.sight];
 };
 const closedDoor = (w) => !!w[W.door] && !w[W.open];

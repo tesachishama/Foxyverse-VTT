@@ -91,3 +91,32 @@ test('1.3 a polygon (lasso or clicked corners) reveals what is inside its shape,
   assert.ok(!inReveal(sc, 190, 190)); // outside the triangle, inside its bounding box
   assert.ok(!inReveal({ reveal: [{ poly: 'junk' }] }, 1, 1));
 });
+
+// ---------------------------------------------------------------- 1.4 one wall tool
+import { WALL_SHAPES, WALL_FLAGS, wallToolFlags } from '../public/tools.js';
+import { makeWall, blocksMove, blocksSight, normWall } from '../public/walls.js';
+test('1.4 a single wall tool: its sub-menu has the four shapes and three boxes (icons, FR/EN names)', () => {
+  assert.ok(TOOLS.some((tl) => tl.id === 'wall'));
+  for (const gone of ['twall', 'rect', 'circle', 'curve', 'door']) assert.ok(!TOOLS.some((tl) => tl.id === gone), gone);
+  assert.deepEqual(WALL_SHAPES.map((s) => s.id), ['line', 'curve', 'rect', 'circle']);
+  assert.deepEqual(WALL_FLAGS.map((s) => s.id), ['move', 'sight', 'door']);
+  for (const x of [...WALL_SHAPES, ...WALL_FLAGS]) squareSvg(x.icon);
+  bothLangs([...WALL_SHAPES, ...WALL_FLAGS].map((x) => x.label));
+  bothLangs(['wallTangibleHint', 'wallOpaqueHint', 'toolDoorHint', 'doorLineOnly']);
+});
+test('1.4 the boxes make walls in the same format as before: tangible = blocks movement, opaque = blocks sight and light', () => {
+  const mk = (shape, flags) => { const f = wallToolFlags(shape, flags); return makeWall(0, 0, 10, 0, f, f.door); };
+  const tangible = mk('line', { move: true, sight: false }), opaque = mk('rect', { move: false, sight: true }), both = mk('circle', { move: true, sight: true });
+  assert.deepEqual(tangible, normWall(tangible)); assert.equal(tangible.length, 9);
+  assert.ok(blocksMove(tangible) && !blocksSight(tangible));
+  assert.ok(!blocksMove(opaque) && blocksSight(opaque));
+  assert.ok(blocksMove(both) && blocksSight(both));
+  assert.deepEqual(makeWall(0, 0, 1, 1, 'tangible'), makeWall(0, 0, 1, 1, { move: true, sight: false })); // the old presets still mean the same
+});
+test('1.4 the door box: a closed door blocks everything; only a line can be a door', () => {
+  const door = wallToolFlags('line', { door: true, move: false, sight: false });
+  assert.deepEqual(door, { door: true, move: true, sight: true });
+  const w = makeWall(0, 0, 10, 0, door, door.door);
+  assert.equal(w[4], 1); assert.ok(blocksMove(w) && blocksSight(w));
+  assert.equal(wallToolFlags('curve', { door: true }).door, false);
+});

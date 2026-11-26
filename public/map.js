@@ -3,6 +3,7 @@ import { computeVision, inReveal, distToSeg } from './vision.js';
 import { cellCenter } from './tp.js';
 import { W as WALL, makeWall, blocksSight, blocksMove, moveBlocked, doorCenter, splitWall, nodesAt, moveNodes, mergeOnRelease, radiusStep } from './walls.js';
 import { pickInArea, rectPoly, revealPts, pointInPoly, allowed, toggleItem, hasItem, mergeSelection, snapDelta, moveItems } from './select.js';
+import { wallToolFlags } from './tools.js';
 const ICON = 0.5; // door, light and TP icons: half a cell
 /** A hit (see hitItem) as a selection item (public/select.js). */
 const asItem = (it) => (!it ? null : it.kind === 'door' || it.kind === 'wall' ? { kind: 'wall', index: it.index } : it.kind === 'light' ? { kind: 'light', id: it.light.id } : it.kind === 'tp' ? { kind: 'tp', id: it.cell.id } : null);
@@ -341,12 +342,14 @@ export function createMap(canvas, hooks) {
     const wi = (scene.walls || []).findIndex((s) => distToSeg(w.x, w.y, s) < near);
     return wi >= 0 ? { kind: 'wall', index: wi } : null;
   }
-  const preset = (tool) => (tool.name === 'twall' ? 'tangible' : tool.name === 'wall' ? 'wall' : tool.wallKind || 'wall');
+  // the wall tool (ROADMAP 3 §1.4): one tool, a shape (line, curve, rectangle, circle) and three boxes: tangible, opaque, door
+  const shapeOf = (tool) => (tool.name === 'wall' ? tool.shape || 'line' : tool.name);
+  const preset = (tool) => wallToolFlags(shapeOf(tool), tool.wall);
 
   function useTool(st, e, p) {
     const { scene, tool } = st, w = toWorld(p.x, p.y), free = e.shiftKey || e.altKey, near = 12 / cam.z, snap = (x, y) => snapPoint(scene, x, y, free, tool.snap);
-    if (tool.name === 'wall' || tool.name === 'twall' || tool.name === 'door') {
-      const door = tool.name === 'door';
+    if (shapeOf(tool) === 'line') {
+      const door = preset(tool).door; // a door is one segment: two clicks
       if (door && !draft) { // clicking an existing door toggles it open/closed
         const hit = hitItem(scene, w, true, null);
         if (hit?.kind === 'door') return hooks.onDoor?.(scene.walls[hit.index]);
@@ -358,7 +361,7 @@ export function createMap(canvas, hooks) {
       draft = door ? null : { pts: [pt], door }; // doors are single segments, walls chain on
       return redraw();
     }
-    if (tool.name === 'curve') { // start, end, then bend: three clicks
+    if (shapeOf(tool) === 'curve') { // start, end, then bend: three clicks
       const pt = snap(w.x, w.y);
       if (!draft?.curve) { draft = { curve: { pts: [pt] } }; return redraw(); }
       const c = draft.curve; c.pts.push(pt);
@@ -447,9 +450,10 @@ export function createMap(canvas, hooks) {
         }
         drag = { kind: 'rect', x: w.x, y: w.y }; draft = { pts: [], rect: { x: w.x, y: w.y, w: 0, h: 0 } }; return;
       }
-      if (tool === 'rect' || tool === 'circle') {
+      const shape = shapeOf(st.tool);
+      if (tool === 'wall' && (shape === 'rect' || shape === 'circle')) {
         const w = toWorld(p.x, p.y), pt = snapPoint(st.scene, w.x, w.y, e.shiftKey || e.altKey, st.tool.snap);
-        drag = { kind: 'shape', type: tool, x: pt.x, y: pt.y }; draft = { pts: [], shape: { type: tool, x: pt.x, y: pt.y, x2: pt.x, y2: pt.y } }; return;
+        drag = { kind: 'shape', type: shape, x: pt.x, y: pt.y }; draft = { pts: [], shape: { type: shape, x: pt.x, y: pt.y, x2: pt.x, y2: pt.y } }; return;
       }
       return useTool(st, e, p);
     }

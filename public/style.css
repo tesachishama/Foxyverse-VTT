@@ -328,3 +328,8 @@ input.search { width: 100%; margin: 0 0 8px; }
 .tools .tool { padding: 3px; line-height: 0; }
 .tool-ico { width: 26px; height: 26px; display: block; }
 .hud > button.tool { padding: 3px; line-height: 0; }
+.subtools { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; padding-left: 6px; border-left: 1px solid var(--line); }
+.tool-ico.small { width: 18px; height: 18px; display: inline-block; vertical-align: middle; }
+.wall-flag { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; }
+.wall-flag.off { opacity: .45; }
+.sel-filter summary { cursor: pointer; }

@@ -4,11 +4,6 @@
 export const TOOLS = [
   { id: 'select', icon: 'tool_select', label: 'toolSelect' },
   { id: 'wall', icon: 'tool_wall', label: 'toolWall' },
-  { id: 'twall', icon: 'tool_line', label: 'toolTWall' },
-  { id: 'rect', icon: 'tool_rect', label: 'toolRect' },
-  { id: 'circle', icon: 'tool_circle', label: 'toolCircle' },
-  { id: 'curve', icon: 'tool_curve', label: 'toolCurve' },
-  { id: 'door', icon: 'tool_door', label: 'toolDoor' },
   { id: 'edit', icon: 'tool_edit', label: 'toolEdit' },
   { id: 'light', icon: 'tool_light', label: 'toolLight' },
   { id: 'antilight', icon: 'tool_antilight', label: 'toolAntiLight' },
@@ -21,6 +16,23 @@ export const TOOL_BUTTONS = [
   { id: 'undo', icon: 'tool_undo', label: 'undo' },
   { id: 'fit', icon: 'tool_fit', label: 'fitMap' },
 ];
+/** The wall tool's shapes (its sub-menu); the boxes tangible / opaque / door go with them. */
+export const WALL_SHAPES = [
+  { id: 'line', icon: 'tool_line', label: 'shapeLine' },
+  { id: 'curve', icon: 'tool_curve', label: 'toolCurve' },
+  { id: 'rect', icon: 'tool_rect', label: 'toolRect' },
+  { id: 'circle', icon: 'tool_circle', label: 'toolCircle' },
+];
+export const WALL_FLAGS = [
+  { id: 'move', icon: 'tool_tangible', label: 'wallTangible' },
+  { id: 'sight', icon: 'tool_opaque', label: 'wallOpaque' },
+  { id: 'door', icon: 'tool_door', label: 'toolDoor' },
+];
+/** The boxes of the wall tool as a new wall's properties: a door blocks everything while closed; only a line can be a door. */
+export function wallToolFlags(shape, flags) {
+  const door = shape === 'line' && !!flags?.door;
+  return { door, move: door || !!flags?.move, sight: door || flags?.sight !== false };
+}
 /** The reveal tool's three ways of drawing an area. */
 export const REVEAL_MODES = [
   { id: 'rect', icon: 'tool_reveal_rect', label: 'revealRect' },

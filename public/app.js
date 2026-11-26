@@ -8,13 +8,13 @@ import { isTokenDead, pickViewers, markSeen, orBits, bitsToBase64, bitsFromBase6
 import { radiusStep, moveBlocked } from './walls.js';
 import { ghostsOf, ghostLights, newGroup, tpGroups } from './tp.js';
 import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget } from './layout.js';
-import { TOOLS, TOOL_BUTTONS, REVEAL_MODES, iconUrl } from './tools.js';
+import { TOOLS, TOOL_BUTTONS, REVEAL_MODES, WALL_SHAPES, WALL_FLAGS, iconUrl } from './tools.js';
 import { defaultFilter, SELECT_KINDS, deleteItems, liveItems } from './select.js';
 
 const S = {
   me: null, users: [], system: null, scene: null, scenes: [], tokens: [], actors: [], chat: [], table: null, allTables: [], mapMode: false,
   tab: 'sheets', sheetId: null, selected: new Set(), rollMod: '', draft: null,
-  sounds: [], playing: [], journals: [], compendium: [], npcs: [], compView: 'table', compGlobal: null, compFilter: { tables: null, campaigns: null }, campaigns: [], savedSystems: [], timeOffset: 0, viewId: null, tool: { name: 'select', radius: 6, snap: 'grid', filter: defaultFilter() }, items: [], playerView: false, viewAs: 'players', undo: [],
+  sounds: [], playing: [], journals: [], compendium: [], npcs: [], compView: 'table', compGlobal: null, compFilter: { tables: null, campaigns: null }, campaigns: [], savedSystems: [], timeOffset: 0, viewId: null, tool: { name: 'select', radius: 6, snap: 'grid', filter: defaultFilter(), shape: 'line', wall: { move: false, sight: true, door: false } }, items: [], playerView: false, viewAs: 'players', undo: [],
   picked: null, // the GM's picked map item: { kind: 'wall', index } or { kind: 'light', id }
   journalId: null, journalEdit: false, modal: null, audioBlocked: false, openItems: new Set(),
   actorId: Number(localStorage.getItem('speakAs')) || null,
@@ -492,7 +492,7 @@ function buildShell() {
 function renderAll() { renderDock(); renderChat(); renderChatWho(); renderInspector(); renderHud(); map?.redraw(); syncExplored(); }
 
 const TOOL_HINT = {
-  fr: { wall: 'Mur (bloque la vue et la lumière). Clic : poser un point · clic droit ou Échap : finir · Maj ou Alt : placement libre',
+  fr: { wall: 'Ligne : clic pour chaque point, clic droit ou Échap pour finir (porte : deux clics, clic sur une porte : ouvrir / fermer) · Courbe : départ, arrivée, puis courber · Rectangle / cercle : glisser · Maj ou Alt : placement libre',
     twall: 'Mur tangible (bloque le mouvement des joueurs, pas la vue). Clic : poser un point · clic droit ou Échap : finir',
     rect: 'Glisser : rectangle de murs · Maj : sans aimant', circle: 'Glisser du centre vers le bord : cercle de murs',
     curve: 'Clic : départ · clic : arrivée · bouger pour courber · clic : valider · Échap : annuler', door: 'Clic : poser une porte (deux clics) · clic sur une porte : ouvrir / fermer',
@@ -501,7 +501,7 @@ const TOOL_HINT = {
     tp: 'Clic : poser une case de TP (elle rejoint le groupe de la case sélectionnée, sinon un nouveau groupe) · en Sélection : la glisser, changer son groupe',
     reveal: 'Rectangle : glisser · Lasso : dessiner à main levée · Polygone : clic sur chaque coin, double-clic ou clic sur le premier point pour fermer · Échap : annuler', erase: 'Clic : supprimer mur, lumière, case de TP ou zone',
     select: 'Glisser sur le vide : rectangle de sélection · Maj+clic : ajouter / retirer · Maj+glisser : lasso · glisser la sélection : tout déplacer · clic droit glissé : déplacer la vue' },
-  en: { wall: 'Wall (blocks sight and light). Click to add points · right-click or Esc to finish · Shift or Alt: free placement',
+  en: { wall: 'Line: click each point, right-click or Esc to finish (door: two clicks, click a door to open / close it) · Curve: start, end, then bend · Rectangle / circle: drag · Shift or Alt: free placement',
     twall: "Tangible wall (blocks players' movement, not sight). Click to add points · right-click or Esc to finish",
     rect: 'Drag: rectangle of walls · Shift: no snapping', circle: 'Drag from the centre to the edge: circle of walls',
     curve: 'Click: start · click: end · move to bend · click: confirm · Esc: cancel', door: 'Click to place a door (two clicks) · click a door to open / close it',
@@ -538,10 +538,15 @@ function renderHud() {
   const snapSel = h('select', { title: t('snap'), onchange: (e) => { S.tool.snap = e.target.value; } },
     h('option', { value: 'grid' }, t('snapGrid')), h('option', { value: 'half' }, t('snapHalf')), h('option', { value: 'off' }, t('snapOff')));
   snapSel.value = S.tool.snap;
-  // rectangle, circle and curve draw the kind of wall chosen here (each wall can be changed afterwards in the inspector)
-  const kindSel = h('select', { title: t('wallKind'), onchange: (e) => { S.tool.wallKind = e.target.value; } },
-    h('option', { value: 'wall' }, t('toolWall')), h('option', { value: 'tangible' }, t('toolTWall')), h('option', { value: 'both' }, t('wallBoth')));
-  kindSel.value = S.tool.wallKind ?? 'wall';
+  // the wall tool's sub-menu: the shape, then what the new walls do (each wall can be changed afterwards in the inspector)
+  const wallMenu = () => h('span', { class: 'subtools' },
+    WALL_SHAPES.map((m) => toolButton(m, { on: S.tool.shape === m.id, onclick: () => { S.tool.shape = m.id; map.cancel(); renderHud(); } })),
+    WALL_FLAGS.map((f) => {
+      const off = f.id === 'door' && S.tool.shape !== 'line'; // only a line can be a door
+      return h('label', { class: 'check wall-flag' + (off ? ' off' : ''), title: off ? t('doorLineOnly') : t(f.label + 'Hint') },
+        h('input', { type: 'checkbox', checked: !!S.tool.wall[f.id], disabled: off, onchange: (e) => { S.tool.wall[f.id] = e.target.checked; map.cancel(); renderHud(); } }),
+        h('img', { class: 'tool-ico small', src: iconUrl(f.icon), alt: '' }), t(f.label));
+    }));
   const canUndo = S.undo.some((u) => u.sceneId === sc.id);
   add(hudEl, h('div', { class: 'tools' },
     TOOLS.map((tl) => toolButton(tl, { on: S.tool.name === tl.id, onclick: () => { S.tool.name = tl.id; map.cancel(); renderHud(); } })),
@@ -549,7 +554,7 @@ function renderHud() {
     // what the selection picks (rectangle, lasso, clicks): all ticked by default
     S.tool.name === 'select' && h('details', { class: 'multi sel-filter' }, h('summary', {}, t('selectWhat')),
       SELECT_KINDS.map((k) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: S.tool.filter[k], onchange: (e) => { S.tool.filter[k] = e.target.checked; } }), t('sel_' + k)))),
-    ['rect', 'circle', 'curve'].includes(S.tool.name) && kindSel,
+    S.tool.name === 'wall' && wallMenu(),
     S.tool.name === 'reveal' && h('span', { class: 'subtools' }, REVEAL_MODES.map((m) => toolButton(m, { on: (S.tool.reveal || 'rect') === m.id, onclick: () => { S.tool.reveal = m.id; map.cancel(); renderHud(); } }))),
     ['light', 'antilight'].includes(S.tool.name) && h('label', {}, t('radius'), h('input', { type: 'number', class: 'n', min: 0.5, max: 100, step: 0.5, value: S.tool.radius, oninput: (e) => { S.tool.radius = Number(e.target.value) || 6; } })),
     toolButton(TOOL_BUTTONS.find((b) => b.id === 'undo'), { disabled: !canUndo, onclick: undoSceneEdit, hint: 'Ctrl+Z' })),
