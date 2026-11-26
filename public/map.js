@@ -137,7 +137,7 @@ export function createMap(canvas, hooks) {
         ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(greyC, 0, 0); ctx.restore();
       }
     }
-    world(visX, (c) => { c.fillStyle = '#fff'; for (const r of scene.reveal || []) c.fillRect(r[0], r[1], r[2], r[3]); });
+    world(visX, (c) => { c.fillStyle = '#fff'; for (const r of scene.reveal || []) { poly(c, revealPts(r)); c.fill(); } });
     if (explored) { // remembered places seen only through darkvision stay black and white (outside what is seen right now)
       clearL(pcX, pcC); drawExplored(pcX, explored, 'grey');
       pcX.globalCompositeOperation = 'destination-out'; pcX.drawImage(visC, 0, 0); pcX.globalCompositeOperation = 'source-over';
@@ -295,6 +295,13 @@ export function createMap(canvas, hooks) {
     for (const area of [draft?.marquee, draft?.lasso]) if (area?.length > 1) { // the selection being drawn
       ctx.setLineDash([6 * z, 4 * z]); ctx.strokeStyle = '#ffdbff'; ctx.lineWidth = 1.5 * z; poly(ctx, area); ctx.fillStyle = 'rgba(255,219,255,0.08)'; ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
     }
+    if (draft?.revpoly) { // polygon in progress: its sides, the next side to the cursor, its first corner (click it to close)
+      const pts = draft.revpoly;
+      ctx.strokeStyle = '#9fe3b4'; ctx.lineWidth = 2 * z; ctx.beginPath(); pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+      if (cursor) ctx.lineTo(cursor.x, cursor.y);
+      ctx.stroke();
+      ctx.fillStyle = '#9fe3b4'; ctx.beginPath(); ctx.arc(pts[0][0], pts[0][1], 6 * z, 0, Math.PI * 2); ctx.fill();
+    }
     if (draft?.rect) { const r = draft.rect; ctx.strokeStyle = '#9fe3b4'; ctx.lineWidth = 2 * z; ctx.strokeRect(r.x, r.y, r.w, r.h); }
     ctx.strokeStyle = '#ff9a4d'; ctx.lineWidth = 3 * z; ctx.setLineDash([6 * z, 4 * z]);
     const sh = draft?.shape;
@@ -394,11 +401,22 @@ export function createMap(canvas, hooks) {
       if (li >= 0) return edit({ lights: scene.lights.filter((_, i) => i !== li) });
       const wi = (scene.walls || []).findIndex((s) => distToSeg(w.x, w.y, s) < near);
       if (wi >= 0) return edit({ walls: scene.walls.filter((_, i) => i !== wi) });
-      const ri = (scene.reveal || []).findIndex((r) => inReveal({ reveal: [r] }, w.x, w.y));
+      const ri = (scene.reveal || []).findLastIndex((r) => inReveal({ reveal: [r] }, w.x, w.y));
       if (ri >= 0) return edit({ reveal: scene.reveal.filter((_, i) => i !== ri) });
     }
   }
 
+  /** At most n points of a free-hand line (every k-th one). */
+  const thin = (pts, n) => (pts.length <= n ? pts : pts.filter((_, i) => i % Math.ceil(pts.length / n) === 0));
+  /** Finish the polygon being drawn with the reveal tool (a double click, or a click on its first corner). */
+  function closePoly() {
+    const pts = [];
+    for (const q of draft?.revpoly ?? []) if (!pts.length || Math.hypot(q[0] - pts[pts.length - 1][0], q[1] - pts[pts.length - 1][1]) > 1) pts.push(q); // a double click adds the same corner twice
+    draft = null;
+    const { scene } = hooks.state();
+    if (pts.length >= 3) edit({ reveal: [...(scene.reveal || []), { poly: pts.slice(0, 500) }] });
+    redraw();
+  }
   /** Start dragging the whole selection (tokens and map items) from world point w. */
   function startGroup(st, w) {
     const sc = st.scene;
@@ -418,7 +436,17 @@ export function createMap(canvas, hooks) {
     const st = hooks.state(), tool = st.tool.name;
     if (e.button === 1 || e.button === 2) { drag = { kind: 'pan', sx: p.x, sy: p.y, cx: cam.x, cy: cam.y, moved: false, right: e.button === 2 }; return; }
     if (tool !== 'select' && st.gm && st.scene) {
-      if (tool === 'reveal') { const w = toWorld(p.x, p.y); drag = { kind: 'rect', x: w.x, y: w.y }; draft = { pts: [], rect: { x: w.x, y: w.y, w: 0, h: 0 } }; return; }
+      if (tool === 'reveal') { // three ways (ROADMAP 3 §1.3): rectangle, lasso (free hand), polygon (click the corners)
+        const w = toWorld(p.x, p.y), mode = st.tool.reveal || 'rect';
+        if (mode === 'lasso') { drag = { kind: 'revlasso', pts: [[w.x, w.y]] }; draft = { lasso: drag.pts }; return; }
+        if (mode === 'poly') {
+          const pt = snapPoint(st.scene, w.x, w.y, e.shiftKey || e.altKey, st.tool.snap, false), pts = draft?.revpoly;
+          if (pts?.length >= 3 && Math.hypot(pt.x - pts[0][0], pt.y - pts[0][1]) < 10 / cam.z) return closePoly(); // back on the first corner
+          if (!pts) draft = { revpoly: [[pt.x, pt.y]] }; else pts.push([pt.x, pt.y]);
+          return redraw();
+        }
+        drag = { kind: 'rect', x: w.x, y: w.y }; draft = { pts: [], rect: { x: w.x, y: w.y, w: 0, h: 0 } }; return;
+      }
       if (tool === 'rect' || tool === 'circle') {
         const w = toWorld(p.x, p.y), pt = snapPoint(st.scene, w.x, w.y, e.shiftKey || e.altKey, st.tool.snap);
         drag = { kind: 'shape', type: tool, x: pt.x, y: pt.y }; draft = { pts: [], shape: { type: tool, x: pt.x, y: pt.y, x2: pt.x, y2: pt.y } }; return;
@@ -507,7 +535,7 @@ export function createMap(canvas, hooks) {
       drag.moved = true; sc.lights = drag.lights; sc._rev = (sc._rev || 0) + 1;
     } else if (drag.kind === 'marquee') {
       const w = toWorld(p.x, p.y); draft = { marquee: rectPoly(drag.x, drag.y, w.x, w.y) };
-    } else if (drag.kind === 'lasso') {
+    } else if (drag.kind === 'lasso' || drag.kind === 'revlasso') {
       const w = toWorld(p.x, p.y), last = drag.pts[drag.pts.length - 1];
       if (Math.hypot(w.x - last[0], w.y - last[1]) > 4 / cam.z && drag.pts.length < 2000) drag.pts.push([w.x, w.y]);
     } else if (drag.kind === 'group') {
@@ -553,6 +581,10 @@ export function createMap(canvas, hooks) {
         hooks.onSelect(new Set(next.tokens), next.items);
       }
     }
+    if (drag?.kind === 'revlasso') {
+      const { scene } = hooks.state(), pts = thin(drag.pts, 500); draft = null;
+      if (pts.length >= 3) edit({ reveal: [...(scene.reveal || []), { poly: pts.map(([x, y]) => [Math.round(x), Math.round(y)]) }] });
+    }
     if (drag?.kind === 'group') {
       const { scene } = hooks.state(), d = drag.d, patch = moveItems({ ...scene, ...drag.orig }, drag.items, d.dx, d.dy);
       Object.assign(scene, drag.orig); scene._rev = (scene._rev || 0) + 1;
@@ -586,7 +618,7 @@ export function createMap(canvas, hooks) {
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && draft) { draft = null; redraw(); } });
-  canvas.addEventListener('dblclick', (e) => { if (hooks.state().tool.name !== 'select') return; const p = pos(e), t = hitToken(p.x, p.y); if (t) hooks.onOpen(t); });
+  canvas.addEventListener('dblclick', (e) => { if (draft?.revpoly) return closePoly(); if (hooks.state().tool.name !== 'select') return; const p = pos(e), t = hitToken(p.x, p.y); if (t) hooks.onOpen(t); });
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     const p = pos(e), before = toWorld(p.x, p.y);

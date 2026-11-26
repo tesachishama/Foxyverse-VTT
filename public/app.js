@@ -8,7 +8,7 @@ import { isTokenDead, pickViewers, markSeen, orBits, bitsToBase64, bitsFromBase6
 import { radiusStep, moveBlocked } from './walls.js';
 import { ghostsOf, ghostLights, newGroup, tpGroups } from './tp.js';
 import { tabColumns, clampRect, readJSON, writeJSON, createBubbles, keyStep, typingTarget } from './layout.js';
-import { TOOLS, TOOL_BUTTONS, iconUrl } from './tools.js';
+import { TOOLS, TOOL_BUTTONS, REVEAL_MODES, iconUrl } from './tools.js';
 import { defaultFilter, SELECT_KINDS, deleteItems, liveItems } from './select.js';
 
 const S = {
@@ -499,7 +499,7 @@ const TOOL_HINT = {
     edit: 'Glisser un nœud pour déplacer les murs qui y sont reliés · clic sur un segment : ajouter un nœud · deux nœuds fusionnent au relâchement',
     light: 'Clic : poser une lumière · ensuite, en Sélection : la déplacer, régler le rayon avec la poignée', antilight: "Clic : poser une anti-lumière (retire la lumière sous sa zone)",
     tp: 'Clic : poser une case de TP (elle rejoint le groupe de la case sélectionnée, sinon un nouveau groupe) · en Sélection : la glisser, changer son groupe',
-    reveal: 'Glisser : révéler une zone en permanence', erase: 'Clic : supprimer mur, lumière, case de TP ou zone',
+    reveal: 'Rectangle : glisser · Lasso : dessiner à main levée · Polygone : clic sur chaque coin, double-clic ou clic sur le premier point pour fermer · Échap : annuler', erase: 'Clic : supprimer mur, lumière, case de TP ou zone',
     select: 'Glisser sur le vide : rectangle de sélection · Maj+clic : ajouter / retirer · Maj+glisser : lasso · glisser la sélection : tout déplacer · clic droit glissé : déplacer la vue' },
   en: { wall: 'Wall (blocks sight and light). Click to add points · right-click or Esc to finish · Shift or Alt: free placement',
     twall: "Tangible wall (blocks players' movement, not sight). Click to add points · right-click or Esc to finish",
@@ -508,7 +508,7 @@ const TOOL_HINT = {
     edit: 'Drag a node to move the walls attached to it · click a segment: add a node · two nodes merge when you let go',
     light: 'Click to place a light · then, with Select: drag it, set its radius with the handle', antilight: 'Click to place an anti-light (removes light under its area)',
     tp: "Click: place a TP cell (it joins the picked cell's group, else a new group) · with Select: drag it, change its group",
-    reveal: 'Drag to permanently reveal an area', erase: 'Click to delete a wall, light, TP cell or area',
+    reveal: 'Rectangle: drag · Lasso: draw free hand · Polygon: click each corner, double-click or click the first corner to close · Esc: cancel', erase: 'Click to delete a wall, light, TP cell or area',
     select: 'Drag on the empty map: selection rectangle · Shift+click: add / remove · Shift+drag: lasso · drag the selection: move it all · right-drag: pan' },
 };
 /** A map tool as an icon button; its name is the tooltip (and the accessible name). */
@@ -550,6 +550,7 @@ function renderHud() {
     S.tool.name === 'select' && h('details', { class: 'multi sel-filter' }, h('summary', {}, t('selectWhat')),
       SELECT_KINDS.map((k) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: S.tool.filter[k], onchange: (e) => { S.tool.filter[k] = e.target.checked; } }), t('sel_' + k)))),
     ['rect', 'circle', 'curve'].includes(S.tool.name) && kindSel,
+    S.tool.name === 'reveal' && h('span', { class: 'subtools' }, REVEAL_MODES.map((m) => toolButton(m, { on: (S.tool.reveal || 'rect') === m.id, onclick: () => { S.tool.reveal = m.id; map.cancel(); renderHud(); } }))),
     ['light', 'antilight'].includes(S.tool.name) && h('label', {}, t('radius'), h('input', { type: 'number', class: 'n', min: 0.5, max: 100, step: 0.5, value: S.tool.radius, oninput: (e) => { S.tool.radius = Number(e.target.value) || 6; } })),
     toolButton(TOOL_BUTTONS.find((b) => b.id === 'undo'), { disabled: !canUndo, onclick: undoSceneEdit, hint: 'Ctrl+Z' })),
     TOOL_HINT[getLang()]?.[S.tool.name] && h('div', { class: 'hint tool-hint' }, TOOL_HINT[getLang()][S.tool.name]));

@@ -24,3 +24,10 @@ test('1.2 a deleted token comes back on undo with its look (life is accepted on 
 });
 
 export { srv, T, gm, pip, pipSlot, scene };
+
+test('1.3 revealed areas: rectangles and polygons are stored, junk and polygons under 3 points are dropped', async () => {
+  const r = await gm('PATCH', `/scenes/${scene.id}`, { reveal: [[1, 2, -3, 4], { poly: [[0, 0], [10.04, 0], [0, 'x'], [5, 5]] }, { poly: [[0, 0], [1, 1]] }, 'junk', { poly: 7 }] });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.reveal, [[1, 2, 3, 4], { poly: [[0, 0], [10, 0], [0, 0], [5, 5]] }]);
+  await gm('PATCH', `/scenes/${scene.id}`, { reveal: [] });
+});

@@ -21,4 +21,10 @@ export const TOOL_BUTTONS = [
   { id: 'undo', icon: 'tool_undo', label: 'undo' },
   { id: 'fit', icon: 'tool_fit', label: 'fitMap' },
 ];
+/** The reveal tool's three ways of drawing an area. */
+export const REVEAL_MODES = [
+  { id: 'rect', icon: 'tool_reveal_rect', label: 'revealRect' },
+  { id: 'lasso', icon: 'tool_reveal_lasso', label: 'revealLasso' },
+  { id: 'poly', icon: 'tool_reveal_poly', label: 'revealPoly' },
+];
 export const iconUrl = (name) => `/icons/${name}.svg`;

@@ -76,3 +76,18 @@ test('1.2 a group delete removes exactly the selected items, in one patch', () =
   assert.deepEqual(liveItems({ ...sc, ...p }, [{ kind: 'wall', index: 2 }, { kind: 'tp', id: 't1' }]), []);
   assert.deepEqual(revealPts({ poly: [[1, 2], [3, 4], [5, 6]] }), [[1, 2], [3, 4], [5, 6]]);
 });
+
+// ---------------------------------------------------------------- 1.3 reveal: rectangle, lasso, polygon
+import { REVEAL_MODES } from '../public/tools.js';
+import { inReveal } from '../public/vision.js';
+test('1.3 the reveal tool has three sub-tools (icons, FR/EN names): rectangle, lasso, polygon', () => {
+  assert.deepEqual(REVEAL_MODES.map((m) => m.id), ['rect', 'lasso', 'poly']);
+  for (const m of REVEAL_MODES) squareSvg(m.icon);
+  bothLangs(REVEAL_MODES.map((m) => m.label));
+});
+test('1.3 a polygon (lasso or clicked corners) reveals what is inside its shape, a rectangle still works', () => {
+  const sc = { reveal: [[0, 0, 10, 10], { poly: [[100, 100], [200, 100], [100, 200]] }] };
+  assert.ok(inReveal(sc, 5, 5)); assert.ok(inReveal(sc, 120, 120));
+  assert.ok(!inReveal(sc, 190, 190)); // outside the triangle, inside its bounding box
+  assert.ok(!inReveal({ reveal: [{ poly: 'junk' }] }, 1, 1));
+});

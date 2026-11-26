@@ -146,6 +146,9 @@ const DICT = {
     resetExplore: 'Réinitialiser l’exploration…', everyone: 'Tous les joueurs', confirmResetExplore: 'Effacer ce qui a été exploré sur cette scène ?',
     playersWin: 'La lumière des joueurs l’emporte', playersWinHint: 'Les lumières portées par les tokens des joueurs ne sont pas éteintes par cette zone.',
     // ROADMAP 3 (fr)
+    revealRect: "Révéler : rectangle",
+    revealLasso: "Révéler : lasso (main levée)",
+    revealPoly: "Révéler : polygone (clic sur chaque coin)",
     selectWhat: "Sélectionner…",
     sel_tokens: "Tokens",
     sel_walls: "Murs",
@@ -236,6 +239,9 @@ const DICT = {
     resetExplore: 'Reset exploration…', everyone: 'All players', confirmResetExplore: 'Erase what was explored on this scene?',
     playersWin: "Players' light wins", playersWinHint: "Lights carried by players' tokens are not put out by this area.",
     // ROADMAP 3 (en)
+    revealRect: "Reveal: rectangle",
+    revealLasso: "Reveal: lasso (free hand)",
+    revealPoly: "Reveal: polygon (click each corner)",
     selectWhat: "Select…",
     sel_tokens: "Tokens",
     sel_walls: "Walls",

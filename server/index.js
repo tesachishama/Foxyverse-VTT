@@ -403,7 +403,12 @@ const cleanLights = (a) => (Array.isArray(a) ? a.slice(0, 300).map((l) => {
 }) : []);
 // teleport cells: the centre of a grid cell and a group (cells of a group are linked); see public/tp.js
 const cleanTps = (a) => (Array.isArray(a) ? a.slice(0, 200).map((c) => ({ id: String(c?.id || randomBytes(3).toString('hex')).slice(0, 12), x: fin(c?.x), y: fin(c?.y), group: String(c?.group ?? '').trim().slice(0, 12) || '1' })) : []);
-const cleanReveal = (a) => (Array.isArray(a) ? a.slice(0, 500).filter(Array.isArray).map((r) => [fin(r[0]), fin(r[1]), Math.abs(fin(r[2])), Math.abs(fin(r[3]))]) : []);
+// revealed areas: a rectangle [x, y, w, h], or a polygon { poly: [[x, y], ...] } (3 to 500 points) drawn with the lasso / polygon tools
+const cleanReveal = (a) => (Array.isArray(a) ? a.slice(0, 500).map((r) => {
+  if (Array.isArray(r)) return [fin(r[0]), fin(r[1]), Math.abs(fin(r[2])), Math.abs(fin(r[3]))];
+  const pts = Array.isArray(r?.poly) ? r.poly.slice(0, 500).filter((p) => Array.isArray(p)).map((p) => [fin(p[0]), fin(p[1])]) : [];
+  return pts.length >= 3 ? { poly: pts } : null;
+}).filter(Boolean) : []);
 const sceneFields = (b, cur = {}) => ({
   fog: b.fog !== undefined ? (b.fog ? 1 : 0) : cur.fog ?? 0, dark: b.dark !== undefined ? (b.dark ? 1 : 0) : cur.dark ?? 0,
   shared: b.sharedVision !== undefined ? (b.sharedVision ? 1 : 0) : cur.shared ?? 0, explore: b.explore !== undefined ? (b.explore ? 1 : 0) : cur.explore ?? 1,

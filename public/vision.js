@@ -119,7 +119,17 @@ export function isTokenDead(tok, hp = null) {
   return hp != null ? hp <= 0 : !!tok.dead;
 }
 
-export const inReveal =(scene, x, y) => (scene.reveal || []).some((r) => x >= r[0] && y >= r[1] && x <= r[0] + r[2] && y <= r[1] + r[3]);
+/** A revealed area is a rectangle [x, y, w, h] or a polygon { poly: [[x, y], ...] } (drawn with the lasso or the polygon tool). */
+function inPoly(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i], [xj, yj] = pts[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi || 1e-12) + xi) inside = !inside;
+  }
+  return inside;
+}
+export const inRevealArea = (r, x, y) => (Array.isArray(r) ? x >= r[0] && y >= r[1] && x <= r[0] + r[2] && y <= r[1] + r[3] : Array.isArray(r?.poly) && inPoly(x, y, r.poly));
+export const inReveal = (scene, x, y) => (scene.reveal || []).some((r) => inRevealArea(r, x, y));
 
 /** Distance from point to segment, for click-to-erase / door toggling. */
 export function distToSeg(px, py, s) {
