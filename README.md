@@ -7,7 +7,8 @@ install, and the rules themselves (stats, formulas, roll types, rules text) are 
 * Tabs on the left and chat on the right, both foldable; any tab can float in its own window
 * Character sheets driven by your formulas, with the full 33-slot equipment system and silhouette
 * Dice chat with the Foxyverse roll language, nat 1 / nat max grading, favors and one-click damage/heal application
-* Journal and image handouts, synchronized soundboard, compendium of items / spells / talents / NPC templates
+* Journal and image handouts (shown to chosen players with the GM's eye), synchronized soundboard with groups, tags and YouTube music, compendium of items / spells / journal entries / NPCs
+* One-file **table backups** and **campaign packs** (ZIP, versioned format)
 * Several **tables** (each one is a separate game, like a save file: its own scenes, sheets, chat, rules...), a map library outside tables
 * Players pick their player at the table's address, no password; the GM area sits behind your reverse proxy's login (Authelia). English and French interface
 
@@ -121,6 +122,7 @@ Coming from v1 (one global game with accounts): everything moves into a first ta
 | `SLOT_GRACE_MS` | `60000` | how long a player slot stays taken after its page closed (reload, network blip) |
 | `UPLOAD_MAX_MB` | `25` | map and image upload limit for the GM (players: 5 MB images) |
 | `AUDIO_MAX_MB` | `60` | audio upload limit (GM only) |
+| `IMPORT_MAX_MB` | `4096` | largest backup or pack file accepted on import |
 
 ---
 
@@ -166,16 +168,20 @@ The dropdown at the top right of the map lets you **prepare any scene** while pl
 Mouse wheel zooms, right/middle-drag pans, two-finger pinch works on touch screens, the arrows button fits the map.
 
 ### 3. Characters and tokens
-**Sheets** tab, *New character* (GM only). Click the round picture to set a **portrait** (the whole character) and frame its round **token** (drag and zoom; or send a ready-made token): the token is what the map, the chat and the NPC list show. Fill stats, level and equipment. In *Player rights* at the bottom of the sheet, give each player **Edit**, **View only** or **None** (the sheet is then invisible to them); then **Place token**.
+**Sheets** tab, *New character* (GM only). Click the round picture to set a **portrait** (the whole character) and frame its round **token** (drag and zoom; or send a ready-made token): the token is what the map, the chat and the NPC list show. Fill stats, level and equipment. In *Player rights* at the bottom of the sheet, give each player **Edit**, **View only** or **None** (the sheet is then invisible to them); then **Place token**: the token **follows the mouse** and is put down with a click on the map (on the grid, by the snapping mode); Esc cancels. Nothing appears for players before that click.
+The GM's sheet list has two automatic sections: **PCs** (a player can edit the sheet) and **NPCs** (the others), each line with `⧉` (open in a window) and `⊕ Token`.
+Any sheet you can at least see opens in its **own window** with `⧉` (several at once, read-only when you can only view it); double-click a window's title to fold it.
 Double-click a token to open its sheet. Players move the tokens of the sheets they can edit. Tokens snap to the grid.
 Select a token (GM) to edit its name, size, linked character, **vision** (cells, 100 by default, 0 = no vision), **light**, its **state**, whether it **shares its sight with all players**, colour, image, or hide it.
 A token whose sheet is at 0 HP or less turns **black and white** (50 % opacity) for everyone and **sees nothing**; the state can force *dead* or *alive*.
 The sheet's **Darkvision** box lets its tokens see without light (see [Fog, vision and darkness](#fog-vision-and-darkness)). The GM also sets each sheet's **`@` alias** there (see below).
+The bio has class, element, level and **race**; their labels can be renamed per language in the *System* tab (*Bio labels*).
+**Manual mode (GM):** a box next to *HP / Mana / Favors*, per sheet, unlocks typing max HP, max mana, max favors, actions and both defenses by hand (empty = the formula). Only the GM can turn it on or change it.
 
 ### 4. Layout and rolling
 Tabs and panels sit on the **left**, the map in the middle, the **chat on the right**. Tabs never scroll (two rows for the GM). Each side can stay open or be **dynamic**:
 a thin strip that opens on hover or when typing (the button at the bottom of the tabs, and at the top of the chat). While the chat is folded, each new message shows alone as a **bubble** for 5 seconds; hovering a bubble opens the whole chat.
-The `⧉` button on the active tab **pops it out** into a window you can drag (by its title) and resize (bottom-right corner); `⇲` puts it back. Windows come back where they were after a reload (remembered in this browser).
+The `⧉` button on the active tab **pops it out** into a window you can drag (by its title) and resize (bottom-right corner); `⇲` puts it back. **Double-click the title** to fold a window to its title bar and back. Windows come back where they were after a reload (remembered in this browser).
 
 Shift+Enter makes a new line in the chat. Each message shows the speaker's token next to the name; the *As* selector chooses who speaks.
 **GM narration:** each sheet has an **`@` alias** (its name without spaces, e.g. `GwenDoline`; a number is added if two sheets would share it; only the GM sees and edits it; `mj` and `gm` are reserved).
@@ -183,29 +189,39 @@ Type `@` for the list (typing part of a name finds it too): `@GwenDoline Hello` 
 Type in the chat or click buttons on the sheet. `/int`, `/str +2` (a stat check: d20 roll-under with a modifier), `/pdmg 2d6+str`, `/pdmg 10 2d4|label`, `/gm /pdmg 1d8` (GM-only). Long rolls wrap onto several lines.
 The card shows each die, the total, the formula with your stats filled in, and the grade. Select tokens on the map and press **Apply** on a damage / heal / mana card: the GM on any token,
 a player on the tokens of sheets they can edit (the server refuses the others). The result reads *took 25 damage (20−5 + 15−5)*: armor comes off **each roll** separately.
-An application can be repeated, and each one has its own `↶` undo (players: on their own sheets). **Reroll** costs the rolling character one favor, GM included (a GM roll with no character is free).
+An application can be repeated, and each one has its own `↶` undo (players: on their own sheets). **Reroll** costs the rolling character one favor, GM included (a GM roll with no character is free). The GM also has **Reroll (free)**, which costs nothing (players cannot use it; the server checks).
 
 **Talents** are pills with a tier shown as it acts on the d20 (T0 -0, T1 -1, T2 -3, T3 -5, T4 -10) and a description that unfolds. A **ticked** talent applies to every stat check (T2 takes 3 off the d20, an easier roll-under); ticked talents add up; damage and other rolls are untouched. A spell's description can be saved (locked) and unlocked; once locked (or on a view-only sheet) its `[pdmg 2d30 | physique]`-style buttons and **bold** show as on a weapon's damage line, and a click rolls in the chat as that sheet.
 
 ### 5. Equipment
 Each item says where it can be worn with a **slot expression**, and is placed with the slot picker or by clicking the silhouette. See [Equipment slots](#equipment-slots).
 The **+** of a section opens a small window: **New**, or pick an entry of that category **from the compendium** (with a search box).
+Items are **locked** (read-only) by default, like spell descriptions: **✎ Edit** unlocks their fields (stat bonuses included), **🔒 Save** locks them again. Quantity and slot stay usable while locked. A new item starts unlocked.
 A **weapon** has a **Damage** line of roll buttons, e.g. `[pdmg 2d30 | physical][mdmg 2d30 | magical]` (the text after `|` is the label): closed, the weapon shows the buttons, which roll in the chat like any other.
 
 ### 6. Walls, doors, lights, teleports and fog (GM)
 Turn on **Fog** (and **Darkness** for a dark map). Draw walls with the tools at the bottom left of the map (see [Map tools](#map-tools)). Players only see what their tokens can see.
 
 ### 7. Journal, sound, compendium
-*Journal*: write notes and handouts, choose who sees them, press **Show to players** to pop one open on every screen. *Sound*: upload audio and start sounds for everyone at once.
+*Journal* (GM only): write notes and handouts. Each entry belongs to the table (or to no table, from the global compendium) and optionally to a campaign. Players read the entries they may see in their **compendium** (*Journal* group).
+The **eye** button (journal entries, NPCs) pops an entry open, or an NPC's portrait and name, for the players you tick (or *Everyone*); they close it themselves and nothing is kept after a reload, unless you also tick *make it visible in the compendium*. Only the chosen players' pages receive it.
+*Sound*: upload audio or paste a **YouTube link**, and start sounds for everyone at once. Sort them in **groups** and **sub-groups**, add **tags**, search and sort them.
 *Compendium*: every item and spell named on a sheet enters the table's compendium by itself. Players see the entries on the sheets they can see, plus the ones you tick `👁`,
 and the NPCs you list (name and picture only). The *Global* view shows every table and the entries outside tables, with filters on tables and campaigns; *Add to this table* makes a copy.
+Every group (each item category, spells, journal, NPCs) **folds** with a click on its title; groups start folded and the open ones are remembered in this browser; a search opens them all.
 
 ### 8. Campaigns and saved systems (GM home)
 A **campaign** ties tables of one story together: pick it in a table's *Table settings* (or when creating a table); what the table creates carries it, which the global compendium can filter on.
 A table's rules can be **saved** under a name (*System* tab, *System library*) and applied to another table after a **preview of the differences**. A campaign can have a **linked system**:
 new tables of the campaign start with it, and choosing the campaign for an existing table offers to apply it.
 
-### 9. Make the rules yours
+### 9. Backups and campaign packs (GM home)
+**⇩ Back up** on a table downloads one `.zip` with everything: rules, scenes (walls, lights, teleports, revealed areas), tokens, sheets and player rights, chat, journal, compendium, sounds, player slots, campaign references and every uploaded file.
+**⇧ Restore a table…** makes a **new** table from such a file (`-2` / `(2)` added when the address or the name is taken); every link between sheets, tokens, scenes and players is kept. Exploration memories are not part of a backup.
+**⇩ Pack** on a campaign makes a **campaign pack**: tick what goes in among what the campaign holds (items, spells, sheets, maps, journal entries, sounds, and its linked system). In a table, *Table* tab, **⇧ Import a pack…** copies all of it into that table, tagged with the campaign; tick *Also apply its system* to replace the table's rules with the pack's (otherwise it only goes to the system library). A pack never holds chat or players.
+See [Backups and packs](#backups-and-packs) for the file format.
+
+### 10. Make the rules yours
 **System** tab (GM): edit stats, derived formulas, roll types, knowledge tiers and the rules text of **this table** (each table has its own copy); changes apply to its sheets instantly. Export / import the whole system as a JSON file.
 
 ---
@@ -215,14 +231,16 @@ new tables of the campaign start with it, and choosing the campaign for an exist
 ### Roles and permissions
 | | GM | Player |
 |---|---|---|
-| Tables, player slots, scenes, walls, lights, journal, sound, compendium, system | yes | no |
+| Tables, player slots, scenes, walls, lights, journal, sound, compendium, system, backups and packs | yes | no |
 | Create / delete characters | yes | no |
 | See a character | all | the ones they have *Edit* or *View only* on |
 | Edit a character, roll and speak as it | all | *Edit* only |
 | Move tokens | all, through any wall | tokens of characters they can edit; not through tangible walls or closed doors |
 | Open / close doors | all | unlocked doors of the active scene |
 | Upload | images, maps, audio | images up to 5 MB |
-| Reroll a roll | costs a favor of the rolling character (free without one) | own rolls, costs a favor |
+| Reroll a roll | costs a favor of the rolling character (free without one), or **Reroll (free)** | own rolls, costs a favor |
+| Manual mode of a sheet, place tokens, the eye | yes | no |
+| Journal | the tab | entries shown to them, in the compendium or the eye's pop-up |
 | Apply / undo damage, heals, mana | any token | tokens of characters they can edit |
 | `@` aliases | see and edit | never see them |
 
@@ -263,21 +281,17 @@ On the silhouette: hover a slot for its name and item, click an equipped slot to
 ### Map tools
 | Tool | How it works |
 |---|---|
-| Select | click/shift-click tokens, drag to move (or the **arrow keys / WASD**, ZQSD on a French keyboard: one cell per press), double-click for the sheet; click a wall, door, light or TP cell to set it up in the inspector (right of the map); drag a light or TP cell to move it |
-| Wall | blocks sight and light. Click points to chain walls; right-click or Esc finishes |
-| Tangible wall | blocks players' movement (not sight); the GM walks through |
-| Rectangle / Circle | drag; rectangle is 4 walls, circle is a polygon sized to its radius (the kind of wall is chosen in the list next to the tools) |
-| Curve | click start, click end, move to bend (quadratic Bézier), click to confirm; Esc cancels |
-| Door | click twice to place; a door icon sits in its middle: anyone clicks it to open or close (closed: blocks sight, light and movement; open: nothing). *Locked* in the inspector: only the GM |
+| Select | **drag on the empty map**: selection rectangle; **Shift+click**: add / remove; **Shift+drag**: free-hand lasso (adds). Boxes in *Select…* choose what is picked (tokens, walls, doors, lights, TP cells, revealed areas; all ticked). Drag any part of a selection to **move it all** (on the grid; Alt: free); **Delete** removes it, **Ctrl+Z** undoes. Single items: double-click a token for its sheet, the inspector (right of the map) sets up a wall, door, light or TP cell. Arrow keys / WASD (ZQSD on a French keyboard) move the selected tokens one cell. Pan with right/middle drag |
+| Wall | one tool with a sub-menu: the **shape** (line: click points, right-click or Esc finishes; curve: start, end, bend; rectangle and circle: drag) and three boxes: **tangible** (blocks players' movement, not the GM's), **opaque** (blocks sight and light), **door** (a line only: each door is one segment, its icon sits in its middle; anyone clicks it to open or close; closed: blocks everything, open: nothing; *Locked* in the inspector: only the GM). With *door* ticked, clicking an existing door opens or closes it |
 | Edit | drag a node: every wall attached to it follows; click a segment to add a node there; two nodes merge only when you let go on top of another |
 | Light | click to place a light (a small GM-only icon); with Select, drag it, and resize it with the handle on its circle (steps of half a cell); tokens can also carry light |
 | Anti-light | like a light, but removes light under its area. It beats every light, unless *Players' light wins* is ticked: then the lights carried by players' tokens still shine |
 | TP cell | click a cell to place a teleport cell; cells of the same **group** are linked (2 or more; group set in the inspector; a new cell joins the picked cell's group) |
-| Reveal | drag a rectangle to reveal it permanently |
+| Reveal | three ways to reveal an area permanently: **rectangle** (drag), **lasso** (draw free hand), **polygon** (click each corner; double-click or click the first corner to close) |
 | Erase | click a wall, light, TP cell or revealed area to delete it |
 
-Every wall has two independent properties, **blocks movement** and **blocks sight and light**; the tools are presets, the inspector changes them afterwards.
-**Teleport cells:** a token standing on a TP cell shows as a see-through **ghost** on every linked cell. The ghost gives the vision seen from there, and the player can **drag the ghost**: the token teleports to that cell and keeps moving (the server checks that it starts from a linked cell, and checks walls from there). Ghosts are never saved, they follow the token.
+Every wall has two independent properties, **blocks movement** and **blocks sight and light**; the tool's boxes set them for new walls, the inspector changes them afterwards. The tools are icons (square SVGs in `public/icons/tool_*.svg`, replaceable under the same name); hover one for its name.
+**Teleport cells:** a token standing on a TP cell shows as a see-through **ghost** on every linked cell. The ghost gives the vision seen from there, and the player can **click the ghost** (the token jumps there; a ghost stays on the cell it left) or **drag it**: the token teleports to that cell and keeps moving (the server checks that it starts from a linked cell, and checks walls from there). Ghosts are never saved, they follow the token.
 
 **Snapping** (selector appears with the drawing tools): *Grid* (cell corners), *Half cell*, *Free*. Hold **Shift or Alt** to place freely for one click, ignoring both the grid and magnetism to existing corners.
 Wall ends are magnetic by default so corners close cleanly. **Undo** with the button or Ctrl+Z (60 steps, per scene).
@@ -295,21 +309,40 @@ Wall ends are magnetic by default so corners close cleanly. **Undo** with the bu
 * Fog is enforced in the browser: the full map image is delivered to every player (as in other virtual tabletops), so do not rely on it to hide secrets from a determined player who reads the network traffic.
 
 ### Journal and handouts
-Markdown subset: `# heading`, `- list`, `**bold**`, `[str +2|label]` roll buttons, an optional image. Visible to the GM only, everyone, or chosen players.
+Markdown subset: `# heading`, `- list`, `**bold**`, `[str +2|label]` roll buttons, an optional image. Visible to the GM only, everyone (the compendium's `👁` box), or chosen players. The journal tab is the GM's; players read entries in their compendium, or in the eye's pop-up.
 
 ### Sound
 Upload MP3, OGG, WAV, M4A, FLAC or WebM. Sounds start for every connected client in sync (late joiners jump to the right position). Loop and volume per sound; each person has a volume slider and mute.
 Browsers block sound until the page has been clicked once, so an *Enable sound* button appears when needed.
+**YouTube:** paste a video link (watch, youtu.be, shorts, embed, music...). Each browser plays it with **YouTube's own embedded player**, shown small at the top of the screen while it plays; it is **never downloaded or converted**. It starts at the right position for late joiners, but less precisely than a file.
+Limits: YouTube may play **ads**; some videos **forbid embedding** (the player shows ✕); every player's browser must be able to **reach YouTube**. Volume follows each person's slider.
+**Organising:** each sound has a **group** and a **sub-group** (two levels; sounds without a group are in *No group*) and free **tags** (▾ on a sound). The search looks in names, groups and tags; sort by name or by date added.
 
 ### Compendium
 * **Per table:** items (by category) and spells, plus an NPC list. An item or spell named on a sheet creates an *auto* entry (matched by kind and name, case-insensitive) that follows the last saved sheet until the GM edits it,
   and disappears when no sheet carries it any more (unless it is visible). The GM edits entries in place and creates new ones; talents stay on sheets.
 * **Players** see an entry if it is on a sheet they can edit or view, or if the GM ticked it visible. NPCs listed by the GM show their name and picture only, never the sheet.
-* **Global (GM):** all tables and entries outside any table, filtered by table and campaign. *Add to this table* copies an entry (or an NPC sheet); the copy remembers its original,
+* **Journal** group: the entries players may see (with the same `👁` box for the GM), and the **eye** on journal entries and NPCs.
+* Groups fold (folded by default; remembered per browser).
+* **Global (GM):** all tables and entries outside any table (journal entries too), filtered by table and campaign. *Add to this table* copies an entry (or an NPC sheet); the copy remembers its original,
   and if that original lives outside tables and changes later, the copy shows **↻ Update**.
+
+### Backups and packs
+A backup or a pack is one ordinary ZIP file (any archive tool opens it):
+
+| Entry | Content |
+|---|---|
+| `manifest.json` | `{ "format": "foxyverse-vtt", "formatVersion": 1, "kind": "table" or "pack", "name", "created", "appVersion" }` |
+| `data.json` | the content: rules, slots, scenes, tokens, sheets with their rights, chat, journal, compendium, sounds and campaign references (a backup); the ticked items, spells, sheets, maps, journal entries, sounds and optional system (a pack) |
+| `files/<sha256>.<ext>` | every uploaded file the data points to |
+
+Files are written and read **as streams** (a big map or sound is never held whole in memory), with no extra dependency. `formatVersion` goes up when the content changes in a way an older server cannot read:
+a file made by a **newer** version is refused with a message asking to update the server; a file that is not an archive, is damaged (checksums) or holds a file that does not match its name is refused too, and nothing is created.
+Campaigns are matched **by name** (created when missing). A pack's compendium copies remember their original when it exists on this server. Limits: an archive stays under 4 GB (no ZIP64); `IMPORT_MAX_MB` caps imports.
 
 ### System editor
 Forms for stats (id, label, aliases), character creation values, derived formulas (with a live result against the selected character), quick rolls, roll types, knowledge tiers and rules text, plus a raw JSON view.
+**Bio labels**: the names of the bio fields (race, class, element, level) in French and English (`labels.bio.<field>.{fr,en}` in the JSON).
 The derived values `maxhp`, `maxmp`, `maxfav` and `act` are required. Names are letters and underscores only. Defaults: max HP `con*(lvl+1)`, max mana `((int+foc)*3+lvl^2)/4`, favors `(lvl+1)%3`, actions `max(1, lvl\5 + agi\10) + bonact`.
 
 ---
